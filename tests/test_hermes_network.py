@@ -46,6 +46,15 @@ def test_get_state_endpoint(client: TestClient):
     assert isinstance(data["leverage"], (int, float))
 
 
+def test_get_balance_endpoint(client: TestClient):
+    """Validate GET /api/v1/balance returns 200 OK with free and total account balances."""
+    response = client.get("/api/v1/balance")
+    assert response.status_code == 200
+    data = response.json()
+    assert "free" in data
+    assert "total" in data
+
+
 def test_get_stats_pnl_endpoint(client: TestClient):
     """Validate GET /api/v1/stats/pnl returns 200 OK with PnL and trade statistics."""
     response = client.get("/api/v1/stats/pnl")

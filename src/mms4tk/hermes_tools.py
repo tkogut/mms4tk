@@ -34,6 +34,18 @@ class HermesToolGenerator:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_balance",
+                    "description": "Fetch unified OKX account balances (free available and total funds per currency) via mms4tk.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_pnl",
                     "description": "Fetch daily ROE %, realized PnL, unrealized PnL, and trade performance statistics.",
                     "parameters": {

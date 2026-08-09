@@ -138,6 +138,22 @@ async def get_state() -> Dict[str, Any]:
     }
 
 
+class BalanceResponse(BaseModel):
+    free: Dict[str, float] = Field(default_factory=dict, description="Free available balances per currency")
+    total: Dict[str, float] = Field(default_factory=dict, description="Total balances per currency")
+    mock: Optional[bool] = Field(default=False, description="True if running in mock mode")
+
+
+@app.get("/api/v1/balance", response_model=BalanceResponse, tags=["Account"])
+async def get_balance() -> Dict[str, Any]:
+    """Fetch unified account balances from OKX via executor."""
+    try:
+        return await executor.fetch_balance()
+    except Exception as e:
+        logger.error(f"Error in GET /api/v1/balance endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/v1/stats/pnl", response_model=PnLResponse, tags=["Stats"])
 async def get_pnl() -> Dict[str, Any]:
     """Get daily ROE %, realized PnL, unrealized PnL, and trade stats."""

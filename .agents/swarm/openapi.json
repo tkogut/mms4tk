@@ -28,6 +28,28 @@
         }
       }
     },
+    "/api/v1/daemon/status": {
+      "get": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Get Daemon Status",
+        "description": "Get background daemon status and execution metrics.",
+        "operationId": "get_daemon_status_api_v1_daemon_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/state": {
       "get": {
         "tags": [
@@ -43,6 +65,28 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/balance": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Get Balance",
+        "description": "Fetch unified account balances from OKX via executor.",
+        "operationId": "get_balance_api_v1_balance_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceResponse"
                 }
               }
             }
@@ -120,7 +164,7 @@
           "Analytics"
         ],
         "summary": "Get Latest Signal",
-        "description": "Returns latest signal evaluated from state.",
+        "description": "Returns latest signal evaluated from state or daemon.",
         "operationId": "get_latest_signal_api_v1_analytics_signals_get",
         "responses": {
           "200": {
@@ -225,6 +269,41 @@
   },
   "components": {
     "schemas": {
+      "BalanceResponse": {
+        "properties": {
+          "free": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Free",
+            "description": "Free available balances per currency"
+          },
+          "total": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Total",
+            "description": "Total balances per currency"
+          },
+          "mock": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mock",
+            "description": "True if running in mock mode",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "BalanceResponse"
+      },
       "CalculateRequest": {
         "properties": {
           "candles": {
@@ -375,6 +454,40 @@
         ],
         "title": "Candle",
         "description": "OHLCV candle representation."
+      },
+      "DaemonStatusResponse": {
+        "properties": {
+          "is_running": {
+            "type": "boolean",
+            "title": "Is Running"
+          },
+          "interval_seconds": {
+            "type": "number",
+            "title": "Interval Seconds"
+          },
+          "last_cycle_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cycle Timestamp"
+          },
+          "processed_cycles": {
+            "type": "integer",
+            "title": "Processed Cycles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_running",
+          "interval_seconds",
+          "processed_cycles"
+        ],
+        "title": "DaemonStatusResponse"
       },
       "EmergencyKillallResponse": {
         "properties": {
