@@ -19,6 +19,12 @@
       "label": "Mms4 Knowledge Base",
       "type": "Expert Knowledge",
       "description": "Knowledge base note synchronized from NotebookLM: Mms4 Knowledge Base"
+    },
+    {
+      "id": ".agents/specs/knowledge/okx-api-guide.md",
+      "label": "Okx Api Guide",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Okx Api Guide"
     }
   ],
   "edges": [
@@ -30,6 +36,11 @@
     {
       "source": ".agents/specs/AGENTS-OS.md",
       "target": ".agents/specs/knowledge/mms4_knowledge_base.md",
+      "relation": "governs_knowledge"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/okx-api-guide.md",
       "relation": "governs_knowledge"
     }
   ],

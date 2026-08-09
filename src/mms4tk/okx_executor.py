@@ -63,12 +63,19 @@ class OKXExecutor:
         if not self.has_credentials:
             logger.warning("OKX API credentials incomplete or ccxt missing. Operating in Mock Mode.")
 
+        rest_url = os.getenv("OKX_REST_URL", "https://eea.okx.com")
+
         if ccxt is not None:
             exchange_config: Dict[str, Any] = {
                 "apiKey": api_key or "",
                 "secret": secret or "",
                 "password": passphrase or "",
                 "enableRateLimit": True,
+                "urls": {
+                    "api": {
+                        "rest": rest_url,
+                    }
+                },
                 "options": {
                     "defaultType": "swap",  # Perpetual Futures (USDC/USDT)
                 }
