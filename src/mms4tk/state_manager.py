@@ -71,6 +71,14 @@ class MMS4StateManager:
             return 0.1
         return 1.0
 
+    def is_high_risk_add_allowed(self) -> bool:
+        """
+        Check if High Risk Add position is allowed in current state.
+        BASE_MODE (leverage 1.0) -> True
+        SCOUT_MODE (leverage 0.1) -> False
+        """
+        return self._current_state == MMS4State.BASE_MODE
+
     @property
     def current_equity(self) -> float:
         """Return current equity."""
