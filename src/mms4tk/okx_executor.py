@@ -272,12 +272,23 @@ class OKXExecutor:
             raise
 
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Emergency action: Cancel all active orders."""
+        """Emergency action: Cancel all active orders safely."""
         if not self.has_credentials or self.exchange is None:
             return [{"status": "cancelled_all_mock"}]
         try:
             logger.warning(f"Emergency cancel_all_orders invoked for symbol: {symbol or 'ALL'}")
-            return await self.exchange.cancel_all_orders(symbol=symbol)
+            cancelled_orders = []
+            try:
+                open_orders = await self.exchange.fetch_open_orders(symbol=symbol)
+                for order in open_orders:
+                    try:
+                        res = await self.exchange.cancel_order(order["id"], symbol=order.get("symbol") or symbol)
+                        cancelled_orders.append(res)
+                    except Exception as ce:
+                        logger.error(f"Error cancelling order {order.get('id')}: {ce}")
+            except Exception as fe:
+                logger.warning(f"Fetch open orders failed during cancel_all_orders: {fe}")
+            return cancelled_orders
         except Exception as e:
             logger.error(f"Error executing cancel_all_orders: {type(e).__name__}: {str(e)}")
             raise
