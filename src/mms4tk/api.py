@@ -139,8 +139,10 @@ async def get_state() -> Dict[str, Any]:
 
 
 class BalanceResponse(BaseModel):
-    free: Dict[str, float] = Field(default_factory=dict, description="Free available balances per currency")
-    total: Dict[str, float] = Field(default_factory=dict, description="Total balances per currency")
+    free: Dict[str, float] = Field(default_factory=dict, description="Free available balances per currency in Trading account")
+    total: Dict[str, float] = Field(default_factory=dict, description="Total balances per currency in Trading account")
+    funding_assets: Dict[str, float] = Field(default_factory=dict, description="Balances in Funding account")
+    portfolio_usd: Dict[str, float] = Field(default_factory=dict, description="USD valuation breakdown: total_usd, funding_usd, trading_usd, earn_usd")
     mock: Optional[bool] = Field(default=False, description="True if running in mock mode")
 
 

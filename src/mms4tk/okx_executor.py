@@ -195,11 +195,56 @@ class OKXExecutor:
             raise
 
     async def fetch_balance(self) -> Dict[str, Any]:
-        """Fetch unified account balances."""
+        """Fetch full unified account balances and USD portfolio breakdown matching OKX UI."""
         if not self.has_credentials or self.exchange is None:
-            return {"free": {"USDC": 10000.0}, "total": {"USDC": 10000.0}, "mock": True}
+            return {
+                "free": {"USDC": 10000.0},
+                "total": {"USDC": 10000.0},
+                "portfolio_usd": {
+                    "total_usd": 10000.0,
+                    "funding_usd": 0.0,
+                    "trading_usd": 10000.0,
+                    "earn_usd": 0.0
+                },
+                "mock": True
+            }
         try:
-            return await self.exchange.fetch_balance()
+            bal = await self.exchange.fetch_balance()
+            portfolio_usd = {
+                "total_usd": 0.0,
+                "funding_usd": 0.0,
+                "trading_usd": 0.0,
+                "earn_usd": 0.0
+            }
+            funding_assets = {}
+
+            # Attempt OKX V5 Asset Valuation call for exact breakdown
+            try:
+                val = await self.exchange.privateGetAssetAssetValuation({"ccy": "USD"})
+                if val and val.get("data"):
+                    val_data = val["data"][0]
+                    portfolio_usd["total_usd"] = float(val_data.get("totalBal", 0.0))
+                    details = val_data.get("details", {})
+                    portfolio_usd["funding_usd"] = float(details.get("funding", 0.0))
+                    portfolio_usd["trading_usd"] = float(details.get("trading", 0.0))
+                    portfolio_usd["earn_usd"] = float(details.get("earn", 0.0))
+            except Exception as ve:
+                logger.warning(f"Failed to fetch privateGetAssetAssetValuation: {ve}")
+
+            # Attempt OKX V5 Funding asset breakdown
+            try:
+                fund = await self.exchange.privateGetAssetBalances()
+                if fund and fund.get("data"):
+                    for item in fund["data"]:
+                        b = float(item.get("bal", 0.0))
+                        if b > 0:
+                            funding_assets[item.get("ccy")] = b
+            except Exception as fe:
+                logger.warning(f"Failed to fetch privateGetAssetBalances: {fe}")
+
+            bal["portfolio_usd"] = portfolio_usd
+            bal["funding_assets"] = funding_assets
+            return bal
         except Exception as e:
             logger.error(f"Error fetching balance: {type(e).__name__}: {str(e)}")
             raise

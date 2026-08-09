@@ -277,7 +277,7 @@
             },
             "type": "object",
             "title": "Free",
-            "description": "Free available balances per currency"
+            "description": "Free available balances per currency in Trading account"
           },
           "total": {
             "additionalProperties": {
@@ -285,7 +285,23 @@
             },
             "type": "object",
             "title": "Total",
-            "description": "Total balances per currency"
+            "description": "Total balances per currency in Trading account"
+          },
+          "funding_assets": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Funding Assets",
+            "description": "Balances in Funding account"
+          },
+          "portfolio_usd": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Portfolio Usd",
+            "description": "USD valuation breakdown: total_usd, funding_usd, trading_usd, earn_usd"
           },
           "mock": {
             "anyOf": [
