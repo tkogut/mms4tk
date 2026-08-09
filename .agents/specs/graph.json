@@ -7,11 +7,34 @@
       "label": "AGENTS-OS.md",
       "type": "Ultimate Source of Truth",
       "description": "Constitution of AGENTS-OS v6.0 governing all Swarm rules and system operations."
+    },
+    {
+      "id": ".agents/specs/knowledge/vps_hermes_okx_architecture.md",
+      "label": "Vps Hermes Okx Architecture",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Vps Hermes Okx Architecture"
+    },
+    {
+      "id": ".agents/specs/knowledge/mms4_knowledge_base.md",
+      "label": "Mms4 Knowledge Base",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Mms4 Knowledge Base"
     }
   ],
-  "edges": [],
+  "edges": [
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/vps_hermes_okx_architecture.md",
+      "relation": "governs_knowledge"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/mms4_knowledge_base.md",
+      "relation": "governs_knowledge"
+    }
+  ],
   "metadata": {
-    "last_distillation": "2026-05-22",
+    "last_distillation": "2026-08-09",
     "source": "Inception Engine"
   }
 }
