@@ -97,10 +97,15 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "emergency_killall",
-                    "description": "Emergency stop signal: cancels all open orders and closes active positions immediately.",
+                    "description": "Emergency stop signal: cancels all open orders and closes active positions immediately. Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
-                        "properties": {},
+                        "properties": {
+                            "x_mms4_api_key": {
+                                "type": "string",
+                                "description": "Authentication key for X-MMS4-API-KEY header."
+                            }
+                        },
                         "required": []
                     }
                 }
@@ -109,10 +114,15 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "emergency_reverse",
-                    "description": "Emergency position reversal: closes current position and opens opposite position with SL=2%.",
+                    "description": "Emergency position reversal: closes current position and opens opposite position with SL=2%. Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
-                        "properties": {},
+                        "properties": {
+                            "x_mms4_api_key": {
+                                "type": "string",
+                                "description": "Authentication key for X-MMS4-API-KEY header."
+                            }
+                        },
                         "required": []
                     }
                 }
@@ -121,7 +131,7 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "high_risk_add",
-                    "description": "Force high-risk position addition (leverage x1, tight SL=1%). Blocked in SCOUT_MODE.",
+                    "description": "Force high-risk position addition (leverage x1, tight SL=1%). Blocked in SCOUT_MODE. Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -140,6 +150,10 @@ class HermesToolGenerator:
                                 "type": "number",
                                 "default": 0.01,
                                 "description": "Tight stop loss percentage (e.g. 0.01)"
+                            },
+                            "x_mms4_api_key": {
+                                "type": "string",
+                                "description": "Authentication key for X-MMS4-API-KEY header."
                             }
                         },
                         "required": []

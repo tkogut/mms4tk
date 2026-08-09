@@ -35,6 +35,8 @@ def test_scout_mode_blocks_high_risk_add():
     candles.append(Candle(
         timestamp=16 * 60, open=108.0, high=109.0, low=104.0, close=105.0, volume=500.0
     ))
+    # Unclosed live candle
+    candles.append(Candle(timestamp=17 * 60, open=105.0, high=106.0, low=104.0, close=105.5, volume=10.0))
 
     result = engine.evaluate_signals(candles, state_mgr, params)
 
@@ -71,6 +73,8 @@ def test_take_profit_restores_base_mode_and_enables_high_risk_add():
     candles.append(Candle(
         timestamp=16 * 60, open=92.0, high=97.0, low=91.0, close=95.0, volume=500.0
     ))
+    # Unclosed live candle
+    candles.append(Candle(timestamp=17 * 60, open=95.0, high=96.0, low=94.0, close=95.5, volume=10.0))
 
     result = engine.evaluate_signals(candles, state_mgr, params)
     assert result.signal_type == "HIGH_RISK_ADD_LONG"

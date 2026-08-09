@@ -54,6 +54,8 @@ def test_base_short_signal():
         close=109.0,  # close < open (109 < 112) and close/high >= 108
         volume=500.0
     ))
+    # Unclosed live candle
+    candles.append(Candle(timestamp=16 * 60, open=109.0, high=110.0, low=108.0, close=109.5, volume=10.0))
 
     state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
     engine = MMS4SignalEngine()
@@ -82,6 +84,8 @@ def test_base_long_signal():
         close=91.0,  # close > open (91 > 88) and low/close <= 92
         volume=500.0
     ))
+    # Unclosed live candle
+    candles.append(Candle(timestamp=16 * 60, open=91.0, high=92.0, low=90.0, close=91.5, volume=10.0))
 
     state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
     engine = MMS4SignalEngine()
@@ -120,6 +124,8 @@ def test_high_risk_add_evaluation_base_mode():
         close=105.0,
         volume=500.0
     ))
+    # Unclosed live candle
+    candles.append(Candle(timestamp=17 * 60, open=105.0, high=106.0, low=104.0, close=105.5, volume=10.0))
 
     state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
     engine = MMS4SignalEngine()

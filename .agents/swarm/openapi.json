@@ -188,6 +188,24 @@
         "summary": "Emergency Killall",
         "description": "Emergency stop endpoint triggered by parent controller (Hermes).\nCancels all open orders, closes active positions, and locks execution.",
         "operationId": "emergency_killall_api_v1_emergency_killall_post",
+        "parameters": [
+          {
+            "name": "X-MMS4-API-KEY",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mms4-Api-Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -195,6 +213,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EmergencyKillallResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -210,6 +238,24 @@
         "summary": "Emergency Reverse",
         "description": "Emergency position reversal triggered by Hermes agent.\nCloses current position immediately and opens opposite position with SL=2%.",
         "operationId": "emergency_reverse_api_v1_emergency_reverse_post",
+        "parameters": [
+          {
+            "name": "X-MMS4-API-KEY",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mms4-Api-Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -217,6 +263,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EmergencyReverseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -232,15 +288,33 @@
         "summary": "High Risk Add",
         "description": "High-risk position add (leverage x1, independent ticket) with tight SL=1%.\nBlocked if strategy is in SCOUT_MODE (REDUCED_RISK).",
         "operationId": "high_risk_add_api_v1_trade_high_risk_add_post",
+        "parameters": [
+          {
+            "name": "X-MMS4-API-KEY",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mms4-Api-Key"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/HighRiskAddRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {

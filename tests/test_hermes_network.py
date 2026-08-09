@@ -11,9 +11,13 @@ Validates HTTP routes under /api/v1/ accessible to Hermes agent over Traefik pro
 - POST /api/v1/trade/high_risk_add
 """
 
+import os
 import pytest
 from fastapi.testclient import TestClient
 from mms4tk.api import app
+
+API_KEY = os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")
+AUTH_HEADERS = {"X-MMS4-API-KEY": API_KEY}
 
 
 @pytest.fixture
@@ -82,7 +86,7 @@ def test_get_analytics_signals_endpoint(client: TestClient):
 
 def test_post_emergency_killall_endpoint(client: TestClient):
     """Validate POST /api/v1/emergency/killall executes emergency stop sequence."""
-    response = client.post("/api/v1/emergency/killall")
+    response = client.post("/api/v1/emergency/killall", headers=AUTH_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -93,7 +97,7 @@ def test_post_emergency_killall_endpoint(client: TestClient):
 
 def test_post_emergency_reverse_endpoint(client: TestClient):
     """Validate POST /api/v1/emergency/reverse executes emergency position reversal."""
-    response = client.post("/api/v1/emergency/reverse")
+    response = client.post("/api/v1/emergency/reverse", headers=AUTH_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -109,7 +113,7 @@ def test_post_trade_high_risk_add_endpoint(client: TestClient):
         "size": 1.5,
         "stop_loss_pct": 0.01
     }
-    response = client.post("/api/v1/trade/high_risk_add", json=payload)
+    response = client.post("/api/v1/trade/high_risk_add", json=payload, headers=AUTH_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] in ("success", "rejected")
@@ -125,7 +129,7 @@ def test_post_trade_high_risk_add_short(client: TestClient):
         "size": 2.0,
         "stop_loss_pct": 0.015
     }
-    response = client.post("/api/v1/trade/high_risk_add", json=payload)
+    response = client.post("/api/v1/trade/high_risk_add", json=payload, headers=AUTH_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] in ("success", "rejected")
