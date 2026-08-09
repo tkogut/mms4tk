@@ -15,4 +15,4 @@ services:
 networks:
   internal_swarm_net:
     driver: bridge
-    internal: true
+

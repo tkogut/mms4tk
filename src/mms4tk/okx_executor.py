@@ -85,7 +85,13 @@ class OKXExecutor:
             logger.info("Mock Mode: Skipping market loading from OKX.")
             return
         logger.info("Initializing OKX executor and loading markets...")
-        await self.exchange.load_markets()
+        try:
+            await self.exchange.load_markets()
+            logger.info("OKX markets loaded successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to load OKX markets ({e}). Falling back to mock mode.")
+            self.has_credentials = False
+
 
     async def close(self) -> None:
         """Close exchange connection gracefully."""
