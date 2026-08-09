@@ -1,7 +1,9 @@
 # AGENTS-OS v6.0
 tmp/
 *.log
+*.db
 __pycache__/
 .DS_Store
 node_modules/
 .env
+

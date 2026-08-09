@@ -1,21 +1,47 @@
+import logging
 from typing import Dict, Any, List, Optional
+from contextlib import asynccontextmanager
 import pandas as pd
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.okx_executor import OKXExecutor
 from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine
+from mms4tk.daemon import MMS4Daemon
+
+logger = logging.getLogger("mms4tk.api")
+
+# Global instances
+state_manager = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+executor = OKXExecutor()
+signal_engine = MMS4SignalEngine()
+daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine)
+
+latest_signal: Optional[SignalResult] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI Lifespan context manager:
+    Starts MMS4Daemon on application startup and gracefully stops on shutdown.
+    """
+    logger.info("FastAPI Startup: Launching MMS4Daemon background task loop...")
+    await daemon.start()
+    try:
+        yield
+    finally:
+        logger.info("FastAPI Shutdown: Stopping MMS4Daemon background task loop...")
+        await daemon.stop()
+
 
 app = FastAPI(
     title="MMS4 Toolkit API (mms4tk)",
     description="Execution module & API interface for MMS v4 strategy managed by Hermes agent",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
-
-# Global State Manager & Signal Engine instances
-state_manager = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
-signal_engine = MMS4SignalEngine()
-latest_signal: Optional[SignalResult] = None
 
 
 class StateResponse(BaseModel):
@@ -64,6 +90,13 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class DaemonStatusResponse(BaseModel):
+    is_running: bool
+    interval_seconds: float
+    last_cycle_timestamp: Optional[str] = None
+    processed_cycles: int
+
+
 class CalculateRequest(BaseModel):
     candles: List[Candle]
     params: Optional[IndicatorParams] = Field(default_factory=IndicatorParams)
@@ -84,6 +117,12 @@ async def get_health() -> Dict[str, str]:
         "status": "ok",
         "version": "0.1.0"
     }
+
+
+@app.get("/api/v1/daemon/status", response_model=DaemonStatusResponse, tags=["Daemon"])
+async def get_daemon_status() -> Dict[str, Any]:
+    """Get background daemon status and execution metrics."""
+    return daemon.get_status()
 
 
 @app.get("/api/v1/state", response_model=StateResponse, tags=["State"])
@@ -143,8 +182,10 @@ async def calculate_analytics(req: CalculateRequest) -> Dict[str, Any]:
 @app.get("/api/v1/analytics/signals", response_model=SignalResult, tags=["Analytics"])
 async def get_latest_signal() -> SignalResult:
     """
-    Returns latest signal evaluated from state.
+    Returns latest signal evaluated from state or daemon.
     """
+    if daemon.last_signal is not None:
+        return daemon.last_signal
     if latest_signal is None:
         return SignalResult(
             signal_type="NONE",
@@ -169,6 +210,7 @@ async def emergency_killall() -> Dict[str, str]:
     Emergency stop endpoint triggered by parent controller (Hermes).
     Cancels all open orders, closes active positions, and locks execution.
     """
+    await executor.cancel_all_orders()
     return {
         "status": "success",
         "message": "Emergency killall signal processed successfully.",
@@ -202,6 +244,19 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "reason": f"HIGH_RISK_ADD blocked in {state_manager.current_state.value} (leverage x{state_manager.leverage})",
             "details": {"current_state": state_manager.current_state.value, "leverage": state_manager.leverage}
         }
+
+    # Execute high risk add order via OKXExecutor
+    try:
+        await executor.execute_order(
+            symbol=daemon.symbol,
+            side=req.side,
+            amount=req.size,
+            stop_loss_pct=req.stop_loss_pct,
+            leverage=1.0
+        )
+    except Exception as e:
+        logger.error(f"Error executing high risk add: {e}")
+
     return {
         "status": "success",
         "executed": True,
@@ -213,4 +268,3 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "leverage": 1.0
         }
     }
-
