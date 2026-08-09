@@ -30,7 +30,7 @@ class MMS4Daemon:
         state_manager: Optional[MMS4StateManager] = None,
         signal_engine: Optional[MMS4SignalEngine] = None,
         logger_db: Optional[LoggerDB] = None,
-        symbol: str = "BTC/USDC:USDC",
+        symbol: str = "BTC/USDC",
         interval_seconds: float = 15.0
     ) -> None:
         self.executor = executor or OKXExecutor()
