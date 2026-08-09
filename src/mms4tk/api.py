@@ -1,10 +1,12 @@
+import os
 import logging
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 import pandas as pd
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Header, Depends
 from pydantic import BaseModel, Field
 
+from mms4tk.logger_db import LoggerDB
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.okx_executor import OKXExecutor
 from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine
@@ -13,12 +15,24 @@ from mms4tk.daemon import MMS4Daemon
 logger = logging.getLogger("mms4tk.api")
 
 # Global instances
-state_manager = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+logger_db = LoggerDB()
+state_manager = MMS4StateManager(initial_state=MMS4State.BASE_MODE, logger_db=logger_db)
 executor = OKXExecutor()
 signal_engine = MMS4SignalEngine()
-daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine)
+daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine, logger_db=logger_db)
 
 latest_signal: Optional[SignalResult] = None
+
+
+async def verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-MMS4-API-KEY")) -> str:
+    """Verify X-MMS4-API-KEY header against MMS4_API_KEY env var."""
+    expected_key = os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")
+    if not x_mms4_api_key or x_mms4_api_key != expected_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Invalid or missing X-MMS4-API-KEY header"
+        )
+    return x_mms4_api_key
 
 
 @asynccontextmanager
@@ -222,7 +236,7 @@ async def get_latest_signal_alias() -> SignalResult:
     return await get_latest_signal()
 
 
-@app.post("/api/v1/emergency/killall", response_model=EmergencyKillallResponse, tags=["Emergency"])
+@app.post("/api/v1/emergency/killall", response_model=EmergencyKillallResponse, tags=["Emergency"], dependencies=[Depends(verify_api_key)])
 async def emergency_killall() -> Dict[str, str]:
     """
     Emergency stop endpoint triggered by parent controller (Hermes).
@@ -236,7 +250,7 @@ async def emergency_killall() -> Dict[str, str]:
     }
 
 
-@app.post("/api/v1/emergency/reverse", response_model=EmergencyReverseResponse, tags=["Emergency"])
+@app.post("/api/v1/emergency/reverse", response_model=EmergencyReverseResponse, tags=["Emergency"], dependencies=[Depends(verify_api_key)])
 async def emergency_reverse() -> Dict[str, str]:
     """
     Emergency position reversal triggered by Hermes agent.
@@ -249,7 +263,7 @@ async def emergency_reverse() -> Dict[str, str]:
     }
 
 
-@app.post("/api/v1/trade/high_risk_add", response_model=HighRiskAddResponse, tags=["Trading"])
+@app.post("/api/v1/trade/high_risk_add", response_model=HighRiskAddResponse, tags=["Trading"], dependencies=[Depends(verify_api_key)])
 async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
     """
     High-risk position add (leverage x1, independent ticket) with tight SL=1%.

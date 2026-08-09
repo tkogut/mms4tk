@@ -58,6 +58,15 @@ class LoggerDB:
                     trade_count INTEGER NOT NULL
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS state_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    leverage REAL NOT NULL,
+                    reason TEXT
+                )
+            """)
             conn.commit()
 
     def log_cycle(
@@ -125,3 +134,30 @@ class LoggerDB:
             )
             rows = cursor.fetchall()
             return [dict(r) for r in rows]
+
+    def save_state(self, state: str, leverage: float, reason: str = "") -> int:
+        """Save state transition or snapshot to state_history table."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO state_history (timestamp, state, leverage, reason)
+                VALUES (?, ?, ?, ?)
+                """,
+                (timestamp, state, leverage, reason)
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+
+    def get_latest_state(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the latest state record from state_history table."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM state_history ORDER BY id DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None

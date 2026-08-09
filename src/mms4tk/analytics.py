@@ -127,22 +127,33 @@ class MMS4SignalEngine:
         if len(candles) < 2:
             return SignalResult(
                 signal_type="NONE",
-                price=candles[-1].close if candles else 0.0,
+                price=0.0,
                 stop_loss=0.0,
                 leverage=state_manager.leverage,
                 is_allowed=True,
-                reason="Insufficient candle data (at least 2 candles required for evaluation)"
+                reason="Insufficient candles for closed candle analysis"
             )
 
-        df = TMAIndicator.calculate(candles, params)
+        closed_candles = candles[:-1]
+        if len(closed_candles) < 2:
+            return SignalResult(
+                signal_type="NONE",
+                price=0.0,
+                stop_loss=0.0,
+                leverage=state_manager.leverage,
+                is_allowed=True,
+                reason="Insufficient candles for closed candle analysis"
+            )
+
+        df = TMAIndicator.calculate(closed_candles, params)
 
         # Check if latest indicator values are valid
         latest_tma = df["tma"].iloc[-1]
         latest_upper = df["upper_band"].iloc[-1]
         latest_lower = df["lower_band"].iloc[-1]
 
-        curr_c = candles[-1]
-        prev_c = candles[-2]
+        curr_c = closed_candles[-1]
+        prev_c = closed_candles[-2]
 
         if pd.isna(latest_upper) or pd.isna(latest_lower) or pd.isna(latest_tma):
             return SignalResult(

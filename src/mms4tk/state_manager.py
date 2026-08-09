@@ -45,13 +45,27 @@ class MMS4StateManager:
     def __init__(
         self,
         initial_state: MMS4State = MMS4State.BASE_MODE,
-        initial_equity: float = 0.0
+        initial_equity: float = 0.0,
+        logger_db: Optional[Any] = None
     ) -> None:
         self._current_state: MMS4State = initial_state
         self._initial_equity: float = initial_equity
         self._current_equity: float = initial_equity
         self._realized_pnl: float = 0.0
         self._trade_history: List[TradeRecord] = []
+        self.logger_db: Optional[Any] = logger_db
+
+        if self.logger_db is not None:
+            saved = self.logger_db.get_latest_state()
+            if saved and "state" in saved and saved["state"]:
+                self._current_state = MMS4State(saved["state"])
+
+    def set_logger_db(self, logger_db: Any) -> None:
+        """Attach LoggerDB instance and restore latest persisted state if present."""
+        self.logger_db = logger_db
+        saved = self.logger_db.get_latest_state()
+        if saved and "state" in saved and saved["state"]:
+            self._current_state = MMS4State(saved["state"])
 
     @property
     def current_state(self) -> MMS4State:
@@ -106,6 +120,12 @@ class MMS4StateManager:
         """
         if self._current_state == MMS4State.BASE_MODE and sl_percent >= 0.02:
             self._current_state = MMS4State.SCOUT_MODE
+            if self.logger_db:
+                self.logger_db.save_state(
+                    state=self._current_state.value,
+                    leverage=self.leverage,
+                    reason=f"Stop Loss hit ({sl_percent * 100:.1f}%)"
+                )
             return True
         return False
 
@@ -117,6 +137,12 @@ class MMS4StateManager:
         """
         if self._current_state == MMS4State.SCOUT_MODE:
             self._current_state = MMS4State.BASE_MODE
+            if self.logger_db:
+                self.logger_db.save_state(
+                    state=self._current_state.value,
+                    leverage=self.leverage,
+                    reason="Take Profit hit"
+                )
             return True
         return False
 
