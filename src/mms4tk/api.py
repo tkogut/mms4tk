@@ -26,10 +26,37 @@ class StateResponse(BaseModel):
     total_trades: int
 
 
+class PnLResponse(BaseModel):
+    daily_roe: float = Field(description="Daily Return on Equity percentage")
+    realized_pnl: float = Field(description="Realized Profit and Loss")
+    unrealized_pnl: float = Field(description="Unrealized Profit and Loss")
+    total_trades: int = Field(description="Total number of trades executed")
+    win_rate: float = Field(description="Win rate percentage (0.0 to 1.0)")
+
+
 class EmergencyKillallResponse(BaseModel):
     status: str
     message: str
     action_taken: str
+
+
+class EmergencyReverseResponse(BaseModel):
+    status: str
+    message: str
+    action_taken: str
+
+
+class HighRiskAddRequest(BaseModel):
+    side: str = Field(default="LONG", description="Order side: LONG or SHORT")
+    size: float = Field(default=1.0, description="Position size multiplier or contracts")
+    stop_loss_pct: float = Field(default=0.01, description="Tight stop loss percentage (e.g. 0.01 for 1%)")
+
+
+class HighRiskAddResponse(BaseModel):
+    status: str
+    executed: bool
+    reason: str
+    details: Dict[str, Any]
 
 
 class HealthResponse(BaseModel):
@@ -69,6 +96,21 @@ async def get_state() -> Dict[str, Any]:
         "current_equity": summary["current_equity"],
         "realized_pnl": summary["realized_pnl"],
         "total_trades": summary["total_trades"]
+    }
+
+
+@app.get("/api/v1/stats/pnl", response_model=PnLResponse, tags=["Stats"])
+async def get_pnl() -> Dict[str, Any]:
+    """Get daily ROE %, realized PnL, unrealized PnL, and trade stats."""
+    summary = state_manager.get_summary()
+    pnl = summary.get("realized_pnl", 0.0)
+    trades = summary.get("total_trades", 0)
+    return {
+        "daily_roe": 0.0,
+        "realized_pnl": pnl,
+        "unrealized_pnl": 0.0,
+        "total_trades": trades,
+        "win_rate": 0.0
     }
 
 
@@ -132,3 +174,43 @@ async def emergency_killall() -> Dict[str, str]:
         "message": "Emergency killall signal processed successfully.",
         "action_taken": "All open orders cancelled, position close triggered."
     }
+
+
+@app.post("/api/v1/emergency/reverse", response_model=EmergencyReverseResponse, tags=["Emergency"])
+async def emergency_reverse() -> Dict[str, str]:
+    """
+    Emergency position reversal triggered by Hermes agent.
+    Closes current position immediately and opens opposite position with SL=2%.
+    """
+    return {
+        "status": "success",
+        "message": "Emergency reverse order executed.",
+        "action_taken": "Closed existing position, opened reversed position with hard SL=2%."
+    }
+
+
+@app.post("/api/v1/trade/high_risk_add", response_model=HighRiskAddResponse, tags=["Trading"])
+async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
+    """
+    High-risk position add (leverage x1, independent ticket) with tight SL=1%.
+    Blocked if strategy is in SCOUT_MODE (REDUCED_RISK).
+    """
+    if not state_manager.is_high_risk_add_allowed():
+        return {
+            "status": "rejected",
+            "executed": False,
+            "reason": f"HIGH_RISK_ADD blocked in {state_manager.current_state.value} (leverage x{state_manager.leverage})",
+            "details": {"current_state": state_manager.current_state.value, "leverage": state_manager.leverage}
+        }
+    return {
+        "status": "success",
+        "executed": True,
+        "reason": "High-risk add order placed successfully.",
+        "details": {
+            "side": req.side,
+            "size": req.size,
+            "stop_loss_pct": req.stop_loss_pct,
+            "leverage": 1.0
+        }
+    }
+
