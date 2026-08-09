@@ -81,17 +81,18 @@ class OKXExecutor:
 
     async def initialize(self) -> None:
         """Load markets and verify connection to OKX."""
-        if not self.has_credentials or self.exchange is None:
-            logger.info("Mock Mode: Skipping market loading from OKX.")
-            return
-        logger.info("Initializing OKX executor and loading markets...")
+        logger.info("Initializing OKX executor and loading public markets...")
         try:
-            await self.exchange.load_markets()
-            logger.info("OKX markets loaded successfully.")
+            # Create an unauthenticated exchange instance for public market metadata loading
+            public_ex = ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+            await public_ex.load_markets()
+            if self.exchange is not None:
+                self.exchange.markets = public_ex.markets
+                self.exchange.symbols = public_ex.symbols
+            await public_ex.close()
+            logger.info("OKX public markets loaded successfully.")
         except Exception as e:
-            logger.warning(f"Failed to load OKX markets ({e}). Falling back to mock mode.")
-            self.has_credentials = False
-
+            logger.warning(f"Failed to load public OKX markets ({e}).")
 
     async def close(self) -> None:
         """Close exchange connection gracefully."""
@@ -100,19 +101,17 @@ class OKXExecutor:
 
     async def fetch_candles(
         self,
-        symbol: str = "BTC/USDC:USDC",
+        symbol: str = "BTC/USDC",
         timeframe: str = "1m",
         limit: int = 100
     ) -> List[Candle]:
         """
-        Fetch OHLCV candles from OKX or fallback to mock candles if API keys missing/error.
+        Fetch real live OHLCV candles from OKX public API, with fallback to mock if unreachable.
         """
-        if not self.has_credentials or self.exchange is None:
-            logger.debug(f"Mock Mode: returning {limit} mock candles for symbol {symbol}.")
-            return _generate_mock_candles(count=limit)
-
         try:
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            # Use public exchange instance or unauthenticated call to ensure real market candles
+            ex = self.exchange or ccxt.okx({"enableRateLimit": True})
+            ohlcv = await ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             candles: List[Candle] = []
             for item in ohlcv:
                 candles.append(
@@ -129,6 +128,7 @@ class OKXExecutor:
         except Exception as e:
             logger.error(f"Error fetching candles from OKX: {type(e).__name__}: {str(e)}. Falling back to mock candles.")
             return _generate_mock_candles(count=limit)
+
 
     async def execute_order(
         self,
