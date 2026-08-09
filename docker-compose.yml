@@ -7,6 +7,7 @@ services:
     restart: unless-stopped
     networks:
       - internal_swarm_net
+      - traefik-proxy
     volumes:
       - ./.agents/swarm:/app/.agents/swarm
     env_file:
@@ -15,4 +16,7 @@ services:
 networks:
   internal_swarm_net:
     driver: bridge
+  traefik-proxy:
+    external: true
+
 
