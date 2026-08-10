@@ -210,6 +210,57 @@ class HermesToolGenerator:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mms4_get_pending_events",
+                    "description": "Fetch pending webhook events from mms4tk that need to be dispatched to Hermes Kanban. Returns a list of undispatched SCOUT_MODE events.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mms4_hitl_resolve",
+                    "description": "Human-in-the-Loop resolution for uncertain H4 candle classification. Decision: SWEEP_WICK (relax SCOUT_MODE) or MARUBOZU_BREAKOUT (maintain SCOUT_MODE). Requires X-MMS4-API-KEY header.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "decision": {
+                                "type": "string",
+                                "enum": ["SWEEP_WICK", "MARUBOZU_BREAKOUT"],
+                                "description": "H4 candle classification decision"
+                            },
+                            "directional_bias": {
+                                "type": "string",
+                                "enum": ["BOTH", "LONG_ONLY", "SHORT_ONLY", "FLAT"],
+                                "default": "BOTH",
+                                "description": "Directional bias to apply"
+                            },
+                            "risk_profile": {
+                                "type": "string",
+                                "enum": ["CONSERVATIVE", "MODERATE", "AGGRESSIVE"],
+                                "default": "MODERATE",
+                                "description": "Risk profile to apply"
+                            },
+                            "reason": {
+                                "type": "string",
+                                "default": "Human-in-the-Loop decision",
+                                "description": "Reason for the decision"
+                            },
+                            "x_mms4_api_key": {
+                                "type": "string",
+                                "description": "Authentication key for X-MMS4-API-KEY header."
+                            }
+                        },
+                        "required": ["decision"]
+                    }
+                }
             }
         ]
 

@@ -1,1080 +1,308 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MMS4 Toolkit API (mms4tk)",
-    "description": "Execution module & API interface for MMS v4 strategy managed by Hermes agent",
-    "version": "0.1.0"
+    "title": "MMS4TK OpenAPI Schema for Hermes Agent",
+    "version": "0.3.0"
   },
-  "paths": {
-    "/api/v1/health": {
-      "get": {
-        "tags": [
-          "Health"
-        ],
-        "summary": "Get Health",
-        "description": "Health check endpoint.",
-        "operationId": "get_health_api_v1_health_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
-                }
-              }
-            }
-          }
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_state",
+        "description": "Fetch current MMS4 strategy state, active leverage, equity, and trade counters.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     },
-    "/api/v1/daemon/status": {
-      "get": {
-        "tags": [
-          "Daemon"
-        ],
-        "summary": "Get Daemon Status",
-        "description": "Get background daemon status and execution metrics.",
-        "operationId": "get_daemon_status_api_v1_daemon_status_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DaemonStatusResponse"
-                }
-              }
-            }
-          }
+    {
+      "type": "function",
+      "function": {
+        "name": "get_balance",
+        "description": "Fetch unified OKX account balances (free available and total funds per currency) via mms4tk.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     },
-    "/api/v1/state": {
-      "get": {
-        "tags": [
-          "State"
-        ],
-        "summary": "Get State",
-        "description": "Get current MMS4 strategy state, active leverage, and equity metrics.",
-        "operationId": "get_state_api_v1_state_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StateResponse"
-                }
-              }
-            }
-          }
+    {
+      "type": "function",
+      "function": {
+        "name": "get_pnl",
+        "description": "Fetch daily ROE %, realized PnL, unrealized PnL, and trade performance statistics.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     },
-    "/api/v1/balance": {
-      "get": {
-        "tags": [
-          "Account"
-        ],
-        "summary": "Get Balance",
-        "description": "Fetch unified account balances from OKX via executor.",
-        "operationId": "get_balance_api_v1_balance_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BalanceResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/stats/pnl": {
-      "get": {
-        "tags": [
-          "Stats"
-        ],
-        "summary": "Get Pnl",
-        "description": "Get daily ROE %, realized PnL, unrealized PnL, and trade stats.",
-        "operationId": "get_pnl_api_v1_stats_pnl_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PnLResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/analytics/calculate": {
-      "post": {
-        "tags": [
-          "Analytics"
-        ],
-        "summary": "Calculate Analytics",
-        "description": "Accepts OHLCV candle list, returns calculated TMA, ATR, Bands, and evaluated SignalResult.",
-        "operationId": "calculate_analytics_api_v1_analytics_calculate_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CalculateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CalculateResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/analytics/signals": {
-      "get": {
-        "tags": [
-          "Analytics"
-        ],
-        "summary": "Get Latest Signal",
-        "description": "Returns latest signal evaluated from state or daemon.",
-        "operationId": "get_latest_signal_api_v1_analytics_signals_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SignalResult"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/emergency/killall": {
-      "post": {
-        "tags": [
-          "Emergency"
-        ],
-        "summary": "Emergency Killall",
-        "description": "Emergency stop endpoint triggered by parent controller (Hermes).\nCancels all open orders, closes active positions, and locks execution.",
-        "operationId": "emergency_killall_api_v1_emergency_killall_post",
-        "parameters": [
-          {
-            "name": "X-MMS4-API-KEY",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
+    {
+      "type": "function",
+      "function": {
+        "name": "calculate_analytics",
+        "description": "Calculate TMA, ATR, envelope bands, and evaluate trading signals from OHLCV candles.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "candles": {
+              "type": "array",
+              "description": "List of OHLCV candle objects",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "timestamp": {
+                    "type": "number"
+                  },
+                  "open": {
+                    "type": "number"
+                  },
+                  "high": {
+                    "type": "number"
+                  },
+                  "low": {
+                    "type": "number"
+                  },
+                  "close": {
+                    "type": "number"
+                  },
+                  "volume": {
+                    "type": "number"
+                  }
                 },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Mms4-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmergencyKillallResponse"
-                }
+                "required": [
+                  "timestamp",
+                  "open",
+                  "high",
+                  "low",
+                  "close",
+                  "volume"
+                ]
               }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/emergency/reverse": {
-      "post": {
-        "tags": [
-          "Emergency"
-        ],
-        "summary": "Emergency Reverse",
-        "description": "Emergency position reversal triggered by Hermes agent.\nCloses current position immediately and opens opposite position with SL=2%.",
-        "operationId": "emergency_reverse_api_v1_emergency_reverse_post",
-        "parameters": [
-          {
-            "name": "X-MMS4-API-KEY",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
+            },
+            "params": {
+              "type": "object",
+              "description": "Optional indicator parameters",
+              "properties": {
+                "tma_length": {
+                  "type": "integer",
+                  "default": 20
                 },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Mms4-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmergencyReverseResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/trade/high_risk_add": {
-      "post": {
-        "tags": [
-          "Trading"
-        ],
-        "summary": "High Risk Add",
-        "description": "High-risk position add (leverage x1, independent ticket) with tight SL=1%.\nBlocked if strategy is in SCOUT_MODE (REDUCED_RISK).",
-        "operationId": "high_risk_add_api_v1_trade_high_risk_add_post",
-        "parameters": [
-          {
-            "name": "X-MMS4-API-KEY",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
+                "atr_period": {
+                  "type": "integer",
+                  "default": 14
                 },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Mms4-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HighRiskAddRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HighRiskAddResponse"
+                "atr_mult": {
+                  "type": "number",
+                  "default": 2.0
                 }
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
+          "required": [
+            "candles"
+          ]
         }
       }
     },
-    "/api/v1/analytics/higher_tf": {
-      "get": {
-        "tags": [
-          "Analytics"
-        ],
-        "summary": "Get Higher Tf Analytics",
-        "description": "Fetch higher timeframe (H4/D1) market state analysis.\nCalculates D1 ATR expansion ratio, H4 TMA position, and candle formation.",
-        "operationId": "get_higher_tf_analytics_api_v1_analytics_higher_tf_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HigherTimeframeResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/strategy/profile": {
-      "get": {
-        "tags": [
-          "Strategy Profile"
-        ],
-        "summary": "Get Strategy Profile",
-        "description": "Get current active strategy profile configuration.",
-        "operationId": "get_strategy_profile_api_v1_strategy_profile_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StrategyProfile"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Strategy Profile"
-        ],
-        "summary": "Set Strategy Profile",
-        "description": "Update active strategy profile configuration.\nIf scout_override is True, relaxes SCOUT_MODE to BASE_MODE immediately.\nProtected by X-MMS4-API-KEY header.",
-        "operationId": "set_strategy_profile_api_v1_strategy_profile_post",
-        "parameters": [
-          {
-            "name": "X-MMS4-API-KEY",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Mms4-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StrategyProfile"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StrategyProfile"
-                }
-              }
+    {
+      "type": "function",
+      "function": {
+        "name": "emergency_killall",
+        "description": "Emergency stop signal: cancels all open orders and closes active positions immediately. Requires X-MMS4-API-KEY header.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "x_mms4_api_key": {
+              "type": "string",
+              "description": "Authentication key for X-MMS4-API-KEY header."
             }
           },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "emergency_reverse",
+        "description": "Emergency position reversal: closes current position and opens opposite position with SL=2%. Requires X-MMS4-API-KEY header.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "x_mms4_api_key": {
+              "type": "string",
+              "description": "Authentication key for X-MMS4-API-KEY header."
             }
-          }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "high_risk_add",
+        "description": "Force high-risk position addition (leverage x1, tight SL=1%). Blocked in SCOUT_MODE. Requires X-MMS4-API-KEY header.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "side": {
+              "type": "string",
+              "enum": [
+                "LONG",
+                "SHORT"
+              ],
+              "default": "LONG",
+              "description": "Direction of position add"
+            },
+            "size": {
+              "type": "number",
+              "default": 1.0,
+              "description": "Size or contracts for addition"
+            },
+            "stop_loss_pct": {
+              "type": "number",
+              "default": 0.01,
+              "description": "Tight stop loss percentage (e.g. 0.01)"
+            },
+            "x_mms4_api_key": {
+              "type": "string",
+              "description": "Authentication key for X-MMS4-API-KEY header."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "mms4_get_higher_tf",
+        "description": "Fetch higher timeframe (H4/D1) analytics including D1 ATR expansion ratio, H4 TMA position, and candle formation.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "mms4_set_strategy_profile",
+        "description": "Update active strategy profile (directional_bias, risk_profile, scout_override, reason) for adaptive autotrading. Requires X-MMS4-API-KEY header.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "directional_bias": {
+              "type": "string",
+              "enum": [
+                "BOTH",
+                "LONG_ONLY",
+                "SHORT_ONLY",
+                "FLAT"
+              ],
+              "default": "BOTH",
+              "description": "Directional bias filtering"
+            },
+            "risk_profile": {
+              "type": "string",
+              "enum": [
+                "CONSERVATIVE",
+                "MODERATE",
+                "AGGRESSIVE"
+              ],
+              "default": "MODERATE",
+              "description": "Risk profile modulating leverage"
+            },
+            "scout_override": {
+              "type": "boolean",
+              "default": false,
+              "description": "Set True to allow early SCOUT_MODE relaxation"
+            },
+            "reason": {
+              "type": "string",
+              "default": "",
+              "description": "Reason for profile update"
+            },
+            "x_mms4_api_key": {
+              "type": "string",
+              "description": "Authentication key for X-MMS4-API-KEY header."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "mms4_get_pending_events",
+        "description": "Fetch pending webhook events from mms4tk that need to be dispatched to Hermes Kanban. Returns a list of undispatched SCOUT_MODE events.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "mms4_hitl_resolve",
+        "description": "Human-in-the-Loop resolution for uncertain H4 candle classification. Decision: SWEEP_WICK (relax SCOUT_MODE) or MARUBOZU_BREAKOUT (maintain SCOUT_MODE). Requires X-MMS4-API-KEY header.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "SWEEP_WICK",
+                "MARUBOZU_BREAKOUT"
+              ],
+              "description": "H4 candle classification decision"
+            },
+            "directional_bias": {
+              "type": "string",
+              "enum": [
+                "BOTH",
+                "LONG_ONLY",
+                "SHORT_ONLY",
+                "FLAT"
+              ],
+              "default": "BOTH",
+              "description": "Directional bias to apply"
+            },
+            "risk_profile": {
+              "type": "string",
+              "enum": [
+                "CONSERVATIVE",
+                "MODERATE",
+                "AGGRESSIVE"
+              ],
+              "default": "MODERATE",
+              "description": "Risk profile to apply"
+            },
+            "reason": {
+              "type": "string",
+              "default": "Human-in-the-Loop decision",
+              "description": "Reason for the decision"
+            },
+            "x_mms4_api_key": {
+              "type": "string",
+              "description": "Authentication key for X-MMS4-API-KEY header."
+            }
+          },
+          "required": [
+            "decision"
+          ]
         }
       }
     }
-  },
-  "components": {
-    "schemas": {
-      "BalanceResponse": {
-        "properties": {
-          "free": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "type": "object",
-            "title": "Free",
-            "description": "Free available balances per currency in Trading account"
-          },
-          "total": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "type": "object",
-            "title": "Total",
-            "description": "Total balances per currency in Trading account"
-          },
-          "funding_assets": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "type": "object",
-            "title": "Funding Assets",
-            "description": "Balances in Funding account"
-          },
-          "portfolio_usd": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "type": "object",
-            "title": "Portfolio Usd",
-            "description": "USD valuation breakdown: total_usd, funding_usd, trading_usd, earn_usd"
-          },
-          "mock": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mock",
-            "description": "True if running in mock mode",
-            "default": false
-          }
-        },
-        "type": "object",
-        "title": "BalanceResponse"
-      },
-      "CalculateRequest": {
-        "properties": {
-          "candles": {
-            "items": {
-              "$ref": "#/components/schemas/Candle"
-            },
-            "type": "array",
-            "title": "Candles"
-          },
-          "params": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IndicatorParams"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object",
-        "required": [
-          "candles"
-        ],
-        "title": "CalculateRequest"
-      },
-      "CalculateResponse": {
-        "properties": {
-          "tma": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Tma"
-          },
-          "atr": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Atr"
-          },
-          "upper_band": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Upper Band"
-          },
-          "lower_band": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Lower Band"
-          },
-          "signal": {
-            "$ref": "#/components/schemas/SignalResult"
-          }
-        },
-        "type": "object",
-        "required": [
-          "tma",
-          "atr",
-          "upper_band",
-          "lower_band",
-          "signal"
-        ],
-        "title": "CalculateResponse"
-      },
-      "Candle": {
-        "properties": {
-          "timestamp": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "number"
-              },
-              {
-                "type": "string"
-              },
-              {
-                "type": "string",
-                "format": "date-time"
-              }
-            ],
-            "title": "Timestamp"
-          },
-          "open": {
-            "type": "number",
-            "title": "Open"
-          },
-          "high": {
-            "type": "number",
-            "title": "High"
-          },
-          "low": {
-            "type": "number",
-            "title": "Low"
-          },
-          "close": {
-            "type": "number",
-            "title": "Close"
-          },
-          "volume": {
-            "type": "number",
-            "title": "Volume",
-            "default": 0.0
-          }
-        },
-        "type": "object",
-        "required": [
-          "timestamp",
-          "open",
-          "high",
-          "low",
-          "close"
-        ],
-        "title": "Candle",
-        "description": "OHLCV candle representation."
-      },
-      "DaemonStatusResponse": {
-        "properties": {
-          "is_running": {
-            "type": "boolean",
-            "title": "Is Running"
-          },
-          "interval_seconds": {
-            "type": "number",
-            "title": "Interval Seconds"
-          },
-          "last_cycle_timestamp": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Cycle Timestamp"
-          },
-          "processed_cycles": {
-            "type": "integer",
-            "title": "Processed Cycles"
-          }
-        },
-        "type": "object",
-        "required": [
-          "is_running",
-          "interval_seconds",
-          "processed_cycles"
-        ],
-        "title": "DaemonStatusResponse"
-      },
-      "EmergencyKillallResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "action_taken": {
-            "type": "string",
-            "title": "Action Taken"
-          }
-        },
-        "type": "object",
-        "required": [
-          "status",
-          "message",
-          "action_taken"
-        ],
-        "title": "EmergencyKillallResponse"
-      },
-      "EmergencyReverseResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "action_taken": {
-            "type": "string",
-            "title": "Action Taken"
-          }
-        },
-        "type": "object",
-        "required": [
-          "status",
-          "message",
-          "action_taken"
-        ],
-        "title": "EmergencyReverseResponse"
-      },
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "type": "array",
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "title": "HTTPValidationError"
-      },
-      "HealthResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "version": {
-            "type": "string",
-            "title": "Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "status",
-          "version"
-        ],
-        "title": "HealthResponse"
-      },
-      "HighRiskAddRequest": {
-        "properties": {
-          "side": {
-            "type": "string",
-            "title": "Side",
-            "description": "Order side: LONG or SHORT",
-            "default": "LONG"
-          },
-          "size": {
-            "type": "number",
-            "title": "Size",
-            "description": "Position size multiplier or contracts",
-            "default": 1.0
-          },
-          "stop_loss_pct": {
-            "type": "number",
-            "title": "Stop Loss Pct",
-            "description": "Tight stop loss percentage (e.g. 0.01 for 1%)",
-            "default": 0.01
-          }
-        },
-        "type": "object",
-        "title": "HighRiskAddRequest"
-      },
-      "HighRiskAddResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "executed": {
-            "type": "boolean",
-            "title": "Executed"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          },
-          "details": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Details"
-          }
-        },
-        "type": "object",
-        "required": [
-          "status",
-          "executed",
-          "reason",
-          "details"
-        ],
-        "title": "HighRiskAddResponse"
-      },
-      "HigherTimeframeResponse": {
-        "properties": {
-          "atr_d1": {
-            "type": "number",
-            "title": "Atr D1"
-          },
-          "atr_d1_expansion_ratio": {
-            "type": "number",
-            "title": "Atr D1 Expansion Ratio"
-          },
-          "h4_tma_position": {
-            "type": "string",
-            "title": "H4 Tma Position",
-            "description": "ABOVE | BELOW | INSIDE"
-          },
-          "h4_candle_formation": {
-            "type": "string",
-            "title": "H4 Candle Formation",
-            "description": "SWEEP_WICK | MARUBOZU_BREAKOUT | NEUTRAL"
-          },
-          "h4_tma": {
-            "type": "number",
-            "title": "H4 Tma"
-          },
-          "h4_upper_band": {
-            "type": "number",
-            "title": "H4 Upper Band"
-          },
-          "h4_lower_band": {
-            "type": "number",
-            "title": "H4 Lower Band"
-          }
-        },
-        "type": "object",
-        "required": [
-          "atr_d1",
-          "atr_d1_expansion_ratio",
-          "h4_tma_position",
-          "h4_candle_formation",
-          "h4_tma",
-          "h4_upper_band",
-          "h4_lower_band"
-        ],
-        "title": "HigherTimeframeResponse"
-      },
-      "IndicatorParams": {
-        "properties": {
-          "tma_length": {
-            "type": "integer",
-            "title": "Tma Length",
-            "default": 20
-          },
-          "atr_period": {
-            "type": "integer",
-            "title": "Atr Period",
-            "default": 14
-          },
-          "atr_mult": {
-            "type": "number",
-            "title": "Atr Mult",
-            "default": 2.0
-          }
-        },
-        "type": "object",
-        "title": "IndicatorParams",
-        "description": "Parameters for TMA and ATR calculation."
-      },
-      "PnLResponse": {
-        "properties": {
-          "daily_roe": {
-            "type": "number",
-            "title": "Daily Roe",
-            "description": "Daily Return on Equity percentage"
-          },
-          "realized_pnl": {
-            "type": "number",
-            "title": "Realized Pnl",
-            "description": "Realized Profit and Loss"
-          },
-          "unrealized_pnl": {
-            "type": "number",
-            "title": "Unrealized Pnl",
-            "description": "Unrealized Profit and Loss"
-          },
-          "total_trades": {
-            "type": "integer",
-            "title": "Total Trades",
-            "description": "Total number of trades executed"
-          },
-          "win_rate": {
-            "type": "number",
-            "title": "Win Rate",
-            "description": "Win rate percentage (0.0 to 1.0)"
-          }
-        },
-        "type": "object",
-        "required": [
-          "daily_roe",
-          "realized_pnl",
-          "unrealized_pnl",
-          "total_trades",
-          "win_rate"
-        ],
-        "title": "PnLResponse"
-      },
-      "SignalResult": {
-        "properties": {
-          "signal_type": {
-            "type": "string",
-            "title": "Signal Type"
-          },
-          "price": {
-            "type": "number",
-            "title": "Price"
-          },
-          "stop_loss": {
-            "type": "number",
-            "title": "Stop Loss"
-          },
-          "leverage": {
-            "type": "number",
-            "title": "Leverage"
-          },
-          "is_allowed": {
-            "type": "boolean",
-            "title": "Is Allowed",
-            "default": true
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "signal_type",
-          "price",
-          "stop_loss",
-          "leverage"
-        ],
-        "title": "SignalResult",
-        "description": "Result of MMS4 signal evaluation.\nsignal_type: \"NONE\" | \"BASE_LONG\" | \"BASE_SHORT\" | \"HIGH_RISK_ADD_LONG\" | \"HIGH_RISK_ADD_SHORT\""
-      },
-      "StateResponse": {
-        "properties": {
-          "state": {
-            "type": "string",
-            "title": "State"
-          },
-          "leverage": {
-            "type": "number",
-            "title": "Leverage"
-          },
-          "current_equity": {
-            "type": "number",
-            "title": "Current Equity"
-          },
-          "realized_pnl": {
-            "type": "number",
-            "title": "Realized Pnl"
-          },
-          "total_trades": {
-            "type": "integer",
-            "title": "Total Trades"
-          }
-        },
-        "type": "object",
-        "required": [
-          "state",
-          "leverage",
-          "current_equity",
-          "realized_pnl",
-          "total_trades"
-        ],
-        "title": "StateResponse"
-      },
-      "StrategyProfile": {
-        "properties": {
-          "directional_bias": {
-            "type": "string",
-            "title": "Directional Bias",
-            "description": "BOTH | LONG_ONLY | SHORT_ONLY | FLAT",
-            "default": "BOTH"
-          },
-          "risk_profile": {
-            "type": "string",
-            "title": "Risk Profile",
-            "description": "CONSERVATIVE | MODERATE | AGGRESSIVE",
-            "default": "MODERATE"
-          },
-          "scout_override": {
-            "type": "boolean",
-            "title": "Scout Override",
-            "description": "True allows early SCOUT_MODE relaxation",
-            "default": false
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason",
-            "default": "Initial default profile"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "type": "object",
-        "title": "StrategyProfile",
-        "description": "Strategy profile for Two-Tier Adaptive Autotrading System.\nControlled by Hermes agent via REST API."
-      },
-      "ValidationError": {
-        "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Location"
-          },
-          "msg": {
-            "type": "string",
-            "title": "Message"
-          },
-          "type": {
-            "type": "string",
-            "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
-          }
-        },
-        "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError"
-      }
-    }
-  }
+  ]
 }
