@@ -67,6 +67,16 @@ class LoggerDB:
                     reason TEXT
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_profile (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    directional_bias TEXT NOT NULL,
+                    risk_profile TEXT NOT NULL,
+                    scout_override INTEGER NOT NULL,
+                    reason TEXT
+                )
+            """)
             conn.commit()
 
     def log_cycle(
@@ -161,3 +171,39 @@ class LoggerDB:
             if row:
                 return dict(row)
             return None
+
+    def save_strategy_profile(
+        self,
+        directional_bias: str,
+        risk_profile: str,
+        scout_override: bool,
+        reason: str = ""
+    ) -> int:
+        """Save strategy profile record to strategy_profile table."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO strategy_profile (timestamp, directional_bias, risk_profile, scout_override, reason)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (timestamp, directional_bias, risk_profile, 1 if scout_override else 0, reason)
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+
+    def get_latest_strategy_profile(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the latest strategy profile record from strategy_profile table."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM strategy_profile ORDER BY id DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["scout_override"] = bool(d["scout_override"])
+                return d
+            return None
+

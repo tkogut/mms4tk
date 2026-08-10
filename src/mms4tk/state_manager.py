@@ -31,13 +31,25 @@ class TradeRecord(BaseModel):
     mode_at_execution: MMS4State
 
 
+class StrategyProfile(BaseModel):
+    """
+    Strategy profile for Two-Tier Adaptive Autotrading System.
+    Controlled by Hermes agent via REST API.
+    """
+    directional_bias: str = Field(default="BOTH", description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
+    risk_profile: str = Field(default="MODERATE", description="CONSERVATIVE | MODERATE | AGGRESSIVE")
+    scout_override: bool = Field(default=False, description="True allows early SCOUT_MODE relaxation")
+    reason: str = Field(default="Initial default profile")
+    updated_at: Optional[str] = None
+
+
 class MMS4StateManager:
     """
     Manages MMS4 strategy execution state, equity, PnL tracking, and state transition triggers.
     
     Transition rules:
     - BASE_MODE -> SCOUT_MODE: Triggered when a Stop-Loss hit is >= 2.0% (0.02).
-    - SCOUT_MODE -> BASE_MODE: Triggered on first Take-Profit (TP) hit.
+    - SCOUT_MODE -> BASE_MODE: Triggered on first Take-Profit (TP) hit or scout_override relaxation.
     
     Note: NO trailing stops logic is implemented per strategy specification.
     """
@@ -53,12 +65,14 @@ class MMS4StateManager:
         self._current_equity: float = initial_equity
         self._realized_pnl: float = 0.0
         self._trade_history: List[TradeRecord] = []
+        self._strategy_profile: StrategyProfile = StrategyProfile()
         self.logger_db: Optional[Any] = logger_db
 
         if self.logger_db is not None:
             saved = self.logger_db.get_latest_state()
             if saved and "state" in saved and saved["state"]:
                 self._current_state = MMS4State(saved["state"])
+            self._load_strategy_profile_from_db()
 
     def set_logger_db(self, logger_db: Any) -> None:
         """Attach LoggerDB instance and restore latest persisted state if present."""
@@ -66,6 +80,56 @@ class MMS4StateManager:
         saved = self.logger_db.get_latest_state()
         if saved and "state" in saved and saved["state"]:
             self._current_state = MMS4State(saved["state"])
+        self._load_strategy_profile_from_db()
+
+    def _load_strategy_profile_from_db(self) -> None:
+        if self.logger_db is not None:
+            saved_prof = self.logger_db.get_latest_strategy_profile()
+            if saved_prof:
+                self._strategy_profile = StrategyProfile(
+                    directional_bias=saved_prof.get("directional_bias", "BOTH"),
+                    risk_profile=saved_prof.get("risk_profile", "MODERATE"),
+                    scout_override=bool(saved_prof.get("scout_override", False)),
+                    reason=saved_prof.get("reason", "Initial default profile"),
+                    updated_at=saved_prof.get("timestamp")
+                )
+
+    @property
+    def strategy_profile(self) -> StrategyProfile:
+        """Return active StrategyProfile."""
+        return self._strategy_profile
+
+    def update_strategy_profile(self, profile: StrategyProfile) -> StrategyProfile:
+        """
+        Update active StrategyProfile and persist to logger_db if attached.
+        """
+        if not profile.updated_at:
+            profile.updated_at = datetime.now(timezone.utc).isoformat()
+        self._strategy_profile = profile
+        if self.logger_db is not None:
+            self.logger_db.save_strategy_profile(
+                directional_bias=profile.directional_bias,
+                risk_profile=profile.risk_profile,
+                scout_override=profile.scout_override,
+                reason=profile.reason
+            )
+        return self._strategy_profile
+
+    def relax_scout_mode(self) -> bool:
+        """
+        If currently in SCOUT_MODE, transition back to BASE_MODE.
+        Returns True if a state transition occurred, False otherwise.
+        """
+        if self._current_state == MMS4State.SCOUT_MODE:
+            self._current_state = MMS4State.BASE_MODE
+            if self.logger_db:
+                self.logger_db.save_state(
+                    state=self._current_state.value,
+                    leverage=self.leverage,
+                    reason="SCOUT_MODE relaxed via strategy profile scout_override"
+                )
+            return True
+        return False
 
     @property
     def current_state(self) -> MMS4State:

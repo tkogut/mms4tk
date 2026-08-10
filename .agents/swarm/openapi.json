@@ -339,6 +339,108 @@
           }
         }
       }
+    },
+    "/api/v1/analytics/higher_tf": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get Higher Tf Analytics",
+        "description": "Fetch higher timeframe (H4/D1) market state analysis.\nCalculates D1 ATR expansion ratio, H4 TMA position, and candle formation.",
+        "operationId": "get_higher_tf_analytics_api_v1_analytics_higher_tf_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HigherTimeframeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy/profile": {
+      "get": {
+        "tags": [
+          "Strategy Profile"
+        ],
+        "summary": "Get Strategy Profile",
+        "description": "Get current active strategy profile configuration.",
+        "operationId": "get_strategy_profile_api_v1_strategy_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyProfile"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Strategy Profile"
+        ],
+        "summary": "Set Strategy Profile",
+        "description": "Update active strategy profile configuration.\nIf scout_override is True, relaxes SCOUT_MODE to BASE_MODE immediately.\nProtected by X-MMS4-API-KEY header.",
+        "operationId": "set_strategy_profile_api_v1_strategy_profile_post",
+        "parameters": [
+          {
+            "name": "X-MMS4-API-KEY",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mms4-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyProfile"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -709,6 +811,51 @@
         ],
         "title": "HighRiskAddResponse"
       },
+      "HigherTimeframeResponse": {
+        "properties": {
+          "atr_d1": {
+            "type": "number",
+            "title": "Atr D1"
+          },
+          "atr_d1_expansion_ratio": {
+            "type": "number",
+            "title": "Atr D1 Expansion Ratio"
+          },
+          "h4_tma_position": {
+            "type": "string",
+            "title": "H4 Tma Position",
+            "description": "ABOVE | BELOW | INSIDE"
+          },
+          "h4_candle_formation": {
+            "type": "string",
+            "title": "H4 Candle Formation",
+            "description": "SWEEP_WICK | MARUBOZU_BREAKOUT | NEUTRAL"
+          },
+          "h4_tma": {
+            "type": "number",
+            "title": "H4 Tma"
+          },
+          "h4_upper_band": {
+            "type": "number",
+            "title": "H4 Upper Band"
+          },
+          "h4_lower_band": {
+            "type": "number",
+            "title": "H4 Lower Band"
+          }
+        },
+        "type": "object",
+        "required": [
+          "atr_d1",
+          "atr_d1_expansion_ratio",
+          "h4_tma_position",
+          "h4_candle_formation",
+          "h4_tma",
+          "h4_upper_band",
+          "h4_lower_band"
+        ],
+        "title": "HigherTimeframeResponse"
+      },
       "IndicatorParams": {
         "properties": {
           "tma_length": {
@@ -846,6 +993,47 @@
           "total_trades"
         ],
         "title": "StateResponse"
+      },
+      "StrategyProfile": {
+        "properties": {
+          "directional_bias": {
+            "type": "string",
+            "title": "Directional Bias",
+            "description": "BOTH | LONG_ONLY | SHORT_ONLY | FLAT",
+            "default": "BOTH"
+          },
+          "risk_profile": {
+            "type": "string",
+            "title": "Risk Profile",
+            "description": "CONSERVATIVE | MODERATE | AGGRESSIVE",
+            "default": "MODERATE"
+          },
+          "scout_override": {
+            "type": "boolean",
+            "title": "Scout Override",
+            "description": "True allows early SCOUT_MODE relaxation",
+            "default": false
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": "Initial default profile"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "title": "StrategyProfile",
+        "description": "Strategy profile for Two-Tier Adaptive Autotrading System.\nControlled by Hermes agent via REST API."
       },
       "ValidationError": {
         "properties": {

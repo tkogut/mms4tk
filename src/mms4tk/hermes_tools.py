@@ -159,8 +159,60 @@ class HermesToolGenerator:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mms4_get_higher_tf",
+                    "description": "Fetch higher timeframe (H4/D1) analytics including D1 ATR expansion ratio, H4 TMA position, and candle formation.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mms4_set_strategy_profile",
+                    "description": "Update active strategy profile (directional_bias, risk_profile, scout_override, reason) for adaptive autotrading. Requires X-MMS4-API-KEY header.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "directional_bias": {
+                                "type": "string",
+                                "enum": ["BOTH", "LONG_ONLY", "SHORT_ONLY", "FLAT"],
+                                "default": "BOTH",
+                                "description": "Directional bias filtering"
+                            },
+                            "risk_profile": {
+                                "type": "string",
+                                "enum": ["CONSERVATIVE", "MODERATE", "AGGRESSIVE"],
+                                "default": "MODERATE",
+                                "description": "Risk profile modulating leverage"
+                            },
+                            "scout_override": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Set True to allow early SCOUT_MODE relaxation"
+                            },
+                            "reason": {
+                                "type": "string",
+                                "default": "",
+                                "description": "Reason for profile update"
+                            },
+                            "x_mms4_api_key": {
+                                "type": "string",
+                                "description": "Authentication key for X-MMS4-API-KEY header."
+                            }
+                        },
+                        "required": []
+                    }
+                }
             }
         ]
+
 
     @classmethod
     def get_tool_by_name(cls, name: str) -> Dict[str, Any]:
