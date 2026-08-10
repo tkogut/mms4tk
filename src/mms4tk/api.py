@@ -115,6 +115,8 @@ class HealthResponse(BaseModel):
 class DaemonStatusResponse(BaseModel):
     is_running: bool
     interval_seconds: float
+    symbol: Optional[str] = "BTC/USDC"
+    trade_amount_usd: Optional[float] = 10.0
     last_cycle_timestamp: Optional[str] = None
     processed_cycles: int
 

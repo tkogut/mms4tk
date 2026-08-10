@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -31,7 +32,8 @@ class MMS4Daemon:
         signal_engine: Optional[MMS4SignalEngine] = None,
         logger_db: Optional[LoggerDB] = None,
         symbol: str = "BTC/USDC",
-        interval_seconds: float = 15.0
+        interval_seconds: float = 15.0,
+        trade_amount_usd: Optional[float] = None
     ) -> None:
         self.executor = executor or OKXExecutor()
         self.state_manager = state_manager or MMS4StateManager(initial_state=MMS4State.BASE_MODE)
@@ -39,6 +41,12 @@ class MMS4Daemon:
         self.logger_db = logger_db or LoggerDB()
         self.symbol = symbol
         self.interval_seconds = interval_seconds
+        
+        # Position sizing in USD (default $10.0 USD per trade, configurable via MMS4_TRADE_AMOUNT_USD env var)
+        if trade_amount_usd is not None:
+            self.trade_amount_usd = float(trade_amount_usd)
+        else:
+            self.trade_amount_usd = float(os.getenv("MMS4_TRADE_AMOUNT_USD", "10.0"))
 
         self._is_running: bool = False
         self.processed_cycles: int = 0
@@ -99,18 +107,21 @@ class MMS4Daemon:
         details = signal.reason or ""
         order_info: Optional[Dict[str, Any]] = None
 
+        # Dynamic contract/coin amount from target USD trade allocation
+        order_amount = round(self.trade_amount_usd / signal.price, 6) if signal.price > 0 else 0.0001
+
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
             try:
                 order_info = await self.executor.execute_order(
                     symbol=self.symbol,
                     side=side,
-                    amount=1.0,
+                    amount=order_amount,
                     stop_loss_pct=0.02,
                     leverage=self.state_manager.leverage
                 )
                 outcome = f"EXECUTED_{signal.signal_type}"
-                details = f"Executed {signal.signal_type} order with SL=2% (leverage x{self.state_manager.leverage})"
+                details = f"Executed {signal.signal_type} order for ${self.trade_amount_usd:.2f} USD ({order_amount} units) with SL=2% (leverage x{self.state_manager.leverage})"
             except Exception as e:
                 outcome = f"ERROR_{signal.signal_type}"
                 details = f"Failed to execute order: {str(e)}"
@@ -122,12 +133,12 @@ class MMS4Daemon:
                     order_info = await self.executor.execute_order(
                         symbol=self.symbol,
                         side=side,
-                        amount=1.0,
+                        amount=order_amount,
                         stop_loss_pct=0.01,
                         leverage=1.0
                     )
                     outcome = f"EXECUTED_{signal.signal_type}"
-                    details = "Executed High Risk Add order with SL=1%"
+                    details = f"Executed High Risk Add order for ${self.trade_amount_usd:.2f} USD ({order_amount} units) with SL=1%"
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute High Risk Add: {str(e)}"
@@ -186,6 +197,8 @@ class MMS4Daemon:
         return {
             "is_running": self._is_running,
             "interval_seconds": self.interval_seconds,
+            "symbol": self.symbol,
+            "trade_amount_usd": self.trade_amount_usd,
             "last_cycle_timestamp": self.last_cycle_timestamp,
             "processed_cycles": self.processed_cycles
         }
