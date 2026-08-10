@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mms4tk.api import app
 
-API_KEY = os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")
+API_KEY = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
 AUTH_HEADERS = {"X-MMS4-API-KEY": API_KEY}
 
 
