@@ -20,7 +20,7 @@ from mms4tk.hermes_tools import HermesToolGenerator, get_hermes_tools
 def test_hermes_tool_schemas_validity():
     """Verify Hermes function tool schemas are generated properly."""
     tools = get_hermes_tools()
-    assert len(tools) == 7
+    assert len(tools) == 9
 
     names = {tool["function"]["name"] for tool in tools}
     expected_names = {
@@ -31,8 +31,11 @@ def test_hermes_tool_schemas_validity():
         "emergency_killall",
         "emergency_reverse",
         "high_risk_add",
+        "mms4_get_higher_tf",
+        "mms4_set_strategy_profile",
     }
     assert names == expected_names
+
 
     # Check individual tool schema getter
     state_tool = HermesToolGenerator.get_tool_by_name("get_state")

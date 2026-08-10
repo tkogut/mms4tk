@@ -7,9 +7,9 @@ from fastapi import FastAPI, HTTPException, status, Header, Depends
 from pydantic import BaseModel, Field
 
 from mms4tk.logger_db import LoggerDB
-from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
 from mms4tk.okx_executor import OKXExecutor
-from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine
+from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine, HigherTimeframeAnalytics
 from mms4tk.daemon import MMS4Daemon
 
 logger = logging.getLogger("mms4tk.api")
@@ -22,6 +22,7 @@ signal_engine = MMS4SignalEngine()
 daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine, logger_db=logger_db)
 
 latest_signal: Optional[SignalResult] = None
+
 
 
 async def verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-MMS4-API-KEY")) -> str:
@@ -300,3 +301,52 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "leverage": 1.0
         }
     }
+
+
+class HigherTimeframeResponse(BaseModel):
+    atr_d1: float
+    atr_d1_expansion_ratio: float
+    h4_tma_position: str = Field(description="ABOVE | BELOW | INSIDE")
+    h4_candle_formation: str = Field(description="SWEEP_WICK | MARUBOZU_BREAKOUT | NEUTRAL")
+    h4_tma: float
+    h4_upper_band: float
+    h4_lower_band: float
+
+
+@app.get("/api/v1/analytics/higher_tf", response_model=HigherTimeframeResponse, tags=["Analytics"])
+async def get_higher_tf_analytics() -> Dict[str, Any]:
+    """
+    Fetch higher timeframe (H4/D1) market state analysis.
+    Calculates D1 ATR expansion ratio, H4 TMA position, and candle formation.
+    """
+    try:
+        candles_h4 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="4h", limit=50)
+        candles_d1 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="1D", limit=50)
+    except Exception as e:
+        logger.warning(f"Failed to fetch HTF candles from OKX: {e}. Using empty candle list.")
+        candles_h4 = []
+        candles_d1 = []
+
+    return HigherTimeframeAnalytics.calculate_higher_tf(candles_h4, candles_d1)
+
+
+@app.get("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"])
+async def get_strategy_profile() -> StrategyProfile:
+    """
+    Get current active strategy profile configuration.
+    """
+    return state_manager.strategy_profile
+
+
+@app.post("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
+async def set_strategy_profile(profile: StrategyProfile) -> StrategyProfile:
+    """
+    Update active strategy profile configuration.
+    If scout_override is True, relaxes SCOUT_MODE to BASE_MODE immediately.
+    Protected by X-MMS4-API-KEY header.
+    """
+    updated = state_manager.update_strategy_profile(profile)
+    if updated.scout_override:
+        state_manager.relax_scout_mode()
+    return updated
+
