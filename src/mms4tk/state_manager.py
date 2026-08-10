@@ -3,6 +3,10 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
+import logging
+
+logger = logging.getLogger("mms4tk.state_manager")
+
 
 class MMS4State(str, Enum):
     """
@@ -58,7 +62,9 @@ class MMS4StateManager:
         self,
         initial_state: MMS4State = MMS4State.BASE_MODE,
         initial_equity: float = 0.0,
-        logger_db: Optional[Any] = None
+        logger_db: Optional[Any] = None,
+        hermes_webhook: Optional[Any] = None,
+        trading_symbol: str = "BTC/USDC"
     ) -> None:
         self._current_state: MMS4State = initial_state
         self._initial_equity: float = initial_equity
@@ -67,6 +73,8 @@ class MMS4StateManager:
         self._trade_history: List[TradeRecord] = []
         self._strategy_profile: StrategyProfile = StrategyProfile()
         self.logger_db: Optional[Any] = logger_db
+        self.hermes_webhook: Optional[Any] = hermes_webhook
+        self.trading_symbol: str = trading_symbol
 
         if self.logger_db is not None:
             saved = self.logger_db.get_latest_state()
@@ -176,10 +184,11 @@ class MMS4StateManager:
         """Update current equity balance."""
         self._current_equity = equity
 
-    def on_stop_loss_hit(self, sl_percent: float) -> bool:
+    def on_stop_loss_hit(self, sl_percent: float, sl_price: float = 0.0) -> bool:
         """
         Triggered when a Stop Loss is executed.
         If in BASE_MODE and sl_percent >= 0.02 (2%), transition to SCOUT_MODE.
+        Also emits a Hermes webhook event for H4 Liquidity Sweep Analysis.
         Returns True if a state transition occurred, False otherwise.
         """
         if self._current_state == MMS4State.BASE_MODE and sl_percent >= 0.02:
@@ -190,6 +199,18 @@ class MMS4StateManager:
                     leverage=self.leverage,
                     reason=f"Stop Loss hit ({sl_percent * 100:.1f}%)"
                 )
+            # Emit Hermes webhook event for H4 analysis
+            if self.hermes_webhook:
+                try:
+                    self.hermes_webhook.emit_scout_mode_event(
+                        symbol=self.trading_symbol,
+                        sl_price=sl_price,
+                        sl_percent=sl_percent,
+                        reason=f"Stop Loss hit ({sl_percent * 100:.1f}%)"
+                    )
+                    logger.info(f"Hermes webhook emitted for SCOUT_MODE activation (SL {sl_percent*100:.1f}%)")
+                except Exception as e:
+                    logger.error(f"Failed to emit Hermes webhook: {e}")
             return True
         return False
 

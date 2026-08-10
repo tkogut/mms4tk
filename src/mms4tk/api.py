@@ -11,12 +11,19 @@ from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
 from mms4tk.okx_executor import OKXExecutor
 from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine, HigherTimeframeAnalytics
 from mms4tk.daemon import MMS4Daemon
+from mms4tk.hermes_webhook import HermesWebhookClient
 
 logger = logging.getLogger("mms4tk.api")
 
 # Global instances
 logger_db = LoggerDB()
-state_manager = MMS4StateManager(initial_state=MMS4State.BASE_MODE, logger_db=logger_db)
+hermes_webhook = HermesWebhookClient(db_path=logger_db.db_path)
+state_manager = MMS4StateManager(
+    initial_state=MMS4State.BASE_MODE,
+    logger_db=logger_db,
+    hermes_webhook=hermes_webhook,
+    trading_symbol=os.getenv("MMS4_SYMBOL", "BTC/USDC")
+)
 executor = OKXExecutor()
 signal_engine = MMS4SignalEngine()
 daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine, logger_db=logger_db)
@@ -350,3 +357,81 @@ async def set_strategy_profile(profile: StrategyProfile) -> StrategyProfile:
         state_manager.relax_scout_mode()
     return updated
 
+
+# ─── Hermes Webhook & HITL Endpoints ─────────────────────────────────────────
+
+
+class WebhookEventResponse(BaseModel):
+    id: int
+    timestamp: str
+    event_type: str
+    title: str
+    body: str
+    metadata: Optional[str] = None
+    initial_status: str
+    priority: int
+    dispatched: int
+    dispatched_at: Optional[str] = None
+    kanban_task_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+@app.get("/api/v1/hermes/events", response_model=List[WebhookEventResponse], tags=["Hermes Integration"])
+async def get_pending_webhook_events() -> list:
+    """
+    Retrieve pending (undispatched) webhook events for Hermes Kanban dispatch.
+    Called by Hermes cron event dispatcher to create Kanban cards.
+    """
+    return hermes_webhook.get_pending_events(limit=20)
+
+
+class MarkDispatchedRequest(BaseModel):
+    event_id: int
+    kanban_task_id: str = ""
+
+
+@app.post("/api/v1/hermes/events/dispatched", tags=["Hermes Integration"], dependencies=[Depends(verify_api_key)])
+async def mark_event_dispatched(req: MarkDispatchedRequest) -> Dict[str, Any]:
+    """
+    Mark a webhook event as dispatched after Kanban card was created.
+    Called by Hermes cron event dispatcher after successful card creation.
+    """
+    hermes_webhook.mark_dispatched(req.event_id, req.kanban_task_id)
+    return {"status": "ok", "event_id": req.event_id, "kanban_task_id": req.kanban_task_id}
+
+
+class HITLResolveRequest(BaseModel):
+    decision: str = Field(description="SWEEP_WICK | MARUBOZU_BREAKOUT")
+    directional_bias: str = Field(default="BOTH", description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
+    risk_profile: str = Field(default="MODERATE", description="CONSERVATIVE | MODERATE | AGGRESSIVE")
+    reason: str = Field(default="Human-in-the-Loop decision")
+
+
+@app.post("/api/v1/hermes/hitl_resolve", tags=["Hermes Integration"], dependencies=[Depends(verify_api_key)])
+async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
+    """
+    Human-in-the-Loop resolution endpoint.
+    Called when a human approves a Kanban card from Blocked/HITL column.
+
+    - SWEEP_WICK → scout_override=True (relax SCOUT_MODE back to BASE_MODE)
+    - MARUBOZU_BREAKOUT → maintain SCOUT_MODE, update directional_bias accordingly
+    """
+    scout_override = req.decision == "SWEEP_WICK"
+    profile = StrategyProfile(
+        directional_bias=req.directional_bias,
+        risk_profile=req.risk_profile,
+        scout_override=scout_override,
+        reason=f"HITL: {req.decision} — {req.reason}",
+    )
+    updated = state_manager.update_strategy_profile(profile)
+    relaxed = False
+    if scout_override:
+        relaxed = state_manager.relax_scout_mode()
+
+    return {
+        "status": "ok",
+        "decision": req.decision,
+        "scout_override": scout_override,
+        "scout_mode_relaxed": relaxed,
+        "profile": updated.model_dump(),
+    }
