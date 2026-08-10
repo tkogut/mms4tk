@@ -19,7 +19,7 @@ import sys
 from urllib.request import Request, urlopen
 
 MMS4TK_BASE = os.environ.get("MMS4TK_BASE_URL", "http://antigravity_core:8000")
-MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "mms4tk-secret-key-2026")
+MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "")
 
 
 def fetch_higher_tf():

@@ -46,7 +46,7 @@ TASK 07 addresses three critical security and quantitative resilience vulnerabil
 
 ### 2.3 REST API Authentication (`api.py`)
 - Created FastAPI dependency `verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-MMS4-API-KEY"))`.
-- Validates incoming header against `os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")`. Returns `HTTPException(status_code=401, detail="Unauthorized: Invalid or missing X-MMS4-API-KEY header")` if missing or invalid.
+- Validates incoming header against `os.getenv("MMS4_API_KEY")`. Returns `HTTPException(status_code=401, detail="Unauthorized: Invalid or missing X-MMS4-API-KEY header")` if missing or invalid.
 - Attached `dependencies=[Depends(verify_api_key)]` to:
   - `POST /api/v1/emergency/killall`
   - `POST /api/v1/emergency/reverse`

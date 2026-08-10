@@ -69,7 +69,7 @@ def test_strategy_profile_api(client):
     assert bad_key_resp.status_code == 401
 
     # 4. POST update with valid key -> 200 OK
-    api_key = os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
     valid_resp = client.post(
         "/api/v1/strategy/profile",
         headers={"X-MMS4-API-KEY": api_key},
@@ -153,7 +153,7 @@ def test_scout_mode_relaxation_by_scout_override(client, tmp_path):
     assert sm.current_state == MMS4State.SCOUT_MODE
 
     # Test relaxation via API endpoint with scout_override=True
-    api_key = os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
     resp = client.post(
         "/api/v1/strategy/profile",
         headers={"X-MMS4-API-KEY": api_key},

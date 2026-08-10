@@ -5,7 +5,7 @@ from mms4tk.api import app
 
 client = TestClient(app)
 
-VALID_KEY = os.getenv("MMS4_API_KEY", "mms4tk-secret-key-2026")
+VALID_KEY = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
 INVALID_KEY = "invalid-secret-key-12345"
 
 

@@ -219,7 +219,7 @@ class TestHITLResolveEndpoint:
                 "risk_profile": "MODERATE",
                 "reason": "H4 wick clearly reversed into TMA band",
             },
-            headers={"X-MMS4-API-KEY": "mms4tk-secret-key-2026"},
+            headers={"X-MMS4-API-KEY": "test-api-auth-key-unit-test"},
         )
         assert response.status_code == 200
         data = response.json()
@@ -237,7 +237,7 @@ class TestHITLResolveEndpoint:
                 "risk_profile": "CONSERVATIVE",
                 "reason": "H4 full-body breakout below TMA",
             },
-            headers={"X-MMS4-API-KEY": "mms4tk-secret-key-2026"},
+            headers={"X-MMS4-API-KEY": "test-api-auth-key-unit-test"},
         )
         assert response.status_code == 200
         data = response.json()
@@ -268,7 +268,7 @@ class TestHITLResolveEndpoint:
         response = client.post(
             "/api/v1/hermes/events/dispatched",
             json={"event_id": event_id, "kanban_task_id": "test-task-123"},
-            headers={"X-MMS4-API-KEY": "mms4tk-secret-key-2026"},
+            headers={"X-MMS4-API-KEY": "test-api-auth-key-unit-test"},
         )
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
