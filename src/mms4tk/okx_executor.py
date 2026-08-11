@@ -188,7 +188,7 @@ class OKXExecutor:
         """
         side_lower = side.lower()
 
-        if self.mock_mode or not self.exchange:
+        if not self.has_credentials or self.exchange is None:
             logger.info(f"Mock Order Execution: symbol={symbol}, side={side}, amount={amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
             return {
                 "id": f"mock_order_{int(time.time()*1000)}",
