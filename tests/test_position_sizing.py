@@ -1,17 +1,16 @@
 """
-Tests for position sizing feature (MMS4_TRADE_AMOUNT_USD).
+Tests for position sizing feature (MMS4_MAX_MARGIN_USD / 70% Base Order).
 """
 
 import asyncio
-import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.analytics import SignalResult
 
 
 def test_daemon_position_sizing_calculation():
-    """Verify order_amount is dynamically calculated from trade_amount_usd / price."""
+    """Verify order_amount is dynamically calculated from 70% base_trade_usd / price."""
     executor = MagicMock()
     executor.initialize = AsyncMock()
     executor.close = AsyncMock()
@@ -54,8 +53,8 @@ def test_daemon_position_sizing_calculation():
 
     result = asyncio.run(daemon.execute_cycle())
 
-    # Expected units = round(10.0 / 64800.0, 6) = 0.000154 BTC
-    expected_amount = round(10.0 / 64800.0, 6)
+    # Expected base units = round(7.0 / 64800.0, 6) = 0.000108 BTC
+    expected_amount = round(7.0 / 64800.0, 6)
     executor.execute_order.assert_called_once_with(
         symbol="BTC/USDC",
         side="BUY",
@@ -63,5 +62,6 @@ def test_daemon_position_sizing_calculation():
         stop_loss_pct=0.02,
         leverage=1.0
     )
-    assert daemon.trade_amount_usd == 10.0
-    assert daemon.get_status()["trade_amount_usd"] == 10.0
+    assert daemon.max_margin_usd == 10.0
+    assert daemon.base_trade_usd == 7.0
+    assert daemon.addon_trade_usd == 3.0

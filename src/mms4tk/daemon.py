@@ -42,11 +42,16 @@ class MMS4Daemon:
         self.symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC"))
         self.interval_seconds = interval_seconds
         
-        # Position sizing in USD (default $10.0 USD per trade, configurable via MMS4_TRADE_AMOUNT_USD env var)
+        # Capital Sizing in USD (Default $10.0 USD total max margin cap per symbol)
+        # Base Position = 70% ($7.00), High-Risk Addon = 30% ($3.00)
         if trade_amount_usd is not None:
-            self.trade_amount_usd = float(trade_amount_usd)
+            self.max_margin_usd = float(trade_amount_usd)
         else:
-            self.trade_amount_usd = float(os.getenv("MMS4_TRADE_AMOUNT_USD", "10.0"))
+            self.max_margin_usd = float(os.getenv("MMS4_MAX_MARGIN_USD", os.getenv("MMS4_TRADE_AMOUNT_USD", "10.0")))
+        
+        self.base_trade_usd = round(self.max_margin_usd * 0.70, 2)
+        self.addon_trade_usd = round(self.max_margin_usd * 0.30, 2)
+        self.trade_amount_usd = self.max_margin_usd
 
         self._is_running: bool = False
         self.processed_cycles: int = 0
@@ -107,8 +112,9 @@ class MMS4Daemon:
         details = signal.reason or ""
         order_info: Optional[Dict[str, Any]] = None
 
-        # Dynamic contract/coin amount from target USD trade allocation
-        order_amount = round(self.trade_amount_usd / signal.price, 6) if signal.price > 0 else 0.0001
+        # Dynamic contract/coin amounts from 70% Base ($7.00) / 30% Addon ($3.00) split
+        base_order_amount = round(self.base_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
+        addon_order_amount = round(self.addon_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
@@ -116,12 +122,12 @@ class MMS4Daemon:
                 order_info = await self.executor.execute_order(
                     symbol=self.symbol,
                     side=side,
-                    amount=order_amount,
+                    amount=base_order_amount,
                     stop_loss_pct=0.02,
                     leverage=self.state_manager.leverage
                 )
                 outcome = f"EXECUTED_{signal.signal_type}"
-                details = f"Executed {signal.signal_type} order for ${self.trade_amount_usd:.2f} USD ({order_amount} units) with SL=2% (leverage x{self.state_manager.leverage})"
+                details = f"Executed {signal.signal_type} base order for 70% cap (${self.base_trade_usd:.2f} USD / {base_order_amount} units) with SL=2% (leverage x{self.state_manager.leverage})"
             except Exception as e:
                 outcome = f"ERROR_{signal.signal_type}"
                 details = f"Failed to execute order: {str(e)}"
@@ -133,12 +139,12 @@ class MMS4Daemon:
                     order_info = await self.executor.execute_order(
                         symbol=self.symbol,
                         side=side,
-                        amount=order_amount,
+                        amount=addon_order_amount,
                         stop_loss_pct=0.01,
                         leverage=1.0
                     )
                     outcome = f"EXECUTED_{signal.signal_type}"
-                    details = f"Executed High Risk Add order for ${self.trade_amount_usd:.2f} USD ({order_amount} units) with SL=1%"
+                    details = f"Executed High Risk Add order for 30% cap (${self.addon_trade_usd:.2f} USD / {addon_order_amount} units) with SL=1%"
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute High Risk Add: {str(e)}"
@@ -198,6 +204,9 @@ class MMS4Daemon:
             "is_running": self._is_running,
             "interval_seconds": self.interval_seconds,
             "symbol": self.symbol,
+            "max_margin_usd": self.max_margin_usd,
+            "base_trade_usd": self.base_trade_usd,
+            "addon_trade_usd": self.addon_trade_usd,
             "trade_amount_usd": self.trade_amount_usd,
             "last_cycle_timestamp": self.last_cycle_timestamp,
             "processed_cycles": self.processed_cycles
