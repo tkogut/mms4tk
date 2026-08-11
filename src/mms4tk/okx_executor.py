@@ -144,6 +144,34 @@ class OKXExecutor:
         logger.error(f"Error fetching candles from OKX for {target_symbol}: {type(last_error).__name__}: {str(last_error)}. Falling back to mock candles.")
         return _generate_mock_candles(count=limit)
 
+    def calculate_order_amount(self, symbol: str, target_usd: float, price: float) -> float:
+        """
+        Calculate precise order amount (contracts or coins) for target USD allocation.
+        Accounts for CCXT contractSize, market type, and min/precision limits.
+        """
+        if price <= 0 or target_usd <= 0:
+            return 0.01
+
+        if self.exchange and self.exchange.markets and symbol in self.exchange.markets:
+            try:
+                market = self.exchange.market(symbol)
+                contract_size = market.get("contractSize") or 1.0
+                is_contract = market.get("swap", False) or market.get("contract", False) or ":" in symbol
+                if is_contract and contract_size > 0:
+                    raw_contracts = target_usd / (price * contract_size)
+                    min_amt = market.get("limits", {}).get("amount", {}).get("min") or 0.01
+                    amount = max(raw_contracts, min_amt)
+                    formatted = self.exchange.amount_to_precision(symbol, amount)
+                    return float(formatted)
+                else:
+                    raw_coins = target_usd / price
+                    formatted = self.exchange.amount_to_precision(symbol, raw_coins)
+                    return float(formatted)
+            except Exception as e:
+                logger.warning(f"Failed to compute precision amount for {symbol}: {e}")
+
+        return round(target_usd / price, 6)
+
 
     async def execute_order(
         self,
