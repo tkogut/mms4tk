@@ -172,13 +172,28 @@ class OKXExecutor:
             }
 
         try:
-            await self.set_leverage(leverage, symbol)
+            is_spot = False
+            if self.exchange.markets and symbol in self.exchange.markets:
+                is_spot = self.exchange.markets[symbol].get("spot", False)
+            elif ":" not in symbol:
+                is_spot = True
+
+            if not is_spot:
+                try:
+                    await self.set_leverage(leverage, symbol)
+                except Exception as lev_err:
+                    logger.warning(f"Skipping set_leverage for {symbol}: {lev_err}")
+
+            params = {}
+            if not is_spot and stop_loss_pct > 0:
+                params["stopLoss"] = {"triggerPrice": stop_loss_pct}
+
             order = await self.exchange.create_order(
                 symbol=symbol,
                 type="market",
                 side=side_lower,
                 amount=amount,
-                params={"stopLoss": {"triggerPrice": stop_loss_pct}}
+                params=params
             )
             logger.info(f"Successfully executed OKX order {order.get('id')} for {symbol}")
             return order
