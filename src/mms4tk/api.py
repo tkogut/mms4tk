@@ -115,7 +115,7 @@ class HealthResponse(BaseModel):
 class DaemonStatusResponse(BaseModel):
     is_running: bool
     interval_seconds: float
-    symbol: Optional[str] = "BTC/USDT:USDT"
+    symbol: Optional[str] = "BTC/USDC"
     max_margin_usd: Optional[float] = 10.0
     base_trade_usd: Optional[float] = 7.0
     addon_trade_usd: Optional[float] = 3.0
