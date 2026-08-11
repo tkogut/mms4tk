@@ -39,7 +39,7 @@ class MMS4Daemon:
         self.state_manager = state_manager or MMS4StateManager(initial_state=MMS4State.BASE_MODE)
         self.signal_engine = signal_engine or MMS4SignalEngine()
         self.logger_db = logger_db or LoggerDB()
-        self.symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC"))
+        self.symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDT:USDT"))
         self.interval_seconds = interval_seconds
         
         # Capital Sizing in USD (Default $10.0 USD total max margin cap per symbol)
