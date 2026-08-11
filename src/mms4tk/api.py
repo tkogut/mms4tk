@@ -330,7 +330,7 @@ async def get_higher_tf_analytics() -> Dict[str, Any]:
     """
     try:
         candles_h4 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="4h", limit=50)
-        candles_d1 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="1D", limit=50)
+        candles_d1 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="1d", limit=50)
     except Exception as e:
         logger.warning(f"Failed to fetch HTF candles from OKX: {e}. Using empty candle list.")
         candles_h4 = []

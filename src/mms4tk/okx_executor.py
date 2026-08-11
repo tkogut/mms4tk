@@ -124,7 +124,7 @@ class OKXExecutor:
         for sym in symbols_to_try:
             try:
                 ex = self.exchange or ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
-                ohlcv = await ex.fetch_ohlcv(sym, timeframe=timeframe, limit=limit)
+                ohlcv = await ex.fetch_ohlcv(sym, timeframe=timeframe.lower(), limit=limit)
                 candles: List[Candle] = []
                 for item in ohlcv:
                     candles.append(
