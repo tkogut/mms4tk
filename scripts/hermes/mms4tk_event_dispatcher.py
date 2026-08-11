@@ -115,6 +115,14 @@ def main():
             mark_dispatched(event_id, str(task_id_or_error))
             dispatched_count += 1
             print(f"  ✅ Card created (task_id={task_id_or_error})")
+            
+            # Send Telegram alert for HITL / SCOUT_MODE events
+            try:
+                alert_msg = f"🚨 MMS4TK ALERT: {title}\n\n{body}\n\nTask ID: {task_id_or_error}"
+                subprocess.run(["hermes", "notify", "--channel", "telegram", alert_msg], capture_output=True, timeout=10)
+                print("  💬 Telegram push notification sent")
+            except Exception as ne:
+                print(f"  ⚠️ Telegram notification skipped: {ne}")
         else:
             print(f"  ❌ Failed: {task_id_or_error}")
 
