@@ -60,7 +60,8 @@ def test_daemon_position_sizing_calculation():
         side="BUY",
         amount=expected_amount,
         stop_loss_pct=0.02,
-        leverage=1.0
+        leverage=1.0,
+        price=64800.0
     )
     assert daemon.max_margin_usd == 10.0
     assert daemon.base_trade_usd == 7.0

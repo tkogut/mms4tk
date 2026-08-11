@@ -129,7 +129,8 @@ class MMS4Daemon:
                     side=side,
                     amount=base_order_amount,
                     stop_loss_pct=0.02,
-                    leverage=self.state_manager.leverage
+                    leverage=self.state_manager.leverage,
+                    price=signal.price
                 )
                 outcome = f"EXECUTED_{signal.signal_type}"
                 details = f"Executed {signal.signal_type} base order for 70% cap (${self.base_trade_usd:.2f} USD / {base_order_amount} units) with SL=2% (leverage x{self.state_manager.leverage})"
@@ -146,7 +147,8 @@ class MMS4Daemon:
                         side=side,
                         amount=addon_order_amount,
                         stop_loss_pct=0.01,
-                        leverage=1.0
+                        leverage=1.0,
+                        price=signal.price
                     )
                     outcome = f"EXECUTED_{signal.signal_type}"
                     details = f"Executed High Risk Add order for 30% cap (${self.addon_trade_usd:.2f} USD / {addon_order_amount} units) with SL=1%"
