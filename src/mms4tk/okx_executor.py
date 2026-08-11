@@ -108,17 +108,18 @@ class OKXExecutor:
 
     async def fetch_candles(
         self,
-        symbol: str = "BTC/USDC",
+        symbol: Optional[str] = None,
         timeframe: str = "1m",
         limit: int = 100
     ) -> List[Candle]:
         """
         Fetch real live OHLCV candles from OKX public API, with fallback to mock if unreachable.
         """
+        target_symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC:USDC"))
         try:
             # Use public exchange instance or unauthenticated call to ensure real market candles
             ex = self.exchange or ccxt.okx({"enableRateLimit": True})
-            ohlcv = await ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            ohlcv = await ex.fetch_ohlcv(target_symbol, timeframe=timeframe, limit=limit)
             candles: List[Candle] = []
             for item in ohlcv:
                 candles.append(
@@ -178,16 +179,17 @@ class OKXExecutor:
             logger.error(f"Error executing order on OKX: {type(e).__name__}: {str(e)}")
             raise
 
-    async def set_hedge_mode(self, symbol: str = "BTC/USDC:USDC") -> Dict[str, Any]:
+    async def set_hedge_mode(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """
         Verify/Set Hedge mode (long/short dual position mode) on OKX.
         OKX API endpoint: set_position_mode (posMode='long_short_mode').
         """
+        target_symbol = symbol or os.getenv("MMS4_SYMBOL_FUTURES", os.getenv("MMS4_SYMBOL", "BTC/USDC:USDC"))
         if not self.has_credentials or self.exchange is None:
             return {"status": "success", "mode": "long_short_mode", "mock": True}
 
         try:
-            response = await self.exchange.set_position_mode(hedged=True, symbol=symbol)
+            response = await self.exchange.set_position_mode(hedged=True, symbol=target_symbol)
             logger.info("Successfully set Hedge mode on OKX.")
             return response
         except Exception as e:

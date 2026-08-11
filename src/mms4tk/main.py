@@ -37,8 +37,8 @@ def parse_args():
     parser.add_argument(
         "--symbol",
         type=str,
-        default="BTC/USDC:USDC",
-        help="Market symbol for signal evaluation (default: BTC/USDC:USDC)"
+        default=os.getenv("MMS4_SYMBOL", "BTC/USDC:USDC"),
+        help="Market symbol for signal evaluation (default: env MMS4_SYMBOL or BTC/USDC:USDC)"
     )
     return parser.parse_args()
 

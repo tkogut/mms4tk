@@ -24,7 +24,11 @@ MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "")
 
 def fetch_higher_tf():
     try:
-        resp = urlopen(f"{MMS4TK_BASE}/api/v1/analytics/higher_tf", timeout=15)
+        headers = {}
+        if MMS4TK_API_KEY:
+            headers["X-MMS4-API-KEY"] = MMS4TK_API_KEY
+        req = Request(f"{MMS4TK_BASE}/api/v1/analytics/higher_tf", headers=headers)
+        resp = urlopen(req, timeout=15)
         return json.loads(resp.read().decode())
     except Exception as e:
         print(f"❌ Failed to fetch H4/D1 analytics: {e}", file=sys.stderr)
@@ -33,7 +37,11 @@ def fetch_higher_tf():
 
 def fetch_current_profile():
     try:
-        resp = urlopen(f"{MMS4TK_BASE}/api/v1/strategy/profile", timeout=10)
+        headers = {}
+        if MMS4TK_API_KEY:
+            headers["X-MMS4-API-KEY"] = MMS4TK_API_KEY
+        req = Request(f"{MMS4TK_BASE}/api/v1/strategy/profile", headers=headers)
+        resp = urlopen(req, timeout=10)
         return json.loads(resp.read().decode())
     except Exception as e:
         print(f"❌ Failed to fetch current profile: {e}", file=sys.stderr)

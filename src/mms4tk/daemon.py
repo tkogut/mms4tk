@@ -31,7 +31,7 @@ class MMS4Daemon:
         state_manager: Optional[MMS4StateManager] = None,
         signal_engine: Optional[MMS4SignalEngine] = None,
         logger_db: Optional[LoggerDB] = None,
-        symbol: str = "BTC/USDC",
+        symbol: Optional[str] = None,
         interval_seconds: float = 15.0,
         trade_amount_usd: Optional[float] = None
     ) -> None:
@@ -39,7 +39,7 @@ class MMS4Daemon:
         self.state_manager = state_manager or MMS4StateManager(initial_state=MMS4State.BASE_MODE)
         self.signal_engine = signal_engine or MMS4SignalEngine()
         self.logger_db = logger_db or LoggerDB()
-        self.symbol = symbol
+        self.symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC:USDC"))
         self.interval_seconds = interval_seconds
         
         # Position sizing in USD (default $10.0 USD per trade, configurable via MMS4_TRADE_AMOUNT_USD env var)

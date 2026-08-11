@@ -64,9 +64,10 @@ class MMS4StateManager:
         initial_equity: float = 0.0,
         logger_db: Optional[Any] = None,
         hermes_webhook: Optional[Any] = None,
-        trading_symbol: str = "BTC/USDC"
+        trading_symbol: Optional[str] = None
     ) -> None:
         self._current_state: MMS4State = initial_state
+        self.trading_symbol = trading_symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC:USDC"))
         self._initial_equity: float = initial_equity
         self._current_equity: float = initial_equity
         self._realized_pnl: float = 0.0

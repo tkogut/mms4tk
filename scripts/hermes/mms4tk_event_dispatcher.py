@@ -27,8 +27,12 @@ MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "")
 def fetch_pending_events():
     """Fetch pending webhook events from mms4tk."""
     try:
+        headers = {}
+        if MMS4TK_API_KEY:
+            headers["X-MMS4-API-KEY"] = MMS4TK_API_KEY
         url = f"{MMS4TK_BASE}/api/v1/hermes/events"
-        resp = urlopen(url, timeout=10)
+        req = Request(url, headers=headers)
+        resp = urlopen(req, timeout=10)
         return json.loads(resp.read().decode())
     except Exception as e:
         print(f"ERROR: Failed to fetch events: {e}", file=sys.stderr)
