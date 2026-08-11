@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Swarm Triad Role Enforcement Pre-Commit Hook
+
+ROLE="${SWARM_ROLE:-coordinator}"
+
+if [ "$ROLE" = "coordinator" ]; then
+    # Check if staging functional code changes in src/ or tests/
+    STAGED_CODE=$(git diff --cached --name-only | grep -E '^(src/|tests/|scripts/)')
+    if [ -n "$STAGED_CODE" ]; then
+        echo "ERR: Role 'coordinator' (Coordinator/GEM) is forbidden from directly committing functional changes!"
+        echo "Staged file violations:"
+        echo "$STAGED_CODE"
+        echo "ERR: Commit aborted. Under Swarm Triad rules, functional modifications must be implemented by the Builder role (SWARM_ROLE=builder)."
+        exit 1
+    fi
+fi
+
+exit 0
