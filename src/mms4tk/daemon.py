@@ -113,8 +113,13 @@ class MMS4Daemon:
         order_info: Optional[Dict[str, Any]] = None
 
         # Dynamic contract/coin amounts from 70% Base ($7.00) / 30% Addon ($3.00) split
-        base_order_amount = round(self.base_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
-        addon_order_amount = round(self.addon_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
+        base_order_amount = self.executor.calculate_order_amount(self.symbol, self.base_trade_usd, signal.price)
+        if not isinstance(base_order_amount, (int, float)):
+            base_order_amount = round(self.base_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
+
+        addon_order_amount = self.executor.calculate_order_amount(self.symbol, self.addon_trade_usd, signal.price)
+        if not isinstance(addon_order_amount, (int, float)):
+            addon_order_amount = round(self.addon_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
