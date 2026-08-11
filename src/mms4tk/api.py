@@ -22,7 +22,7 @@ state_manager = MMS4StateManager(
     initial_state=MMS4State.BASE_MODE,
     logger_db=logger_db,
     hermes_webhook=hermes_webhook,
-    trading_symbol=os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC:USDC"))
+    trading_symbol=os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC"))
 )
 executor = OKXExecutor()
 signal_engine = MMS4SignalEngine()

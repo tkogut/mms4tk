@@ -115,27 +115,37 @@ class OKXExecutor:
         """
         Fetch real live OHLCV candles from OKX public API, with fallback to mock if unreachable.
         """
-        target_symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC:USDC"))
-        try:
-            # Use public exchange instance or unauthenticated call to ensure real market candles
-            ex = self.exchange or ccxt.okx({"enableRateLimit": True})
-            ohlcv = await ex.fetch_ohlcv(target_symbol, timeframe=timeframe, limit=limit)
-            candles: List[Candle] = []
-            for item in ohlcv:
-                candles.append(
-                    Candle(
-                        timestamp=item[0],
-                        open=float(item[1]),
-                        high=float(item[2]),
-                        low=float(item[3]),
-                        close=float(item[4]),
-                        volume=float(item[5]) if len(item) > 5 else 0.0
+        target_symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC"))
+        symbols_to_try = [target_symbol]
+        if ":" in target_symbol:
+            symbols_to_try.append(target_symbol.split(":")[0])
+        if "/" in target_symbol:
+            base_quote = target_symbol.split(":")[0].replace("/", "-")
+            symbols_to_try.append(f"{base_quote}-SWAP")
+
+        last_error = None
+        for sym in symbols_to_try:
+            try:
+                ex = self.exchange or ccxt.okx({"enableRateLimit": True})
+                ohlcv = await ex.fetch_ohlcv(sym, timeframe=timeframe, limit=limit)
+                candles: List[Candle] = []
+                for item in ohlcv:
+                    candles.append(
+                        Candle(
+                            timestamp=item[0],
+                            open=float(item[1]),
+                            high=float(item[2]),
+                            low=float(item[3]),
+                            close=float(item[4]),
+                            volume=float(item[5]) if len(item) > 5 else 0.0
+                        )
                     )
-                )
-            return candles
-        except Exception as e:
-            logger.error(f"Error fetching candles from OKX: {type(e).__name__}: {str(e)}. Falling back to mock candles.")
-            return _generate_mock_candles(count=limit)
+                return candles
+            except Exception as e:
+                last_error = e
+
+        logger.error(f"Error fetching candles from OKX for {target_symbol}: {type(last_error).__name__}: {str(last_error)}. Falling back to mock candles.")
+        return _generate_mock_candles(count=limit)
 
 
     async def execute_order(
@@ -184,7 +194,7 @@ class OKXExecutor:
         Verify/Set Hedge mode (long/short dual position mode) on OKX.
         OKX API endpoint: set_position_mode (posMode='long_short_mode').
         """
-        target_symbol = symbol or os.getenv("MMS4_SYMBOL_FUTURES", os.getenv("MMS4_SYMBOL", "BTC/USDC:USDC"))
+        target_symbol = symbol or os.getenv("MMS4_SYMBOL_FUTURES", os.getenv("MMS4_SYMBOL", "BTC/USDC"))
         if not self.has_credentials or self.exchange is None:
             return {"status": "success", "mode": "long_short_mode", "mock": True}
 

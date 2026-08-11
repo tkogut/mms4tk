@@ -6,7 +6,7 @@ import subprocess
 import re
 
 # Konfiguracja VPS
-VPS_HOST = "srv1490214.hstgr.cloud"
+VPS_HOST = os.environ.get("VPS_HOST", "187.124.165.99")
 VPS_USER = "root"
 
 def find_ssh_auth_sock():
@@ -35,7 +35,8 @@ def run_ssh_command(cmd, ssh_sock=None):
         env["SSH_AUTH_SOCK"] = ssh_sock
         
     ssh_cmd = [
-        "ssh", 
+        "ssh",
+        "-4",
         "-o", "StrictHostKeyChecking=no", 
         "-o", "ConnectTimeout=15",
         f"{VPS_USER}@{VPS_HOST}", 
