@@ -57,7 +57,8 @@ def test_daemon_70_30_capital_split_calculation():
         side="BUY",
         amount=expected_base_amount,
         stop_loss_pct=0.02,
-        leverage=1.0
+        leverage=1.0,
+        price=50000.0
     )
 
     # 2. Test High Risk Add Order (30% = $3.00 USD)
@@ -78,5 +79,6 @@ def test_daemon_70_30_capital_split_calculation():
         side="BUY",
         amount=expected_addon_amount,
         stop_loss_pct=0.01,
-        leverage=1.0
+        leverage=1.0,
+        price=50000.0
     )

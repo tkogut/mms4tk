@@ -178,15 +178,17 @@ class OKXExecutor:
         symbol: str,
         side: str,
         amount: float,
-        stop_loss_pct: float,
-        leverage: float = 1.0
+        stop_loss_pct: float = 0.02,
+        leverage: float = 1.0,
+        price: Optional[float] = None
     ) -> Dict[str, Any]:
         """
-        Execute market order with stop loss.
-        If credentials missing, return mock order result.
+        Execute market order on OKX.
+        For Futures/Swap markets, automatically sets leverage and attaches Stop Loss trigger price.
         """
         side_lower = side.lower()
-        if not self.has_credentials or self.exchange is None:
+
+        if self.mock_mode or not self.exchange:
             logger.info(f"Mock Order Execution: symbol={symbol}, side={side}, amount={amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
             return {
                 "id": f"mock_order_{int(time.time()*1000)}",
@@ -214,7 +216,20 @@ class OKXExecutor:
 
             params = {}
             if not is_spot and stop_loss_pct > 0:
-                params["stopLoss"] = {"triggerPrice": stop_loss_pct}
+                current_price = price
+                if not current_price or current_price <= 0:
+                    try:
+                        ticker = await self.exchange.fetch_ticker(symbol)
+                        current_price = float(ticker.get("last") or ticker.get("close") or 0.0)
+                    except Exception as tick_err:
+                        logger.warning(f"Could not fetch ticker price for SL calculation on {symbol}: {tick_err}")
+                
+                if current_price and current_price > 0:
+                    if side_lower == "buy":
+                        sl_price = current_price * (1.0 - stop_loss_pct)
+                    else:
+                        sl_price = current_price * (1.0 + stop_loss_pct)
+                    params["stopLoss"] = {"triggerPrice": self.exchange.price_to_precision(symbol, sl_price)}
 
             order = await self.exchange.create_order(
                 symbol=symbol,
