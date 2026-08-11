@@ -119,14 +119,11 @@ class OKXExecutor:
         symbols_to_try = [target_symbol]
         if ":" in target_symbol:
             symbols_to_try.append(target_symbol.split(":")[0])
-        if "/" in target_symbol:
-            base_quote = target_symbol.split(":")[0].replace("/", "-")
-            symbols_to_try.append(f"{base_quote}-SWAP")
 
         last_error = None
         for sym in symbols_to_try:
             try:
-                ex = self.exchange or ccxt.okx({"enableRateLimit": True})
+                ex = self.exchange or ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
                 ohlcv = await ex.fetch_ohlcv(sym, timeframe=timeframe, limit=limit)
                 candles: List[Candle] = []
                 for item in ohlcv:
