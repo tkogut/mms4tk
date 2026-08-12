@@ -22,6 +22,18 @@ class HermesToolGenerator:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_symbols_status",
+                    "description": "Fetch active multi-symbol trading list, per-symbol operating states (BASE_MODE/SCOUT_MODE), and active leverage.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_state",
                     "description": "Fetch current MMS4 strategy state, active leverage, equity, and trade counters.",
                     "parameters": {

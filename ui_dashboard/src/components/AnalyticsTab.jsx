@@ -3,9 +3,11 @@ import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw } from 'lucide
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
 
 export function AnalyticsTab({ statsData, tradesHistory }) {
+  const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDC');
   const [timeframe, setTimeframe] = useState('4h');
   const [candles, setCandles] = useState([]);
   const [htfData, setHtfData] = useState(null);
+  const [availableSymbols, setAvailableSymbols] = useState(['BTC/USDC', 'ETH/USDC', 'SOL/USDC']);
   const [loading, setLoading] = useState(false);
 
   // Exact requested timeframes: 4H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y
@@ -23,10 +25,27 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
   const currentTfObj = timeframes.find(t => t.id === timeframe) || timeframes[0];
 
   useEffect(() => {
+    const fetchSymbols = async () => {
+      try {
+        const res = await fetch('/api/v1/symbols');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.symbols && Array.isArray(data.symbols)) {
+            setAvailableSymbols(data.symbols.map(s => s.symbol));
+          }
+        }
+      } catch (err) {
+        console.warn('[AnalyticsTab] Error fetching available symbols:', err);
+      }
+    };
+    fetchSymbols();
+  }, []);
+
+  useEffect(() => {
     const fetchCandles = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/v1/history/candles?symbol=BTC/USDC&timeframe=${currentTfObj.tf}&limit=${currentTfObj.limit}`);
+        const res = await fetch(`/api/v1/history/candles?symbol=${encodeURIComponent(selectedSymbol)}&timeframe=${currentTfObj.tf}&limit=${currentTfObj.limit}`);
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
@@ -72,7 +91,7 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
 
     fetchCandles();
     fetchHtf();
-  }, [timeframe]);
+  }, [timeframe, selectedSymbol]);
 
   // Dynamic PnL / Equity Curve scaled to current timeframe
   const pnlCurve = tradesHistory && tradesHistory.length > 0
@@ -128,14 +147,30 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
         </div>
       </div>
 
-      {/* Synchronized Timeframe Selector Toolbar (4H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y) */}
+      {/* Synchronized Timeframe & Symbol Selector Toolbar */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-md">
-        <div className="flex items-center gap-2 text-sm text-slate-300 font-semibold">
-          <Clock className="w-4 h-4 text-blue-400" />
-          <span>Interwał Czasowy Wykresów (Timeframe):</span>
+        {/* Symbol Selector Dropdown */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 text-sm text-slate-300 font-semibold">
+            <Activity className="w-4 h-4 text-blue-400" />
+            <span>Wybór Pary Rynkowej:</span>
+          </div>
+          <select
+            value={selectedSymbol}
+            onChange={(e) => setSelectedSymbol(e.target.value)}
+            className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-blue-400 focus:outline-none focus:border-blue-500 cursor-pointer"
+          >
+            {availableSymbols.map((sym) => (
+              <option key={sym} value={sym}>
+                {sym}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+        {/* Timeframe Selector Buttons */}
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
+          <Clock className="w-4 h-4 text-slate-400 ml-1.5" />
           {timeframes.map((tf) => (
             <button
               key={tf.id}

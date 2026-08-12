@@ -20,10 +20,11 @@ from mms4tk.hermes_tools import HermesToolGenerator, get_hermes_tools
 def test_hermes_tool_schemas_validity():
     """Verify Hermes function tool schemas are generated properly."""
     tools = get_hermes_tools()
-    assert len(tools) == 11
+    assert len(tools) == 12
 
     names = {tool["function"]["name"] for tool in tools}
     expected_names = {
+        "get_symbols_status",
         "get_state",
         "get_balance",
         "get_pnl",

@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🎛️ [0.9.0] - 2026-08-12
+
+### 🎛️ User-Controlled Multi-Symbol UI Manager & Hermes Multi-Pair Tools
+- 🎛️ **User Active Pair Toggle Switch**: Integrated interactive per-symbol Active/Paused toggles and `➕ Dodaj Nową Parę` modal in `SymbolsTab.jsx`, allowing users to activate or pause trading pairs dynamically.
+- 📊 **Per-Symbol Chart Switcher**: Added symbol selection dropdown (`BTC/USDC`, `ETH/USDC`, `SOL/USDC`) in `AnalyticsTab.jsx` to view technical charts for any active pair.
+- 🤖 **Hermes Agent Multi-Pair Tools**: Updated `src/mms4tk/hermes_tools.py` with multi-symbol status inspection and per-pair emergency actions.
+
+---
+
 ## ⚡ [0.8.1] - 2026-08-12
 
 ### ⚡ Multi-Symbol Async Execution Loop (Phase 2)
