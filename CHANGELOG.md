@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🐛 [0.7.1] - 2026-08-12
+
+### 🛠️ React UI Chart Scaling, Risk Profile Brackets & Password Management
+- 📈 **Synchronized Timeframe Scaling**: Added 4H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y timeframes with synchronized date X-axis scaling across Price & Equity charts.
+- 📜 **Closed Trades History Table**: Restored real SQLite `logs.db` trade history audit table below analytics charts.
+- ⚡ **Risk Profile Brackets**: Strictly coupled leverage brackets (CONSERVATIVE 1x-2x, MODERATE 2x-5x, AGGRESSIVE 5x-10x) to active strategy risk profile.
+- 🔑 **In-App Password Manager**: Added HTTP BasicAuth password update feature in Settings card updating `.env` configuration.
+
+---
+
 ## ⚛️ [0.7.0] - 2026-08-12
 
 ### 🚀 React 18 + Vite + TailwindCSS UI Migration
