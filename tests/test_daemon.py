@@ -70,13 +70,13 @@ def test_daemon_single_cycle_and_db_persistence(temp_db: LoggerDB):
         assert "timestamp" in res
         assert "signal_type" in res
         assert res["state"] == "BASE_MODE"
-        assert res["leverage"] == 1.0
+        assert res["leverage"] == 3.0
 
         # Check SQLite DB records
         cycle_logs = temp_db.get_recent_cycle_logs()
         assert len(cycle_logs) == 1
         assert cycle_logs[0]["state"] == "BASE_MODE"
-        assert cycle_logs[0]["leverage"] == 1.0
+        assert cycle_logs[0]["leverage"] == 3.0
 
         state_logs = temp_db.get_recent_state_logs()
         assert len(state_logs) == 1

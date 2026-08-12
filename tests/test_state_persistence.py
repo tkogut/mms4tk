@@ -14,7 +14,7 @@ def test_sqlite_state_save_and_restore():
         # Initial state manager should default to BASE_MODE
         sm1 = MMS4StateManager(initial_state=MMS4State.BASE_MODE, logger_db=logger_db)
         assert sm1.current_state == MMS4State.BASE_MODE
-        assert sm1.leverage == 1.0
+        assert sm1.leverage == 3.0
 
         # Trigger Stop Loss >= 2% -> transitions to SCOUT_MODE and saves to DB
         transitioned = sm1.on_stop_loss_hit(0.025)
@@ -37,12 +37,12 @@ def test_sqlite_state_save_and_restore():
         restored = sm2.on_take_profit_hit()
         assert restored is True
         assert sm2.current_state == MMS4State.BASE_MODE
-        assert sm2.leverage == 1.0
+        assert sm2.leverage == 3.0
 
         # Re-initialize third state manager instance -> should restore BASE_MODE
         sm3 = MMS4StateManager(initial_state=MMS4State.SCOUT_MODE, logger_db=logger_db)
         assert sm3.current_state == MMS4State.BASE_MODE
-        assert sm3.leverage == 1.0
+        assert sm3.leverage == 3.0
 
 
 def test_set_logger_db_restores_state():

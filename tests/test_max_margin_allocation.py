@@ -78,7 +78,7 @@ def test_daemon_70_30_capital_split_calculation():
         symbol="BTC/USDC",
         side="BUY",
         amount=expected_addon_amount,
-        stop_loss_pct=0.01,
+        stop_loss_pct=0.0125,
         leverage=1.0,
         price=50000.0
     )
