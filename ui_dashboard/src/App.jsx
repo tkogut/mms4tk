@@ -92,7 +92,7 @@ export default function App() {
       )}
 
       {/* Main Header */}
-      <Header version="0.12.1" isConnected={isConnected} />
+      <Header version="0.12.2" isConnected={isConnected} />
 
       {/* Navigation Tabs */}
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />

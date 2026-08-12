@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🎯 [0.12.2] - 2026-08-12
+
+### 🎯 Account-Specific Permitted Instrument Whitelist Check (`GET /api/v5/account/instruments`)
+- 🎯 **Exact User Account Whitelist Verification**: Updated `verify_symbol_with_okx` in `src/mms4tk/okx_executor.py` to query `privateGetAccountInstruments` for the exact list of trading instruments enabled on the User's OKX API Key/subaccount. Pairs not in the user's permitted instrument list (e.g. `AVAX/USDC`) are marked `autotrade_permitted: False` with Red LED badge 🔴.
+
+---
+
 ## 🛠️ [0.12.1] - 2026-08-12
 
 ### 🛠️ Multi-Mode (`cross`, `cash`, `isolated`) OKX Account Permission Verification

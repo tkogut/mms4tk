@@ -171,20 +171,38 @@ class OKXExecutor:
             inst_spot = f"{clean_base}-{quote}"
             
             permitted = False
-            error_reason = f"Para {symbol} nie jest dostępna do tradingu na Twoim koncie OKX"
+            error_reason = f"Para {symbol} nie jest włączona na Twoim koncie OKX"
 
-            # Check OKX private account max size across cross, cash (spot), and isolated modes
-            for target_inst in [inst_swap, inst_spot]:
-                for mode in ["cross", "cash", "isolated"]:
+            # Query OKX private account instruments permission list (GET /api/v5/account/instruments)
+            user_allowed_inst_ids = set()
+            for itype in ["SWAP", "SPOT", "FUTURES", "MARGIN"]:
+                try:
+                    res = await self.exchange.privateGetAccountInstruments({"instType": itype})
+                    if res and isinstance(res, dict) and str(res.get("code")) == "0" and res.get("data"):
+                        for item in res["data"]:
+                            if item.get("instId"):
+                                user_allowed_inst_ids.add(item["instId"].upper())
+                            if item.get("instFamily"):
+                                user_allowed_inst_ids.add(item["instFamily"].upper())
+                except Exception as e:
+                    logger.debug(f"OKX privateGetAccountInstruments failed for {itype}: {e}")
+
+            if user_allowed_inst_ids:
+                # Check if any candidate for this base/quote exists in user's allowed instruments
+                for target_inst in [inst_swap, inst_spot, f"{clean_base}-{quote}"]:
+                    if target_inst.upper() in user_allowed_inst_ids:
+                        permitted = True
+                        break
+            else:
+                # Fallback: test private account leverage info
+                for target_inst in [inst_swap, inst_spot]:
                     try:
-                        res = await self.exchange.privateGetAccountMaxSize(params={"instId": target_inst, "tdMode": mode})
-                        if res and isinstance(res, dict) and str(res.get("code")) == "0" and res.get("data"):
+                        res = await self.exchange.privateGetAccountPositions({"instId": target_inst})
+                        if res and isinstance(res, dict) and str(res.get("code")) == "0":
                             permitted = True
                             break
-                    except Exception as e:
-                        logger.debug(f"OKX privateGetAccountMaxSize check failed for {target_inst} ({mode}): {e}")
-                if permitted:
-                    break
+                    except Exception:
+                        pass
 
             if not permitted:
                 return {
