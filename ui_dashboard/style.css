@@ -111,35 +111,18 @@ footer { visibility: hidden !important; }
 }
 
 /* PWA Installation Popup Styling */
-#pwa-install-banner {
-    position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 90%;
-    max-width: 440px;
+.pwa-banner-container {
+    position: relative;
+    width: 100%;
+    margin-bottom: 1rem;
     background: #1e293b;
     border: 1px solid #3b82f6;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-    border-radius: 14px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+    border-radius: 12px;
     padding: 14px 18px;
-    z-index: 999999;
+    z-index: 9999;
     color: #ffffff;
     font-family: system-ui, -apple-system, sans-serif;
-}
-
-.pwa-banner-hidden {
-    display: none !important;
-}
-
-.pwa-banner-visible {
-    display: block !important;
-    animation: pwaSlideUp 0.4s ease-out;
-}
-
-@keyframes pwaSlideUp {
-    from { transform: translate(-50%, 100%); opacity: 0; }
-    to { transform: translate(-50%, 0); opacity: 1; }
 }
 
 .pwa-banner-content {

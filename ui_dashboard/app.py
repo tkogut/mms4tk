@@ -46,63 +46,79 @@ def load_mobile_pwa_assets():
         <meta name="theme-color" content="#0e1117">
         <meta name="apple-mobile-web-app-capable" content="yes">
         <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
         <link rel="manifest" href="/app/static/manifest.json">
 
-        <!-- PWA Installation Popup Banner -->
-        <div id="pwa-install-banner" class="pwa-banner-hidden">
+        <!-- Service Worker Registration -->
+        <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/app/static/sw.js')
+                    .then(reg => console.log('[PWA] ServiceWorker registered:', reg.scope))
+                    .catch(err => console.log('[PWA] ServiceWorker registration failed:', err));
+            });
+        }
+        </script>
+
+        <!-- PWA Installation Banner -->
+        <div id="pwa-install-banner" class="pwa-banner-container">
             <div class="pwa-banner-content">
                 <div class="pwa-banner-text">
-                    <strong>📲 Zainstaluj Mastermind App</strong>
-                    <p>Zainstaluj aplikację na pulpicie telefonu dla natychmiastowego dostępu.</p>
+                    <strong>📲 Zainstaluj Mastermind App na Pulpicie</strong>
+                    <p id="pwa-desc-text">Zainstaluj aplikację na pulpicie telefonu/komputera dla natychmiastowego dostępu.</p>
                 </div>
                 <div class="pwa-banner-actions">
-                    <button id="pwa-install-btn" class="pwa-btn-primary">📲 Zainstaluj</button>
-                    <button id="pwa-close-btn" class="pwa-btn-secondary">✕ Pomiń</button>
+                    <button id="pwa-install-btn" class="pwa-btn-primary">📲 Zainstaluj / Dodaj</button>
+                    <button id="pwa-close-btn" class="pwa-btn-secondary">✕ Zamknij</button>
                 </div>
+            </div>
+            <div id="pwa-modal-instructions" style="display: none; margin-top: 10px; padding: 10px; background: #0f172a; border-radius: 8px; font-size: 0.85rem; color: #cbd5e1; border: 1px solid #334155;">
+                <p style="margin: 0 0 6px 0; font-weight: bold; color: #60a5fa;">💡 Jak dodać aplikację do ekranu głównego:</p>
+                <ul style="margin: 0; padding-left: 18px;">
+                    <li><strong>Android / Chrome</strong>: Kliknij <code>⋮</code> (Menu w prawym górnym rogu) &rarr; <strong>Dodaj do ekranu głównego / Zainstaluj aplikację</strong>.</li>
+                    <li><strong>iOS (Safari)</strong>: Dotknij przycisku <code>📤 Udostępnij</code> (na dole ekranu) &rarr; <strong>Dodaj do ekranu początkowego</strong>.</li>
+                    <li><strong>Komputer (Chrome / Edge)</strong>: Kliknij ikonę <code>⊕</code> na pasku adresu obok gwiazdki zakładek.</li>
+                </ul>
             </div>
         </div>
 
         <script>
         (function() {
-            let deferredPrompt;
+            let deferredPrompt = null;
             const banner = document.getElementById('pwa-install-banner');
             const installBtn = document.getElementById('pwa-install-btn');
             const closeBtn = document.getElementById('pwa-close-btn');
+            const instructions = document.getElementById('pwa-modal-instructions');
 
-            if (localStorage.getItem('pwa_prompt_dismissed') === 'true') {
+            // Check if already running in standalone mode (PWA installed)
+            const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
+            if (isStandalone || localStorage.getItem('pwa_prompt_dismissed') === 'true') {
+                if (banner) banner.style.display = 'none';
                 return;
             }
 
             window.addEventListener('beforeinstallprompt', (e) => {
                 e.preventDefault();
                 deferredPrompt = e;
-                if (banner) {
-                    banner.classList.remove('pwa-banner-hidden');
-                    banner.classList.add('pwa-banner-visible');
-                }
+                console.log('[PWA] beforeinstallprompt event captured');
+                if (banner) banner.style.display = 'block';
             });
-
-            // iOS Safari PWA Prompt Helper
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-            const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
-            if (isIOS && !isStandalone && banner) {
-                const textElem = banner.querySelector('.pwa-banner-text p');
-                if (textElem) {
-                    textElem.innerHTML = 'Dotknij 📤 <strong>Udostępnij</strong> a następnie <strong>Dodaj do ekranu początkowego</strong>.';
-                }
-                banner.classList.remove('pwa-banner-hidden');
-                banner.classList.add('pwa-banner-visible');
-            }
 
             if (installBtn) {
                 installBtn.addEventListener('click', async () => {
                     if (deferredPrompt) {
                         deferredPrompt.prompt();
                         const { outcome } = await deferredPrompt.userChoice;
+                        console.log('[PWA] User choice outcome:', outcome);
                         deferredPrompt = null;
+                        if (banner) banner.style.display = 'none';
+                        localStorage.setItem('pwa_prompt_dismissed', 'true');
+                    } else {
+                        // Show fallback modal instructions
+                        if (instructions) {
+                            instructions.style.display = instructions.style.display === 'none' ? 'block' : 'none';
+                        }
                     }
-                    if (banner) banner.style.display = 'none';
-                    localStorage.setItem('pwa_prompt_dismissed', 'true');
                 });
             }
 
