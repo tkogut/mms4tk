@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔐 [0.11.0] - 2026-08-12
+
+### 🔐 User OKX API Key Account Permission Verification
+- 🔑 **Account API Key Permission Check**: Updated `verify_symbol_with_okx` in `src/mms4tk/okx_executor.py` to run `privateGetAccountMaxSize` using the User's authenticated OKX credentials. If a pair is available globally on OKX but not permitted on the user's API Key / Account, it returns `UNSUPPORTED_ON_USER_API_KEY`.
+- 🔴 **Red LED Account Badge**: `SymbolsTab.jsx` renders **Red LED Dot** + **`Status API OKX: BRAK UPRAWNIEŃ W KLUCZU API`** for pairs restricted by user account limits.
+
+---
+
 ## 🎯 [0.10.1] - 2026-08-12
 
 ### 🎯 Strict OKX Live REST API Verification Fix

@@ -227,7 +227,7 @@ export function SymbolsTab({ apiKey }) {
                     }`}
                   ></span>
                   <span>
-                    Status API OKX: {isVerified ? 'ZWERYFIKOWANA' : 'NIEZNANY TIKER'}
+                    Status API OKX: {isVerified ? 'ZWERYFIKOWANA (API OKX)' : (s.okx_status === 'UNSUPPORTED_ON_USER_API_KEY' ? 'BRAK UPRAWNIEŃ W KLUCZU API' : 'NIEZNANY TIKER')}
                   </span>
                 </div>
                 {s.okx_price > 0 && (
@@ -332,8 +332,10 @@ export function SymbolsTab({ apiKey }) {
                     ></span>
                     <span>
                       {verifyResult.okx_verified
-                        ? '🟢 Potwierdzono aktywność pary na OKX API'
-                        : '🔴 Ticker nieodnaleziony na OKX API'}
+                        ? '🟢 Potwierdzono dostęp do pary na Twoim koncie OKX API'
+                        : (verifyResult.okx_status === 'UNSUPPORTED_ON_USER_API_KEY'
+                            ? '🔴 Brak uprawnień do tej pary na Twoim Kluczu API OKX'
+                            : '🔴 Ticker nieodnaleziony na OKX API')}
                     </span>
                   </div>
                   {verifyResult.last_price > 0 && (
