@@ -149,14 +149,23 @@ class MMS4StateManager:
     @property
     def leverage(self) -> float:
         """
-        Return active leverage corresponding to current state.
-        BASE_MODE -> 1.0
-        SCOUT_MODE -> 0.1
+        Return active leverage corresponding to current state and active StrategyProfile risk_profile:
+        SCOUT_MODE -> 0.1x (reduced defense mode)
+        BASE_MODE:
+          CONSERVATIVE -> 1.0x
+          MODERATE -> 3.0x
+          AGGRESSIVE -> 10.0x
         """
-        if self._current_state == MMS4State.BASE_MODE:
-            return 1.0
-        elif self._current_state == MMS4State.SCOUT_MODE:
+        if self._current_state == MMS4State.SCOUT_MODE:
             return 0.1
+
+        risk_prof = self._strategy_profile.risk_profile.upper()
+        if risk_prof == "CONSERVATIVE":
+            return 1.0
+        elif risk_prof == "AGGRESSIVE":
+            return 10.0
+        elif risk_prof == "MODERATE":
+            return 3.0
         return 1.0
 
     def is_high_risk_add_allowed(self) -> bool:
