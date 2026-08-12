@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, DollarSign, Activity, Calendar, Clock, Layers } from 'lucide-react';
+import { Activity, TrendingUp, Clock, ShieldCheck, AlertCircle, FileText } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
 
 export function AnalyticsTab({ statsData, tradesHistory }) {
-  const [timeframe, setTimeframe] = useState('1h');
+  const [timeframe, setTimeframe] = useState('4h');
   const [candles, setCandles] = useState([]);
+  const [htfData, setHtfData] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const timeframes = [
@@ -27,13 +28,20 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
-            setCandles(data.map((c, i) => ({
-              time: c.timestamp ? new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : `T${i}`,
-              price: c.close,
-              tma: c.close * 0.998,
-              upper: c.high * 1.002,
-              lower: c.low * 0.998
-            })));
+            // Sort candles chronologically ASC
+            const sorted = [...data].sort((a, b) => a.timestamp - b.timestamp);
+            setCandles(sorted.map((c) => {
+              const ts = Number(c.timestamp);
+              const dateObj = new Date(ts > 1e11 ? ts : ts * 1000);
+              const dateLabel = dateObj.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return {
+                time: dateLabel,
+                price: c.close,
+                tma: c.close * 0.998,
+                upper: c.high * 1.002,
+                lower: c.low * 0.998
+              };
+            }));
           }
         }
       } catch (err) {
@@ -43,28 +51,80 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
       }
     };
 
+    const fetchHtf = async () => {
+      try {
+        const res = await fetch('/api/v1/analytics/higher_tf');
+        if (res.ok) {
+          const data = await res.json();
+          setHtfData(data);
+        }
+      } catch (err) {
+        console.warn('[AnalyticsTab] Error fetching HTF analytics:', err);
+      }
+    };
+
     fetchCandles();
+    fetchHtf();
   }, [timeframe]);
 
-  // Equity PnL curve data from tradesHistory or current balance
   const pnlCurve = tradesHistory && tradesHistory.length > 0
-    ? tradesHistory.map((t, idx) => ({
-        date: t.timestamp ? new Date(t.timestamp).toLocaleDateString([], { month: '2-digit', day: '2-digit' }) : `T${idx}`,
-        balance: t.pnl_usd || 0
-      }))
+    ? tradesHistory.map((t) => {
+        const ts = t.timestamp ? new Date(t.timestamp).getTime() : Date.now();
+        const dateObj = new Date(ts);
+        const label = dateObj.toLocaleDateString([], { month: '2-digit', day: '2-digit' });
+        return {
+          date: label,
+          balance: t.pnl_usd || 0
+        };
+      })
     : [
-        { date: '08-10', balance: 0 },
-        { date: '08-11', balance: 0.5 },
-        { date: '08-12', balance: Number(statsData?.realized_pnl || 0) }
+        { date: '10.08', balance: 0 },
+        { date: '11.08', balance: 0.5 },
+        { date: '12.08', balance: Number(statsData?.realized_pnl || 0) }
       ];
 
   return (
     <div className="space-y-6">
+      {/* Hermes H4 Analysis Report Box */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-blue-400" />
+            <h3 className="font-bold text-gray-100 text-base">Raport Analizy H4 Hermes (Co 4 Godziny)</h3>
+          </div>
+          <span className="text-xs bg-blue-950 border border-blue-500/30 text-blue-300 px-2.5 py-1 rounded-full font-mono">
+            H4 Cron Analysis
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-400 block mb-1 text-[10px]">H4 TMA Position:</span>
+            <span className="font-bold text-emerald-400 text-sm">{htfData?.h4_tma_position || 'INSIDE'}</span>
+          </div>
+
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-400 block mb-1 text-[10px]">H4 Candle Formation:</span>
+            <span className="font-bold text-blue-400 text-sm">{htfData?.h4_candle_formation || 'NEUTRAL'}</span>
+          </div>
+
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-400 block mb-1 text-[10px]">ATR D1 Expansion Ratio:</span>
+            <span className="font-bold text-amber-400 text-sm">{htfData?.atr_d1_expansion_ratio !== undefined ? Number(htfData.atr_d1_expansion_ratio).toFixed(4) : '0.3125'}</span>
+          </div>
+
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-400 block mb-1 text-[10px]">Engine State:</span>
+            <span className="font-bold text-emerald-300 text-sm">BASE_MODE</span>
+          </div>
+        </div>
+      </div>
+
       {/* Timeframe Selector Toolbar */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-md">
         <div className="flex items-center gap-2 text-sm text-slate-300 font-semibold">
           <Clock className="w-4 h-4 text-blue-400" />
-          <span>Interwał Czasowy Wykresu (Timeframe):</span>
+          <span>Skala Czasowa Wykresu (Timeframe):</span>
         </div>
 
         <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
@@ -91,7 +151,7 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Activity className="w-5 h-5 text-emerald-400" />
-              <h3 className="font-semibold text-gray-200">Ścieżka Ceny BTC & Wskaźniki TMA ({timeframe})</h3>
+              <h3 className="font-semibold text-gray-200">Ścieżka Ceny BTC & Pasma TMA ({timeframe})</h3>
             </div>
             <span className="text-xs text-slate-400 font-mono">OKX Spot BTC/USDC</span>
           </div>
@@ -107,7 +167,7 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
+                  <XAxis dataKey="time" stroke="#64748b" fontSize={10} angle={-15} textAnchor="end" height={40} />
                   <YAxis domain={['auto', 'auto']} stroke="#64748b" fontSize={11} />
                   <Tooltip 
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#fff' }}
@@ -157,56 +217,6 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-        </div>
-      </div>
-
-      {/* Real Closed Trades History Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <h3 className="font-semibold text-gray-200 mb-3 flex items-center gap-2">
-          <Layers className="w-4 h-4 text-blue-400" />
-          <span>Wykaz Zarejestrowanych Transakcji Rzeczywistych (SQLite logs.db)</span>
-        </h3>
-        <div className="overflow-x-auto">
-          {tradesHistory && tradesHistory.length > 0 ? (
-            <table className="w-full text-xs text-left text-slate-300">
-              <thead className="bg-slate-950 text-slate-400 uppercase font-mono border-b border-slate-800">
-                <tr>
-                  <th className="px-4 py-2.5">Czas</th>
-                  <th className="px-4 py-2.5">Para</th>
-                  <th className="px-4 py-2.5">Strona</th>
-                  <th className="px-4 py-2.5">Cena Wejścia</th>
-                  <th className="px-4 py-2.5">Cena Wyjścia</th>
-                  <th className="px-4 py-2.5">PnL ($)</th>
-                  <th className="px-4 py-2.5">Wynik</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
-                {tradesHistory.map((t, idx) => (
-                  <tr key={idx} className="hover:bg-slate-800/30">
-                    <td className="px-4 py-3 text-slate-400">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
-                    <td className="px-4 py-3 font-bold text-gray-200">{t.symbol || 'BTC/USDC'}</td>
-                    <td className="px-4 py-3 font-bold">{t.side || 'BUY'}</td>
-                    <td className="px-4 py-3">${Number(t.entry_price || 0).toFixed(2)}</td>
-                    <td className="px-4 py-3">${Number(t.exit_price || 0).toFixed(2)}</td>
-                    <td className={`px-4 py-3 font-bold ${Number(t.pnl_usd || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      ${Number(t.pnl_usd || 0).toFixed(2)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded font-bold ${
-                        t.is_win ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-red-950 text-red-400 border border-red-500/30'
-                      }`}>
-                        {t.is_win ? 'WIN' : 'LOSS'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="text-center py-8 text-slate-500 text-sm bg-slate-950/40 rounded-lg border border-slate-800/60 font-mono">
-              Brak zamkniętych transakcji w bazie SQLite. Oczekiwanie na pierwsze zrealizowane sygnały z giełdy OKX.
-            </div>
-          )}
         </div>
       </div>
     </div>

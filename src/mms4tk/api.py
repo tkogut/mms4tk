@@ -529,3 +529,43 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         "scout_mode": state_manager.scout_mode
     }
 
+
+class PasswordChangeRequest(BaseModel):
+    new_password: str = Field(min_length=4, description="New dashboard login password")
+    username: Optional[str] = "admin"
+
+
+@app.post("/api/v1/settings/change_password", tags=["Settings"], dependencies=[Depends(verify_api_key)])
+async def change_password(req: PasswordChangeRequest) -> Dict[str, Any]:
+    """Change BasicAuth dashboard login password and update .env."""
+    import hashlib
+    import base64
+
+    sha1_hash = hashlib.sha1(req.new_password.encode()).digest()
+    b64_hash = base64.b64encode(sha1_hash).decode()
+    htpasswd = f"{req.username}:{{SHA}}{b64_hash}"
+
+    env_paths = [".env", "/app/.env"]
+    for env_path in env_paths:
+        if os.path.exists(env_path):
+            try:
+                lines = []
+                updated = False
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("MMS4_UI_BASIC_AUTH="):
+                            lines.append(f"MMS4_UI_BASIC_AUTH='{htpasswd}'\n")
+                            updated = True
+                        else:
+                            lines.append(line)
+                if not updated:
+                    lines.append(f"MMS4_UI_BASIC_AUTH='{htpasswd}'\n")
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+            except Exception as e:
+                logger.warning(f"Failed to update {env_path}: {e}")
+
+    os.environ["MMS4_UI_BASIC_AUTH"] = htpasswd
+    return {"status": "success", "message": f"Dashboard password updated for user '{req.username}'"}
+
+
