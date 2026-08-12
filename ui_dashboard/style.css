@@ -1,0 +1,111 @@
+/* Custom Mobile-First CSS for Mastermind Control Center PWA */
+
+/* Hide Streamlit default header, menu, and footer */
+#MainMenu { visibility: hidden !important; }
+header { visibility: hidden !important; }
+footer { visibility: hidden !important; }
+.stDeployButton { display: none !important; }
+
+/* Mobile Viewport Spacing */
+.main .block-container {
+    padding-top: 1rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 100% !important;
+}
+
+/* Touch-Friendly Buttons (Large Touch Targets) */
+.stButton > button {
+    width: 100% !important;
+    min-height: 48px !important;
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    border-radius: 10px !important;
+    margin-top: 0.5rem !important;
+    margin-bottom: 0.5rem !important;
+    background-color: #1f2937 !important;
+    color: #f9fafb !important;
+    border: 1px solid #374151 !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.stButton > button:hover {
+    background-color: #374151 !important;
+    border-color: #4b5563 !important;
+    color: #ffffff !important;
+}
+
+/* Responsive Metric Card Containers */
+.metric-card {
+    background-color: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.metric-title {
+    color: #9ca3af;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.metric-value {
+    color: #f3f4f6;
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 0.25rem;
+}
+
+.metric-delta-positive {
+    color: #10b981;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.metric-delta-negative {
+    color: #ef4444;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+/* Mobile Tab Styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px !important;
+    background-color: #111827 !important;
+    padding: 4px !important;
+    border-radius: 10px !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+    height: 44px !important;
+    white-space: pre-wrap !important;
+    border-radius: 8px !important;
+    color: #9ca3af !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: #1f2937 !important;
+    color: #3b82f6 !important;
+}
+
+/* OKX Position Card for Mobile */
+.pos-card {
+    background-color: #171e2e;
+    border-left: 4px solid #3b82f6;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.pos-card-short {
+    border-left-color: #ef4444 !important;
+}
+
+.pos-card-long {
+    border-left-color: #10b981 !important;
+}

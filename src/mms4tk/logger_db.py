@@ -77,7 +77,124 @@ class LoggerDB:
                     reason TEXT
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS closed_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_id TEXT UNIQUE NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL NOT NULL,
+                    amount REAL NOT NULL,
+                    pnl_usd REAL NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    is_win INTEGER NOT NULL,
+                    leverage REAL NOT NULL DEFAULT 1.0
+                )
+            """)
             conn.commit()
+
+    def upsert_closed_trade(
+        self,
+        trade_id: str,
+        timestamp: str,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        exit_price: float,
+        amount: float,
+        pnl_usd: float,
+        pnl_pct: float,
+        is_win: bool,
+        leverage: float = 1.0
+    ) -> None:
+        """Upsert a closed trade into closed_trades table."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO closed_trades (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, is_win, leverage)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET
+                    exit_price=excluded.exit_price,
+                    pnl_usd=excluded.pnl_usd,
+                    pnl_pct=excluded.pnl_pct,
+                    is_win=excluded.is_win
+                """,
+                (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, 1 if is_win else 0, leverage)
+            )
+            conn.commit()
+
+    def get_closed_trades(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Fetch historical closed trades sorted by timestamp."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM closed_trades ORDER BY timestamp ASC LIMIT ?", (limit,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_kpi_summary(self) -> Dict[str, Any]:
+        """Compute KPI summary (Win Rate, Profit Factor, MDD %, Average R:R) from closed_trades."""
+        trades = self.get_closed_trades(limit=1000)
+        if not trades:
+            return {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "win_rate_long": 0.0,
+                "win_rate_short": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+                "average_rr": 0.0,
+                "total_pnl_usd": 0.0,
+            }
+
+        total_trades = len(trades)
+        wins = [t for t in trades if t["is_win"] == 1 or t["pnl_usd"] > 0]
+        losses = [t for t in trades if t["is_win"] == 0 and t["pnl_usd"] <= 0]
+        
+        longs = [t for t in trades if t["side"].upper() in ["BUY", "LONG"]]
+        shorts = [t for t in trades if t["side"].upper() in ["SELL", "SHORT"]]
+
+        win_rate = len(wins) / total_trades if total_trades > 0 else 0.0
+        
+        long_wins = [t for t in longs if t["is_win"] == 1 or t["pnl_usd"] > 0]
+        short_wins = [t for t in shorts if t["is_win"] == 1 or t["pnl_usd"] > 0]
+
+        win_rate_long = len(long_wins) / len(longs) if longs else 0.0
+        win_rate_short = len(short_wins) / len(shorts) if shorts else 0.0
+
+        gross_profit = sum(t["pnl_usd"] for t in wins)
+        gross_loss = abs(sum(t["pnl_usd"] for t in losses))
+        profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
+
+        avg_win = gross_profit / len(wins) if wins else 0.0
+        avg_loss = gross_loss / len(losses) if losses else 0.0
+        average_rr = round(avg_win / avg_loss, 2) if avg_loss > 0 else (99.0 if avg_win > 0 else 0.0)
+
+        # Calculate Max Drawdown % (Peak-to-Trough)
+        cumulative_pnl = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for t in trades:
+            cumulative_pnl += t["pnl_usd"]
+            if cumulative_pnl > peak:
+                peak = cumulative_pnl
+            dd = peak - cumulative_pnl
+            if dd > max_dd:
+                max_dd = dd
+
+        return {
+            "total_trades": total_trades,
+            "win_rate": round(win_rate * 100, 1),
+            "win_rate_long": round(win_rate_long * 100, 1),
+            "win_rate_short": round(win_rate_short * 100, 1),
+            "profit_factor": profit_factor,
+            "max_drawdown": round(max_dd, 2),
+            "average_rr": average_rr,
+            "total_pnl_usd": round(sum(t["pnl_usd"] for t in trades), 2),
+        }
 
     def log_cycle(
         self,

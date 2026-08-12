@@ -13,6 +13,8 @@ from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.hermes_webhook import HermesWebhookClient
 
+from mms4tk.trade_sync import OKXTradeSyncWorker
+
 logger = logging.getLogger("mms4tk.api")
 
 # Global instances
@@ -27,9 +29,9 @@ state_manager = MMS4StateManager(
 executor = OKXExecutor()
 signal_engine = MMS4SignalEngine()
 daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine, logger_db=logger_db)
+trade_sync_worker = OKXTradeSyncWorker(executor=executor, logger_db=logger_db, interval_seconds=900.0)
 
 latest_signal: Optional[SignalResult] = None
-
 
 
 async def verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-MMS4-API-KEY")) -> str:
@@ -47,15 +49,17 @@ async def verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-M
 async def lifespan(app: FastAPI):
     """
     FastAPI Lifespan context manager:
-    Starts MMS4Daemon on application startup and gracefully stops on shutdown.
+    Starts MMS4Daemon and OKXTradeSyncWorker on application startup.
     """
-    logger.info("FastAPI Startup: Launching MMS4Daemon background task loop...")
+    logger.info("FastAPI Startup: Launching MMS4Daemon & OKXTradeSyncWorker loops...")
     await daemon.start()
+    await trade_sync_worker.start()
     try:
         yield
     finally:
-        logger.info("FastAPI Shutdown: Stopping MMS4Daemon background task loop...")
+        logger.info("FastAPI Shutdown: Stopping background workers...")
         await daemon.stop()
+        await trade_sync_worker.stop()
 
 
 app = FastAPI(

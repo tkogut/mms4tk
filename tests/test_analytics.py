@@ -63,7 +63,7 @@ def test_base_short_signal():
     result = engine.evaluate_signals(candles, state_mgr, params)
     assert result.signal_type == "BASE_SHORT"
     assert result.is_allowed is True
-    assert result.leverage == 1.0
+    assert result.leverage == state_mgr.leverage
     assert result.price == 109.0
     assert result.stop_loss == pytest.approx(round(109.0 * 1.02, 6))
 
@@ -93,7 +93,7 @@ def test_base_long_signal():
     result = engine.evaluate_signals(candles, state_mgr, params)
     assert result.signal_type == "BASE_LONG"
     assert result.is_allowed is True
-    assert result.leverage == 1.0
+    assert result.leverage == state_mgr.leverage
     assert result.price == 91.0
     assert result.stop_loss == pytest.approx(round(91.0 * 0.98, 6))
 

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   antigravity_core:
     build: .
@@ -10,6 +8,21 @@ services:
       - traefik-proxy
     volumes:
       - ./.agents/swarm:/app/.agents/swarm
+    env_file:
+      - .env
+
+  ui_dashboard:
+    build: ./ui_dashboard
+    container_name: ui_dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    networks:
+      - internal_swarm_net
+      - traefik-proxy
+    volumes:
+      - ./.env:/app/.env
+      - ./.agents/swarm:/app/.agents/swarm:ro
     env_file:
       - .env
 
