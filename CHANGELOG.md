@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## ⚛️ [0.7.0] - 2026-08-12
+
+### 🚀 React 18 + Vite + TailwindCSS UI Migration
+- ⚛️ **React Single-Page Application**: Replaced Streamlit UI with high-performance React 18, Vite, and TailwindCSS dashboard.
+- 📲 **Native PWA Integration**: Integrated `vite-plugin-pwa` with native `beforeinstallprompt` handling, Service Worker caching, and custom app icons.
+- 📊 **Recharts & Lucide Icons**: Added smooth interactive chart components for TMA indicators, balance progression, and trading signals.
+- 🐳 **Nginx Production Container**: Optimized multi-stage Docker build for ultra-fast load times and static caching.
+
 ---
 
 ## 📝 [0.6.7] - 2026-08-12
