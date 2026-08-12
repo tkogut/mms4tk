@@ -108,6 +108,45 @@ class OKXExecutor:
         if self.exchange is not None:
             await self.exchange.close()
 
+    async def verify_symbol_with_okx(self, symbol: str) -> Dict[str, Any]:
+        """
+        One-time verification of a trading pair against live OKX REST API.
+        Fetches live ticker/candles from OKX. Returns validation dictionary.
+        """
+        if ccxt is not None:
+            try:
+                ex = self.exchange or ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+                ticker = await ex.fetch_ticker(symbol)
+                if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
+                    return {
+                        "symbol": symbol,
+                        "okx_verified": True,
+                        "okx_status": "VERIFIED",
+                        "last_price": float(ticker["last"])
+                    }
+            except Exception as e:
+                logger.warning(f"OKX fetch_ticker verification failed for {symbol}: {e}")
+
+        # Candle fallback check
+        try:
+            candles = await self.fetch_candles(symbol, timeframe="1m", limit=1)
+            if candles and len(candles) > 0 and candles[0].close > 0:
+                return {
+                    "symbol": symbol,
+                    "okx_verified": True,
+                    "okx_status": "VERIFIED",
+                    "last_price": float(candles[0].close)
+                }
+        except Exception as e:
+            logger.warning(f"OKX candle verification failed for {symbol}: {e}")
+
+        return {
+            "symbol": symbol,
+            "okx_verified": False,
+            "okx_status": "UNSUPPORTED",
+            "last_price": 0.0
+        }
+
     async def fetch_candles(
         self,
         symbol: Optional[str] = None,

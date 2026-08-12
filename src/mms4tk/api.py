@@ -584,34 +584,65 @@ class AddSymbolRequest(BaseModel):
     is_active: bool = True
 
 
+okx_verification_cache: Dict[str, Dict[str, Any]] = {}
+
+
 @app.get("/api/v1/symbols", tags=["Multi-Symbol"])
 async def get_trading_symbols() -> Dict[str, Any]:
-    """Get all configured trading symbols with active status, per-symbol operating state and leverage."""
+    """Get all configured trading symbols with live OKX verification status (LED indicator), operating state, and leverage."""
     result = []
     for sym, is_act in configured_symbols_store.items():
         state = state_manager.get_symbol_state(sym)
         leverage = state_manager.get_symbol_leverage(sym)
+        
+        # Live one-time OKX API verification lookup
+        if sym not in okx_verification_cache:
+            v_res = await executor.verify_symbol_with_okx(sym)
+            okx_verification_cache[sym] = v_res
+        else:
+            v_res = okx_verification_cache[sym]
+
         result.append({
             "symbol": sym,
             "state": state.value,
             "leverage": leverage,
             "is_active": is_act,
+            "okx_verified": v_res.get("okx_verified", True),
+            "okx_status": v_res.get("okx_status", "VERIFIED"),
+            "okx_price": v_res.get("last_price", 0.0),
             "directional_bias": state_manager.strategy_profile.directional_bias,
             "risk_profile": state_manager.strategy_profile.risk_profile
         })
     return {"symbols": result, "total": len(result)}
 
 
+@app.post("/api/v1/symbols/verify", tags=["Multi-Symbol"])
+async def verify_symbol_direct(req: AddSymbolRequest) -> Dict[str, Any]:
+    """Directly perform one-time OKX REST API ticker verification for a symbol."""
+    formatted_sym = req.symbol.upper().strip()
+    v_res = await executor.verify_symbol_with_okx(formatted_sym)
+    okx_verification_cache[formatted_sym] = v_res
+    return v_res
+
+
 @app.post("/api/v1/symbols/add", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 async def add_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
-    """Add or activate a trading pair in multi-symbol list."""
+    """Add or activate a trading pair in multi-symbol list with instant OKX verification."""
     formatted_sym = req.symbol.upper().strip()
     configured_symbols_store[formatted_sym] = req.is_active
     state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair addition/activation via API")
+    
+    # Perform instant OKX API verification
+    v_res = await executor.verify_symbol_with_okx(formatted_sym)
+    okx_verification_cache[formatted_sym] = v_res
+
     return {
         "status": "success",
         "symbol": formatted_sym,
         "is_active": req.is_active,
+        "okx_verified": v_res.get("okx_verified", True),
+        "okx_status": v_res.get("okx_status", "VERIFIED"),
+        "okx_price": v_res.get("last_price", 0.0),
         "configured_symbols": configured_symbols_store
     }
 

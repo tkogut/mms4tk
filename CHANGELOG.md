@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔴🟢 [0.10.0] - 2026-08-12
+
+### 🔴🟢 OKX API LED Status Light & Live Pair Verification
+- 🟢 **Pulsing Green / Red LED Status Lights**: Added live API LED indicators (Pulsing Green for verified OKX pairs with live price, Red for invalid/unsupported tickers) to every trading pair card in `SymbolsTab.jsx`.
+- 🔍 **One-Time OKX REST API Verification**: Integrated live OKX ticker verification endpoint (`/api/v1/symbols/verify`) and modal `Sprawdź OKX` button to test and confirm pair availability prior to activation.
+
+---
+
 ## ⏸️ [0.9.4] - 2026-08-12
 
 ### ⏸️ Paused Symbol UI Persistence & OKX Instrument Mapping Clarification
