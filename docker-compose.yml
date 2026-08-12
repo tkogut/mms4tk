@@ -32,7 +32,7 @@ services:
       - "traefik.http.routers.mastermind_ui.tls.certresolver=letsencrypt"
       - "traefik.http.routers.mastermind_ui.tls=true"
       - "traefik.http.routers.mastermind_ui.middlewares=mastermind-auth"
-      - "traefik.http.middlewares.mastermind-auth.basicauth.users=${MMS4_UI_BASIC_AUTH:-admin:$$apr1$$bOlaZh5l$$zvGYEbcw40PvXbQEhpSkM1}"
+      - "traefik.http.middlewares.mastermind-auth.basicauth.users=${MMS4_UI_BASIC_AUTH:-admin:{SHA}wVzGfjblQLdYsJ5xfQcACBwdZ4c=}"
       - "traefik.http.services.mastermind_ui.loadbalancer.server.port=8501"
 
 networks:

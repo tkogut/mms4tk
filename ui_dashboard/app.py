@@ -310,6 +310,11 @@ with tab_settings:
         st.text_input("OKX API Key", value="*" * 12 + os.getenv("OKX_API_KEY", "")[-4:], disabled=True)
         st.text_input("MMS4 Secret API Key", value="*" * 12 + os.getenv("MMS4_API_KEY", "")[-4:], disabled=True)
 
+        st.markdown("---")
+        st.markdown("**🔐 Change Web UI BasicAuth Credentials:**")
+        new_ui_username = st.text_input("Web UI Username", value="admin")
+        new_ui_password = st.text_input("New Web UI Password (leave empty to keep unchanged)", type="password")
+
         submit_btn = st.form_submit_button("💾 Save Settings to .env")
 
     if submit_btn:
@@ -326,6 +331,14 @@ with tab_settings:
 
             new_lines = []
             keys_updated = set()
+            new_auth_line = None
+            if new_ui_password.strip():
+                import hashlib
+                import base64
+                sha_digest = hashlib.sha1(new_ui_password.strip().encode('utf-8')).digest()
+                b64_sha = base64.b64encode(sha_digest).decode('ascii')
+                new_auth_line = f"MMS4_UI_BASIC_AUTH={new_ui_username.strip()}:{{SHA}}{b64_sha}\n"
+
             for line in env_lines:
                 if line.startswith("MMS4_MAX_MARGIN_USD="):
                     new_lines.append(f"MMS4_MAX_MARGIN_USD={new_max_margin}\n")
@@ -339,6 +352,13 @@ with tab_settings:
                 elif line.startswith("OKX_IS_SANDBOX="):
                     new_lines.append(f"OKX_IS_SANDBOX={'true' if new_sandbox else 'false'}\n")
                     keys_updated.add("OKX_IS_SANDBOX")
+                elif line.startswith("MMS4_UI_BASIC_AUTH="):
+                    if new_auth_line:
+                        new_lines.append(new_auth_line)
+                        keys_updated.add("MMS4_UI_BASIC_AUTH")
+                    else:
+                        new_lines.append(line)
+                        keys_updated.add("MMS4_UI_BASIC_AUTH")
                 else:
                     new_lines.append(line)
 
@@ -346,11 +366,16 @@ with tab_settings:
                 new_lines.append(f"MMS4_MAX_MARGIN_USD={new_max_margin}\n")
             if "MMS4_TRADE_AMOUNT_USD" not in keys_updated:
                 new_lines.append(f"MMS4_TRADE_AMOUNT_USD={new_max_margin}\n")
+            if new_auth_line and "MMS4_UI_BASIC_AUTH" not in keys_updated:
+                new_lines.append(new_auth_line)
 
             with open(ENV_FILE_PATH, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
 
-            st.success(f"Settings saved to {ENV_FILE_PATH} successfully! Backup created at .env.bak")
+            if new_auth_line:
+                st.success(f"Settings and NEW Web UI Password saved to {ENV_FILE_PATH}! (Traefik will use new credentials after container restart)")
+            else:
+                st.success(f"Settings saved to {ENV_FILE_PATH} successfully! Backup created at .env.bak")
         except Exception as err:
             st.error(f"Failed to save settings: {err}")
 
