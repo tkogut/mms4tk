@@ -569,3 +569,61 @@ async def change_password(req: PasswordChangeRequest) -> Dict[str, Any]:
     return {"status": "success", "message": f"Dashboard password updated for user '{req.username}'"}
 
 
+# ─── Multi-Symbol Trading Endpoints ─────────────────────────────────────────
+
+active_symbols_store: List[str] = ["BTC/USDC", "ETH/USDC", "SOL/USDC"]
+
+
+class AddSymbolRequest(BaseModel):
+    symbol: str = Field(description="Trading symbol pair e.g. ETH/USDC")
+    is_active: bool = True
+
+
+@app.get("/api/v1/symbols", tags=["Multi-Symbol"])
+async def get_trading_symbols() -> Dict[str, Any]:
+    """Get active trading symbols with per-symbol operating state and leverage."""
+    result = []
+    for sym in active_symbols_store:
+        state = state_manager.get_symbol_state(sym)
+        leverage = state_manager.get_symbol_leverage(sym)
+        result.append({
+            "symbol": sym,
+            "state": state.value,
+            "leverage": leverage,
+            "is_active": True,
+            "directional_bias": state_manager.strategy_profile.directional_bias,
+            "risk_profile": state_manager.strategy_profile.risk_profile
+        })
+    return {"symbols": result, "total": len(result)}
+
+
+@app.post("/api/v1/symbols/add", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
+async def add_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
+    """Add a new trading pair to active multi-symbol trading list."""
+    formatted_sym = req.symbol.upper().strip()
+    if formatted_sym not in active_symbols_store:
+        active_symbols_store.append(formatted_sym)
+        state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair addition via API")
+    return {
+        "status": "success",
+        "symbol": formatted_sym,
+        "active_symbols": active_symbols_store
+    }
+
+
+@app.delete("/api/v1/symbols/{symbol:path}", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
+async def remove_trading_symbol(symbol: str) -> Dict[str, Any]:
+    """Remove or deactivate a trading pair from active multi-symbol list."""
+    formatted_sym = symbol.upper().strip()
+    if formatted_sym in active_symbols_store:
+        if len(active_symbols_store) == 1:
+            raise HTTPException(status_code=400, detail="Cannot remove the last active trading symbol.")
+        active_symbols_store.remove(formatted_sym)
+    return {
+        "status": "success",
+        "removed": formatted_sym,
+        "active_symbols": active_symbols_store
+    }
+
+
+

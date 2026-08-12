@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔀 [0.8.0] - 2026-08-12
+
+### 🚀 Multi-Symbol Trading Backend & State Isolation
+- 🔀 **Per-Symbol State Isolation**: Extended `MMS4StateManager` to track operating states (`BASE_MODE` / `SCOUT_MODE`), leverage, and Stop-Loss triggers per active trading symbol independently.
+- ⚡ **Multi-Symbol Asynchronous Execution**: Upgraded `MMS4Daemon` to execute parallel candle fetching, indicator calculation, and order evaluation across multiple configured active symbols (e.g. `BTC/USDC`, `ETH/USDC`, `SOL/USDC`).
+- 🌐 **Multi-Symbol REST API Endpoints**: Added `GET /api/v1/symbols`, `POST /api/v1/symbols/add`, `POST /api/v1/symbols/pause`, and `DELETE /api/v1/symbols/{symbol}` endpoints.
+- 🛡️ **Global Portfolio Risk Governor**: Implemented multi-symbol capital allocation split and circuit breaker.
+
+---
+
 ## 🐛 [0.7.1] - 2026-08-12
 
 ### 🛠️ React UI Chart Scaling, Risk Profile Brackets & Password Management
@@ -69,6 +79,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 ### 🐛 Chart Overlap Fixes & Benchmark Y-Axis Normalization
 - 🎨 **Chart Title & Legend Collision Fix**: Extracted chart headers to Markdown headings (`st.markdown("#### ...")`) and positioned legend neatly at top-left (`y=1.02`, `x=0`), removing native Plotly rangeselector/modebar overlaps.
 - 📈 **Benchmark Y-Axis Normalization**: Filtered out invalid 0.0 entry prices to prevent 3,000,000% Y-axis scaling spikes on benchmark series.
+
+## 🔀 [0.8.0] - 2026-08-12
+
+### 🚀 Multi-Symbol Trading Backend & State Isolation
+- 🔀 **Per-Symbol State Isolation**: Extended `MMS4StateManager` to track operating states (`BASE_MODE` / `SCOUT_MODE`), leverage, and Stop-Loss triggers per active trading symbol independently.
+- ⚡ **Multi-Symbol Asynchronous Execution**: Upgraded `MMS4Daemon` to execute parallel candle fetching, indicator calculation, and order evaluation across multiple configured active symbols (e.g. `BTC/USDC`, `ETH/USDC`, `SOL/USDC`).
+- 🌐 **Multi-Symbol REST API Endpoints**: Added `GET /api/v1/symbols`, `POST /api/v1/symbols/add`, `POST /api/v1/symbols/pause`, and `DELETE /api/v1/symbols/{symbol}` endpoints.
+- 🛡️ **Global Portfolio Risk Governor**: Implemented multi-symbol capital allocation split and circuit breaker.
 
 ---
 

@@ -76,13 +76,48 @@ class MMS4StateManager:
         self._strategy_profile: StrategyProfile = StrategyProfile()
         self.logger_db: Optional[Any] = logger_db
         self.hermes_webhook: Optional[Any] = hermes_webhook
-        self.trading_symbol: str = trading_symbol
+
+        # Per-symbol state isolation dictionary
+        self._symbol_states: Dict[str, MMS4State] = {
+            self.trading_symbol: initial_state
+        }
 
         if self.logger_db is not None:
             saved = self.logger_db.get_latest_state()
             if saved and "state" in saved and saved["state"]:
                 self._current_state = MMS4State(saved["state"])
+                self._symbol_states[self.trading_symbol] = self._current_state
             self._load_strategy_profile_from_db()
+
+    def get_symbol_state(self, symbol: str) -> MMS4State:
+        """Return operating state for specific trading symbol (defaults to BASE_MODE)."""
+        return self._symbol_states.get(symbol, self._current_state)
+
+    def set_symbol_state(self, symbol: str, state: MMS4State, reason: str = "") -> None:
+        """Update operating state for a specific symbol without altering other symbols."""
+        self._symbol_states[symbol] = state
+        if symbol == self.trading_symbol:
+            self._current_state = state
+        if self.logger_db:
+            self.logger_db.save_state(
+                state=state.value,
+                leverage=self.get_symbol_leverage(symbol),
+                reason=f"[{symbol}] {reason}"
+            )
+
+    def get_symbol_leverage(self, symbol: str) -> float:
+        """Return active leverage for specific trading symbol."""
+        sym_state = self.get_symbol_state(symbol)
+        if sym_state == MMS4State.SCOUT_MODE:
+            return 0.1
+        risk_prof = self._strategy_profile.risk_profile.upper()
+        if risk_prof == "CONSERVATIVE":
+            return 1.0
+        elif risk_prof == "AGGRESSIVE":
+            return 10.0
+        elif risk_prof == "MODERATE":
+            return 3.0
+        return 1.0
 
     def set_logger_db(self, logger_db: Any) -> None:
         """Attach LoggerDB instance and restore latest persisted state if present."""
@@ -125,19 +160,14 @@ class MMS4StateManager:
             )
         return self._strategy_profile
 
-    def relax_scout_mode(self) -> bool:
+    def relax_scout_mode(self, symbol: Optional[str] = None) -> bool:
         """
-        If currently in SCOUT_MODE, transition back to BASE_MODE.
+        If target symbol is currently in SCOUT_MODE, transition back to BASE_MODE.
         Returns True if a state transition occurred, False otherwise.
         """
-        if self._current_state == MMS4State.SCOUT_MODE:
-            self._current_state = MMS4State.BASE_MODE
-            if self.logger_db:
-                self.logger_db.save_state(
-                    state=self._current_state.value,
-                    leverage=self.leverage,
-                    reason="SCOUT_MODE relaxed via strategy profile scout_override"
-                )
+        target_sym = symbol or self.trading_symbol
+        if self.get_symbol_state(target_sym) == MMS4State.SCOUT_MODE:
+            self.set_symbol_state(target_sym, MMS4State.BASE_MODE, reason="SCOUT_MODE relaxed via strategy profile scout_override")
             return True
         return False
 
@@ -195,50 +225,42 @@ class MMS4StateManager:
         """Update current equity balance."""
         self._current_equity = equity
 
-    def on_stop_loss_hit(self, sl_percent: float, sl_price: float = 0.0) -> bool:
+    def on_stop_loss_hit(self, sl_percent: float, sl_price: float = 0.0, symbol: Optional[str] = None) -> bool:
         """
         Triggered when a Stop Loss is executed.
-        If in BASE_MODE and sl_percent >= 0.02 (2%), transition to SCOUT_MODE.
+        If in BASE_MODE and sl_percent >= 0.02 (2%), transition ONLY the target symbol to SCOUT_MODE.
         Also emits a Hermes webhook event for H4 Liquidity Sweep Analysis.
         Returns True if a state transition occurred, False otherwise.
         """
-        if self._current_state == MMS4State.BASE_MODE and sl_percent >= 0.02:
-            self._current_state = MMS4State.SCOUT_MODE
-            if self.logger_db:
-                self.logger_db.save_state(
-                    state=self._current_state.value,
-                    leverage=self.leverage,
-                    reason=f"Stop Loss hit ({sl_percent * 100:.1f}%)"
-                )
+        target_sym = symbol or self.trading_symbol
+        curr_sym_state = self.get_symbol_state(target_sym)
+        if curr_sym_state == MMS4State.BASE_MODE and sl_percent >= 0.02:
+            self.set_symbol_state(target_sym, MMS4State.SCOUT_MODE, reason=f"Stop Loss hit ({sl_percent * 100:.1f}%)")
             # Emit Hermes webhook event for H4 analysis
             if self.hermes_webhook:
                 try:
                     self.hermes_webhook.emit_scout_mode_event(
-                        symbol=self.trading_symbol,
+                        symbol=target_sym,
                         sl_price=sl_price,
                         sl_percent=sl_percent,
                         reason=f"Stop Loss hit ({sl_percent * 100:.1f}%)"
                     )
-                    logger.info(f"Hermes webhook emitted for SCOUT_MODE activation (SL {sl_percent*100:.1f}%)")
+                    logger.info(f"Hermes webhook emitted for SCOUT_MODE activation on {target_sym} (SL {sl_percent*100:.1f}%)")
                 except Exception as e:
-                    logger.error(f"Failed to emit Hermes webhook: {e}")
+                    logger.error(f"Failed to emit Hermes webhook for {target_sym}: {e}")
             return True
         return False
 
-    def on_take_profit_hit(self) -> bool:
+    def on_take_profit_hit(self, symbol: Optional[str] = None) -> bool:
         """
         Triggered when a Take Profit is executed.
-        If in SCOUT_MODE, transition back to BASE_MODE.
+        If target symbol is in SCOUT_MODE, transition back to BASE_MODE.
         Returns True if a state transition occurred, False otherwise.
         """
-        if self._current_state == MMS4State.SCOUT_MODE:
-            self._current_state = MMS4State.BASE_MODE
-            if self.logger_db:
-                self.logger_db.save_state(
-                    state=self._current_state.value,
-                    leverage=self.leverage,
-                    reason="Take Profit hit"
-                )
+        target_sym = symbol or self.trading_symbol
+        curr_sym_state = self.get_symbol_state(target_sym)
+        if curr_sym_state == MMS4State.SCOUT_MODE:
+            self.set_symbol_state(target_sym, MMS4State.BASE_MODE, reason="Take Profit hit")
             return True
         return False
 
