@@ -70,8 +70,8 @@ def load_mobile_pwa_assets():
                     <p id="pwa-desc-text">Zainstaluj aplikację na pulpicie telefonu/komputera dla natychmiastowego dostępu.</p>
                 </div>
                 <div class="pwa-banner-actions">
-                    <button id="pwa-install-btn" class="pwa-btn-primary">📲 Zainstaluj / Dodaj</button>
-                    <button id="pwa-close-btn" class="pwa-btn-secondary">✕ Zamknij</button>
+                    <button type="button" onclick="window.handlePWAInstallClick()" class="pwa-btn-primary">📲 Zainstaluj / Dodaj</button>
+                    <button type="button" onclick="window.handlePWACloseClick()" class="pwa-btn-secondary">✕ Zamknij</button>
                 </div>
             </div>
             <div id="pwa-modal-instructions" style="display: none; margin-top: 10px; padding: 10px; background: #0f172a; border-radius: 8px; font-size: 0.85rem; color: #cbd5e1; border: 1px solid #334155;">
@@ -86,50 +86,45 @@ def load_mobile_pwa_assets():
 
         <script>
         (function() {
-            let deferredPrompt = null;
-            const banner = document.getElementById('pwa-install-banner');
-            const installBtn = document.getElementById('pwa-install-btn');
-            const closeBtn = document.getElementById('pwa-close-btn');
-            const instructions = document.getElementById('pwa-modal-instructions');
-
-            // Check if already running in standalone mode (PWA installed)
-            const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
-            if (isStandalone || localStorage.getItem('pwa_prompt_dismissed') === 'true') {
-                if (banner) banner.style.display = 'none';
-                return;
-            }
+            window.deferredPrompt = null;
 
             window.addEventListener('beforeinstallprompt', (e) => {
                 e.preventDefault();
-                deferredPrompt = e;
+                window.deferredPrompt = e;
                 console.log('[PWA] beforeinstallprompt event captured');
+                const banner = document.getElementById('pwa-install-banner');
                 if (banner) banner.style.display = 'block';
             });
 
-            if (installBtn) {
-                installBtn.addEventListener('click', async () => {
-                    if (deferredPrompt) {
-                        deferredPrompt.prompt();
-                        const { outcome } = await deferredPrompt.userChoice;
+            window.handlePWAInstallClick = async function() {
+                console.log('[PWA] handlePWAInstallClick called');
+                const instructions = document.getElementById('pwa-modal-instructions');
+                if (window.deferredPrompt) {
+                    try {
+                        window.deferredPrompt.prompt();
+                        const { outcome } = await window.deferredPrompt.userChoice;
                         console.log('[PWA] User choice outcome:', outcome);
-                        deferredPrompt = null;
+                        window.deferredPrompt = null;
+                        const banner = document.getElementById('pwa-install-banner');
                         if (banner) banner.style.display = 'none';
                         localStorage.setItem('pwa_prompt_dismissed', 'true');
-                    } else {
-                        // Show fallback modal instructions
-                        if (instructions) {
-                            instructions.style.display = instructions.style.display === 'none' ? 'block' : 'none';
-                        }
+                    } catch (err) {
+                        console.error('[PWA] Install prompt error:', err);
+                        if (instructions) instructions.style.display = (instructions.style.display === 'none' || !instructions.style.display) ? 'block' : 'none';
                     }
-                });
-            }
+                } else {
+                    if (instructions) {
+                        instructions.style.display = (instructions.style.display === 'none' || !instructions.style.display) ? 'block' : 'none';
+                    }
+                }
+            };
 
-            if (closeBtn) {
-                closeBtn.addEventListener('click', () => {
-                    if (banner) banner.style.display = 'none';
-                    localStorage.setItem('pwa_prompt_dismissed', 'true');
-                });
-            }
+            window.handlePWACloseClick = function() {
+                console.log('[PWA] handlePWACloseClick called');
+                const banner = document.getElementById('pwa-install-banner');
+                if (banner) banner.style.display = 'none';
+                localStorage.setItem('pwa_prompt_dismissed', 'true');
+            };
         })();
         </script>
     """, unsafe_allow_html=True)
