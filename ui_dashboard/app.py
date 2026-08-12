@@ -62,72 +62,7 @@ def load_mobile_pwa_assets():
             });
         }
         </script>
-
-        <!-- PWA Installation Banner -->
-        <div id="pwa-install-banner" class="pwa-banner-container">
-            <div class="pwa-banner-content">
-                <div class="pwa-banner-text">
-                    <strong>📲 Zainstaluj Mastermind App na Pulpicie</strong>
-                    <p id="pwa-desc-text">Zainstaluj aplikację na pulpicie telefonu/komputera dla natychmiastowego dostępu.</p>
-                </div>
-                <div class="pwa-banner-actions">
-                    <button type="button" onclick="window.handlePWAInstallClick()" class="pwa-btn-primary">📲 Zainstaluj / Dodaj</button>
-                    <button type="button" onclick="window.handlePWACloseClick()" class="pwa-btn-secondary">✕ Zamknij</button>
-                </div>
-            </div>
-            <div id="pwa-modal-instructions" style="display: none; margin-top: 10px; padding: 10px; background: #0f172a; border-radius: 8px; font-size: 0.85rem; color: #cbd5e1; border: 1px solid #334155;">
-                <p style="margin: 0 0 6px 0; font-weight: bold; color: #60a5fa;">💡 Jak dodać aplikację do ekranu głównego:</p>
-                <ul style="margin: 0; padding-left: 18px;">
-                    <li><strong>Android / Chrome</strong>: Kliknij <code>⋮</code> (Menu w prawym górnym rogu) &rarr; <strong>Dodaj do ekranu głównego / Zainstaluj aplikację</strong>.</li>
-                    <li><strong>iOS (Safari)</strong>: Dotknij przycisku <code>📤 Udostępnij</code> (na dole ekranu) &rarr; <strong>Dodaj do ekranu początkowego</strong>.</li>
-                    <li><strong>Komputer (Chrome / Edge)</strong>: Kliknij ikonę <code>⊕</code> na pasku adresu obok gwiazdki zakładek.</li>
-                </ul>
-            </div>
-        </div>
-
-        <script>
-        (function() {
-            window.deferredPrompt = null;
-
-            window.addEventListener('beforeinstallprompt', (e) => {
-                e.preventDefault();
-                window.deferredPrompt = e;
-                console.log('[PWA] beforeinstallprompt event captured');
-                const banner = document.getElementById('pwa-install-banner');
-                if (banner) banner.style.display = 'block';
-            });
-
-            window.handlePWAInstallClick = async function() {
-                console.log('[PWA] handlePWAInstallClick called');
-                const instructions = document.getElementById('pwa-modal-instructions');
-                if (window.deferredPrompt) {
-                    try {
-                        window.deferredPrompt.prompt();
-                        const { outcome } = await window.deferredPrompt.userChoice;
-                        console.log('[PWA] User choice outcome:', outcome);
-                        window.deferredPrompt = null;
-                        const banner = document.getElementById('pwa-install-banner');
-                        if (banner) banner.style.display = 'none';
-                        localStorage.setItem('pwa_prompt_dismissed', 'true');
-                    } catch (err) {
-                        console.error('[PWA] Install prompt error:', err);
-                        if (instructions) instructions.style.display = (instructions.style.display === 'none' || !instructions.style.display) ? 'block' : 'none';
-                    }
-                } else {
-                    if (instructions) {
-                        instructions.style.display = (instructions.style.display === 'none' || !instructions.style.display) ? 'block' : 'none';
-                    }
-                }
-            };
-
-            window.handlePWACloseClick = function() {
-                console.log('[PWA] handlePWACloseClick called');
-                const banner = document.getElementById('pwa-install-banner');
-                if (banner) banner.style.display = 'none';
-                localStorage.setItem('pwa_prompt_dismissed', 'true');
-            };
-        })();
-        </script>
+    """, unsafe_allow_html=True)
     """, unsafe_allow_html=True)
 
     css_path = os.path.join(os.path.dirname(__file__), "style.css")
@@ -284,17 +219,7 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# Native Streamlit PWA Expander Banner (100% Guaranteed to work on all browsers & devices)
-with st.expander("📲 **Zainstaluj Aplikację na Pulpicie (PWA)**"):
-    st.markdown("""
-    **Jak dodać ikonę Mastermind do ekranu głównego telefonu lub komputera:**
-    
-    * 🤖 **Android (Chrome)**: Kliknij menu `⋮` (prawy górny róg) &rarr; wybierz **Zainstaluj aplikację** lub **Dodaj do ekranu głównego**.
-    * 🍎 **iPhone / iPad (Safari)**: Dotknij przycisku Udostępnij `📤` (na dole paska) &rarr; wybierz **Dodaj do ekranu początkowego**.
-    * 💻 **Komputer (Chrome / Edge / Brave)**: Kliknij ikonę `⊕` po prawej stronie paska adresu URL.
-    """)
-
-# Interactive PWA Component (iframe sandbox)
+# Interactive PWA Install Card
 components.html("""
 <!DOCTYPE html>
 <html>
@@ -343,17 +268,17 @@ components.html("""
 <body>
     <div class="pwa-card">
         <div class="pwa-text">
-            <div class="pwa-title">📲 Zainstaluj Mastermind App</div>
+            <div class="pwa-title">📲 Zainstaluj Mastermind App na Pulpicie</div>
             <div class="pwa-sub">Szybki dostęp z pulpitu telefonu i komputera</div>
         </div>
         <button class="pwa-btn" onclick="handleClick()">📲 Dodaj / Zainstaluj</button>
     </div>
     <div id="inst-box" class="instructions-box">
-        <p style="margin:0 0 4px 0; font-weight:bold; color:#60a5fa;">💡 Wskazówki instalacji:</p>
+        <p style="margin:0 0 6px 0; font-weight:bold; color:#60a5fa;">💡 Jak dodać do ekranu głównego:</p>
         <ul style="margin:0; padding-left:16px;">
-            <li><strong>Android</strong>: Menu <code>⋮</code> &rarr; <em>Dodaj do ekranu głównego</em></li>
-            <li><strong>iPhone (Safari)</strong>: Przygotuj <code>📤 Udostępnij</code> &rarr; <em>Dodaj do ekranu początkowego</em></li>
-            <li><strong>PC Chrome</strong>: Ikona <code>⊕</code> na pasku adresu</li>
+            <li><strong>Android (Chrome)</strong>: Menu <code>⋮</code> w prawym górnym rogu &rarr; <em>Dodaj do ekranu głównego / Zainstaluj aplikację</em></li>
+            <li><strong>iPhone (Safari)</strong>: Przygotuj <code>📤 Udostępnij</code> na dole paska &rarr; <em>Dodaj do ekranu początkowego</em></li>
+            <li><strong>Komputer (Chrome / Edge / Brave)</strong>: Ikona <code>⊕</code> na pasku adresu obok zakładek</li>
         </ul>
     </div>
 
@@ -387,7 +312,7 @@ components.html("""
     </script>
 </body>
 </html>
-""", height=120)
+""", height=130)
 
 # 4 Core Tabs
 tab_monitoring, tab_analytics, tab_settings, tab_symbols = st.tabs([
