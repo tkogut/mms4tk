@@ -145,6 +145,7 @@ class MMS4Daemon:
             else:
                 # 1. Verify if base position (70%) exists and is currently in profit (unrealizedPnl > 0)
                 is_base_in_profit = False
+                has_addon_already = False
                 base_position = None
                 try:
                     positions = await self.executor.fetch_positions()
@@ -152,17 +153,26 @@ class MMS4Daemon:
                         pos_sym = pos.get("symbol", "")
                         inst_id = pos.get("info", {}).get("instId", "")
                         if self.symbol in pos_sym or "BTC" in inst_id:
-                            contracts = float(pos.get("contracts", 0.0) or pos.get("info", {}).get("pos", 0.0))
-                            if abs(contracts) > 0:
+                            contracts = abs(float(pos.get("contracts", 0.0) or pos.get("info", {}).get("pos", 0.0)))
+                            if contracts > 0:
                                 base_position = pos
+                                notional = float(pos.get("notional", 0.0) or pos.get("info", {}).get("notionalUsd", 0.0))
+                                # If position notional already covers full 100% margin (e.g. > 85% of max_margin_usd), addon is already executed
+                                if notional >= (self.max_margin_usd * 0.85) or contracts >= 2:
+                                    has_addon_already = True
+
                                 upl = float(pos.get("unrealizedPnl", 0.0) or pos.get("info", {}).get("upl", 0.0))
                                 if upl > 0:
                                     is_base_in_profit = True
                 except Exception as pos_err:
                     logger.warning(f"Could not verify base position profit for HIGH_RISK_ADD: {pos_err}")
 
+                # If addon already exists on this position, skip
+                if has_addon_already:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"High Risk Add skipped: Addon 30% already active on position (contracts: {base_position.get('contracts', 1.0) if base_position else 1})"
                 # If base position is NOT in profit, skip automatic order execution
-                if not is_base_in_profit and self.executor.has_credentials and base_position is not None:
+                elif not is_base_in_profit and self.executor.has_credentials and base_position is not None:
                     outcome = f"SKIPPED_{signal.signal_type}"
                     details = f"High Risk Add skipped: Base 70% position is not in profit (unrealizedPnl: {base_position.get('unrealizedPnl', 0.0)})"
                 else:
