@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 📝 [0.6.7] - 2026-08-12
+
+### 📝 Comprehensive System & Technical Documentation Refresh
+- 📝 **Updated System Architecture Diagrams**: Refreshed `README.md` to reflect Traefik BasicAuth HTTPS reverse proxy, Streamlit Web Dashboard v0.6.7, In-App Password Manager, Mobile PWA, and Scalable Plotly Analytics.
+- 📡 **REST API Reference Refresh**: Synchronized `docs/API.md` and `docs/DEPLOYMENT_GUIDE.md` with active `0.6.7` deployment parameters and `{SHA}` htpasswd basicauth specs.
+
+---
+
 ## 📋 [0.6.6] - 2026-08-12
 
 ### 🐛 Dashboard Kanban Cards & Completed Status Filter

@@ -59,6 +59,10 @@ PORT=8000
 DAEMON_INTERVAL=15.0
 SYMBOL=BTC/USDC:USDC
 LOG_LEVEL=INFO
+
+# Security & Web UI BasicAuth
+MMS4_API_KEY=your_secret_mms4tk_api_key
+MMS4_UI_BASIC_AUTH=admin:{SHA}wVzGfjblQLdYsJ5xfQcACBwdZ4c=
 ```
 
 > [!CAUTION]
@@ -99,7 +103,7 @@ Expected output:
 ```json
 {
   "status": "ok",
-  "version": "0.1.0"
+  "version": "0.6.6"
 }
 ```
 

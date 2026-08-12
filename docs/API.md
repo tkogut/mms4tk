@@ -25,7 +25,7 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
     ```json
     {
       "status": "healthy",
-      "version": "0.4.0"
+      "version": "0.6.6"
     }
     ```
 
