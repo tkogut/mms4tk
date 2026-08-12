@@ -338,31 +338,156 @@ with tab_analytics:
         st.metric(label="Average R:R", value=f"{kpi['average_rr']:.2f}")
 
     st.markdown("---")
-    st.subheader("Performance Charts")
+    st.subheader("Performance Charts & Trend Analytics")
 
     df = fetch_closed_trades_df()
     if not df.empty and "pnl_usd" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["cum_pnl"] = df["pnl_usd"].cumsum()
-        
-        # 1. Equity Curve
-        fig_equity = px.line(
-            df, x="timestamp", y="cum_pnl",
-            title="Cumulative PnL (Equity Curve)",
-            labels={"cum_pnl": "Cumulative PnL (USD)", "timestamp": "Time"},
-            template="plotly_dark"
+
+        # 1. Time Range Selector Bar
+        st.markdown("<div style='margin-bottom: 8px; font-weight: 600; color: #94a3b8; font-size: 0.85rem;'>⏱️ Timeframe Filter:</div>", unsafe_allow_html=True)
+        time_range = st.radio(
+            "Time Range Filter",
+            ["4h", "1d", "7d", "30d", "3m", "6m", "1y", "5y", "ALL"],
+            index=8,
+            horizontal=True,
+            label_visibility="collapsed"
         )
-        fig_equity.update_traces(line_color="#10b981", line_width=3)
+
+        # Filter DataFrame by selected time_range
+        now = datetime.now(timezone.utc)
+        filtered_df = df.copy()
+        if time_range == "4h":
+            cutoff = now - pd.Timedelta(hours=4)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "1d":
+            cutoff = now - pd.Timedelta(days=1)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "7d":
+            cutoff = now - pd.Timedelta(days=7)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "30d":
+            cutoff = now - pd.Timedelta(days=30)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "3m":
+            cutoff = now - pd.Timedelta(days=90)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "6m":
+            cutoff = now - pd.Timedelta(days=180)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "1y":
+            cutoff = now - pd.Timedelta(days=365)
+            filtered_df = df[df["timestamp"] >= cutoff]
+        elif time_range == "5y":
+            cutoff = now - pd.Timedelta(days=1825)
+            filtered_df = df[df["timestamp"] >= cutoff]
+
+        if filtered_df.empty:
+            filtered_df = df.iloc[-10:] if len(df) >= 10 else df
+
+        # Common Plotly Rangeselector Buttons Configuration
+        plotly_range_buttons = list([
+            dict(count=4, label="4h", step="hour", stepmode="backward"),
+            dict(count=1, label="1d", step="day", stepmode="backward"),
+            dict(count=7, label="7d", step="day", stepmode="backward"),
+            dict(count=30, label="30d", step="day", stepmode="backward"),
+            dict(count=3, label="3m", step="month", stepmode="backward"),
+            dict(count=6, label="6m", step="month", stepmode="backward"),
+            dict(count=1, label="1y", step="year", stepmode="backward"),
+            dict(step="all", label="ALL")
+        ])
+
+        # 1. Equity Curve Chart
+        fig_equity = bg.Figure()
+        fig_equity.add_trace(bg.Scatter(
+            x=filtered_df["timestamp"],
+            y=filtered_df["cum_pnl"],
+            mode="lines",
+            name="Cumulative PnL ($)",
+            line=dict(color="#10b981", width=3),
+            fill="tozeroy",
+            fillcolor="rgba(16, 185, 129, 0.12)"
+        ))
+        fig_equity.update_layout(
+            title="Cumulative PnL (Equity Curve)",
+            template="plotly_dark",
+            paper_bgcolor="#0f172a",
+            plot_bgcolor="#0f172a",
+            hovermode="x unified",
+            margin=dict(l=20, r=20, t=50, b=30),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                bgcolor="rgba(0,0,0,0)",
+                font=dict(size=11, color="#94a3b8")
+            ),
+            xaxis=dict(
+                showgrid=True, gridcolor="#1e293b",
+                rangeselector=dict(
+                    buttons=plotly_range_buttons,
+                    bgcolor="#1e293b",
+                    activecolor="#3b82f6",
+                    font=dict(color="#f8fafc", size=10)
+                )
+            ),
+            yaxis=dict(showgrid=True, gridcolor="#1e293b", title="PnL (USD)")
+        )
         st.plotly_chart(fig_equity, use_container_width=True)
 
-        # 2. Benchmark vs Buy & Hold
-        if "entry_price" in df.columns:
-            df["btc_benchmark"] = (df["entry_price"] / df["entry_price"].iloc[0] - 1.0) * 100
-            df["bot_return_pct"] = (df["cum_pnl"] / 10.0) * 100  # Based on $10 base
+        # 2. Benchmark vs Buy & Hold Chart
+        if "entry_price" in filtered_df.columns and not filtered_df.empty:
+            base_price = filtered_df["entry_price"].iloc[0] if filtered_df["entry_price"].iloc[0] > 0 else 1.0
+            filtered_df["btc_benchmark"] = (filtered_df["entry_price"] / base_price - 1.0) * 100
+            filtered_df["bot_return_pct"] = (filtered_df["cum_pnl"] / 10.0) * 100
 
             fig_bench = bg.Figure()
-            fig_bench.add_trace(bg.Scatter(x=df["timestamp"], y=df["bot_return_pct"], mode="lines", name="Mastermind Bot PnL %", line=dict(color="#3b82f6", width=3)))
-            fig_bench.add_trace(bg.Scatter(x=df["timestamp"], y=df["btc_benchmark"], mode="lines", name="BTC Buy & Hold %", line=dict(color="#f59e0b", width=2, dash="dash")))
-            fig_bench.update_layout(title="Mastermind Bot vs BTC Buy & Hold Benchmark", template="plotly_dark", yaxis_title="Return %")
+            fig_bench.add_trace(bg.Scatter(
+                x=filtered_df["timestamp"],
+                y=filtered_df["bot_return_pct"],
+                mode="lines",
+                name="Mastermind Bot Return %",
+                line=dict(color="#3b82f6", width=3),
+                fill="tozeroy",
+                fillcolor="rgba(59, 130, 246, 0.12)"
+            ))
+            fig_bench.add_trace(bg.Scatter(
+                x=filtered_df["timestamp"],
+                y=filtered_df["btc_benchmark"],
+                mode="lines",
+                name="BTC Buy & Hold %",
+                line=dict(color="#f59e0b", width=2, dash="dash")
+            ))
+            fig_bench.update_layout(
+                title="Mastermind Bot vs BTC Buy & Hold Benchmark",
+                template="plotly_dark",
+                paper_bgcolor="#0f172a",
+                plot_bgcolor="#0f172a",
+                hovermode="x unified",
+                margin=dict(l=20, r=20, t=50, b=30),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1,
+                    bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=11, color="#94a3b8")
+                ),
+                xaxis=dict(
+                    showgrid=True, gridcolor="#1e293b",
+                    rangeselector=dict(
+                        buttons=plotly_range_buttons,
+                        bgcolor="#1e293b",
+                        activecolor="#3b82f6",
+                        font=dict(color="#f8fafc", size=10)
+                    )
+                ),
+                yaxis=dict(showgrid=True, gridcolor="#1e293b", title="Return %")
+            )
             st.plotly_chart(fig_bench, use_container_width=True)
     else:
         st.info("Insufficient trade history in SQLite (logs.db) to render Plotly charts. The 15-min sync worker runs automatically in background.")
