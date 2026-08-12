@@ -47,6 +47,73 @@ def load_mobile_pwa_assets():
         <meta name="apple-mobile-web-app-capable" content="yes">
         <meta name="mobile-web-app-capable" content="yes">
         <link rel="manifest" href="/app/static/manifest.json">
+
+        <!-- PWA Installation Popup Banner -->
+        <div id="pwa-install-banner" class="pwa-banner-hidden">
+            <div class="pwa-banner-content">
+                <div class="pwa-banner-text">
+                    <strong>📲 Zainstaluj Mastermind App</strong>
+                    <p>Zainstaluj aplikację na pulpicie telefonu dla natychmiastowego dostępu.</p>
+                </div>
+                <div class="pwa-banner-actions">
+                    <button id="pwa-install-btn" class="pwa-btn-primary">📲 Zainstaluj</button>
+                    <button id="pwa-close-btn" class="pwa-btn-secondary">✕ Pomiń</button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+        (function() {
+            let deferredPrompt;
+            const banner = document.getElementById('pwa-install-banner');
+            const installBtn = document.getElementById('pwa-install-btn');
+            const closeBtn = document.getElementById('pwa-close-btn');
+
+            if (localStorage.getItem('pwa_prompt_dismissed') === 'true') {
+                return;
+            }
+
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+                if (banner) {
+                    banner.classList.remove('pwa-banner-hidden');
+                    banner.classList.add('pwa-banner-visible');
+                }
+            });
+
+            // iOS Safari PWA Prompt Helper
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
+            if (isIOS && !isStandalone && banner) {
+                const textElem = banner.querySelector('.pwa-banner-text p');
+                if (textElem) {
+                    textElem.innerHTML = 'Dotknij 📤 <strong>Udostępnij</strong> a następnie <strong>Dodaj do ekranu początkowego</strong>.';
+                }
+                banner.classList.remove('pwa-banner-hidden');
+                banner.classList.add('pwa-banner-visible');
+            }
+
+            if (installBtn) {
+                installBtn.addEventListener('click', async () => {
+                    if (deferredPrompt) {
+                        deferredPrompt.prompt();
+                        const { outcome } = await deferredPrompt.userChoice;
+                        deferredPrompt = null;
+                    }
+                    if (banner) banner.style.display = 'none';
+                    localStorage.setItem('pwa_prompt_dismissed', 'true');
+                });
+            }
+
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    if (banner) banner.style.display = 'none';
+                    localStorage.setItem('pwa_prompt_dismissed', 'true');
+                });
+            }
+        })();
+        </script>
     """, unsafe_allow_html=True)
 
     css_path = os.path.join(os.path.dirname(__file__), "style.css")
@@ -153,7 +220,7 @@ def fetch_closed_trades_df():
 
 # Version Reader
 VERSION_FILE_PATH = os.path.join(os.path.dirname(__file__), "..", "VERSION")
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.2"
 if os.path.exists(VERSION_FILE_PATH):
     try:
         with open(VERSION_FILE_PATH, "r", encoding="utf-8") as vf:

@@ -6,6 +6,15 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 🔔 [0.5.2] - 2026-08-12
+
+### ✨ PWA Installation Prompt Popup
+- Added automatic mobile PWA "Install App" bottom popup modal (`#pwa-install-banner`) triggering `beforeinstallprompt` on Android Chrome/Edge devices.
+- Added native iOS Safari instructions popup ("Touch Share 📤 -> Add to Home Screen").
+- Stored dismissal state in `localStorage.setItem('pwa_prompt_dismissed', 'true')` to avoid bothering returning users.
+
+---
+
 ## 📱 [0.5.1] - 2026-08-12
 
 ### 📱 PWA & Mobile Enhancements
