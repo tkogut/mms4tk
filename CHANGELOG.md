@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🛠️ [0.12.1] - 2026-08-12
+
+### 🛠️ Multi-Mode (`cross`, `cash`, `isolated`) OKX Account Permission Verification
+- 🛠️ **Spot/Swap Account Probing Fix**: Updated `verify_symbol_with_okx` in `src/mms4tk/okx_executor.py` to probe `privateGetAccountMaxSize` across `cash` (Spot), `cross` (Cross Margin/Swap), and `isolated` (Isolated Margin) modes. This fixes false negative errors for Spot pairs like `ETH/USDC`, `BTC/USDC`, `SOL/USDC` while correctly restricting unauthorized pairs (`AVAX/USDC`).
+
+---
+
 ## 🤖 [0.12.0] - 2026-08-12
 
 ### 🤖 Autotrading Account Permission Verification & Badge Differentiation

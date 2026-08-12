@@ -171,20 +171,20 @@ class OKXExecutor:
             inst_spot = f"{clean_base}-{quote}"
             
             permitted = False
-            error_reason = "Klucz API nie posiada uprawnień do składania zleceń na tym koncie"
+            error_reason = f"Para {symbol} nie jest dostępna do tradingu na Twoim koncie OKX"
 
-            # Check leverage info or account positions permission for this instId
+            # Check OKX private account max size across cross, cash (spot), and isolated modes
             for target_inst in [inst_swap, inst_spot]:
-                try:
-                    res = await self.exchange.privateGetAccountLeverageInfo({"instId": target_inst, "mgnMode": "cross"})
-                    if res and isinstance(res, dict) and str(res.get("code")) == "0":
-                        permitted = True
-                        break
-                except Exception as e:
-                    err_msg = str(e)
-                    if "51001" in err_msg or "51000" in err_msg or "50004" in err_msg:
-                        error_reason = f"Para {symbol} nie jest dostępna do tradingu na Twoim koncie OKX"
-                    logger.warning(f"OKX private leverage check failed for {target_inst}: {e}")
+                for mode in ["cross", "cash", "isolated"]:
+                    try:
+                        res = await self.exchange.privateGetAccountMaxSize(params={"instId": target_inst, "tdMode": mode})
+                        if res and isinstance(res, dict) and str(res.get("code")) == "0" and res.get("data"):
+                            permitted = True
+                            break
+                    except Exception as e:
+                        logger.debug(f"OKX privateGetAccountMaxSize check failed for {target_inst} ({mode}): {e}")
+                if permitted:
+                    break
 
             if not permitted:
                 return {
