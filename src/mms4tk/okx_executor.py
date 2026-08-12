@@ -89,13 +89,15 @@ class OKXExecutor:
     async def initialize(self) -> None:
         """Load markets and verify connection to OKX."""
         logger.info("Initializing OKX executor and loading public markets...")
+        rest_url = os.getenv("OKX_REST_URL", "https://eea.okx.com")
         try:
             # Create an unauthenticated exchange instance for public market metadata loading
-            public_ex = ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+            public_ex = ccxt.okx({"enableRateLimit": True, "urls": {"api": {"rest": rest_url}}, "options": {"defaultType": "swap"}})
             await public_ex.load_markets()
             if self.exchange is not None:
                 self.exchange.markets = public_ex.markets
                 self.exchange.symbols = public_ex.symbols
+                self.exchange.markets_by_id = public_ex.markets_by_id
             await public_ex.close()
             logger.info("OKX public markets loaded successfully.")
         except Exception as e:
@@ -146,11 +148,23 @@ class OKXExecutor:
 
     async def discover_eea_xperp_symbol(self, symbol: str = "BTC") -> Optional[str]:
         """
-        Discover active live X-Perp instrument ID for OKX Europe (EEA).
-        Queries OKX FUTURES instruments and filters ruleType=='xperp' and state=='live'.
-        Example return: 'BTC-USD_UM_XPERP-310404'
+        Discover active live X-Perp instrument for OKX Europe (EEA).
+        Returns CCXT unified symbol (e.g. 'BTC/USD:USD-310404') if markets loaded,
+        or OKX native instId (e.g. 'BTC-USD_UM_XPERP-310404').
         """
         clean_base = symbol.split("/")[0].split("-")[0].split(":")[0].upper()
+        
+        # 1. If exchange markets loaded, check markets_by_id / markets for matching ruleType=='xperp'
+        if self.exchange and self.exchange.markets:
+            for sym, market in self.exchange.markets.items():
+                info = market.get("info", {})
+                if info.get("ruleType") == "xperp" and info.get("state") == "live":
+                    inst_id = market.get("id", "")
+                    if clean_base in inst_id or clean_base in info.get("instFamily", ""):
+                        logger.info(f"Resolved OKX EEA X-Perp CCXT symbol: {sym} (instId: {inst_id})")
+                        return sym
+
+        # 2. Public API fallback
         try:
             ex = self.exchange or ccxt.okx({"enableRateLimit": True, "urls": {"api": {"rest": "https://eea.okx.com"}}})
             res = await ex.publicGetPublicInstruments({"instType": "FUTURES"})
@@ -160,7 +174,11 @@ class OKXExecutor:
                         inst_id = inst.get("instId", "")
                         inst_family = inst.get("instFamily", "")
                         if clean_base in inst_id or clean_base in inst_family:
-                            logger.info(f"Discovered OKX EEA X-Perp instrument for {symbol}: {inst_id}")
+                            if self.exchange and getattr(self.exchange, "markets_by_id", None) and inst_id in self.exchange.markets_by_id:
+                                ccxt_sym = self.exchange.markets_by_id[inst_id][0]["symbol"]
+                                logger.info(f"Resolved OKX EEA X-Perp CCXT symbol from id: {ccxt_sym}")
+                                return ccxt_sym
+                            logger.info(f"Discovered OKX EEA X-Perp instId for {symbol}: {inst_id}")
                             return inst_id
         except Exception as e:
             logger.warning(f"Failed to discover EEA X-Perp instrument for {symbol}: {e}")
