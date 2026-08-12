@@ -270,6 +270,7 @@ class OKXExecutor:
             params = {}
             if not is_spot:
                 params["tdMode"] = "cross"
+                params["posSide"] = "short" if side_lower in ["sell", "short"] else "long"
 
             if not is_spot and stop_loss_pct > 0:
                 current_price = price
