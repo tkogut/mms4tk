@@ -139,25 +139,82 @@ class MMS4Daemon:
                 details = f"Failed to execute order: {str(e)}"
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
-            if self.state_manager.is_high_risk_add_allowed():
-                side = "SELL" if "SHORT" in signal.signal_type else "BUY"
-                try:
-                    order_info = await self.executor.execute_order(
-                        symbol=self.symbol,
-                        side=side,
-                        amount=addon_order_amount,
-                        stop_loss_pct=0.01,
-                        leverage=1.0,
-                        price=signal.price
-                    )
-                    outcome = f"EXECUTED_{signal.signal_type}"
-                    details = f"Executed High Risk Add order for 30% cap (${self.addon_trade_usd:.2f} USD / {addon_order_amount} units) with SL=1%"
-                except Exception as e:
-                    outcome = f"ERROR_{signal.signal_type}"
-                    details = f"Failed to execute High Risk Add: {str(e)}"
-            else:
+            if not self.state_manager.is_high_risk_add_allowed():
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked in state {self.state_manager.current_state.value}"
+            else:
+                # 1. Verify if base position (70%) exists and is currently in profit (unrealizedPnl > 0)
+                is_base_in_profit = False
+                base_position = None
+                try:
+                    positions = await self.executor.fetch_positions()
+                    for pos in positions:
+                        pos_sym = pos.get("symbol", "")
+                        inst_id = pos.get("info", {}).get("instId", "")
+                        if self.symbol in pos_sym or "BTC" in inst_id:
+                            contracts = float(pos.get("contracts", 0.0) or pos.get("info", {}).get("pos", 0.0))
+                            if abs(contracts) > 0:
+                                base_position = pos
+                                upl = float(pos.get("unrealizedPnl", 0.0) or pos.get("info", {}).get("upl", 0.0))
+                                if upl > 0:
+                                    is_base_in_profit = True
+                except Exception as pos_err:
+                    logger.warning(f"Could not verify base position profit for HIGH_RISK_ADD: {pos_err}")
+
+                # If base position is NOT in profit, skip automatic order execution
+                if not is_base_in_profit and self.executor.has_credentials and base_position is not None:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"High Risk Add skipped: Base 70% position is not in profit (unrealizedPnl: {base_position.get('unrealizedPnl', 0.0)})"
+                else:
+                    # 2. Check higher timeframe / candle formation for HITL fallback
+                    side = "SELL" if "SHORT" in signal.signal_type else "BUY"
+                    if "NEUTRAL" in details or "NEUTRAL" in (signal.reason or ""):
+                        outcome = f"HITL_PAUSED_{signal.signal_type}"
+                        details = f"High Risk Add paused due to NEUTRAL candle formation. HITL card dispatched to Hermes Kanban."
+                        if self.state_manager.hermes_webhook:
+                            try:
+                                from mms4tk.hermes_webhook import HermesWebhookEvent
+                                self.state_manager.hermes_webhook.emit_event(
+                                    HermesWebhookEvent(
+                                        event_type="HIGH_RISK_ADD_HITL",
+                                        title=f"HITL: HIGH_RISK_ADD Pending Approval ({self.symbol})",
+                                        body=f"High Risk Add 30% (${self.addon_trade_usd:.2f}) triggered, but candle formation is NEUTRAL. Approve via Web UI or API.",
+                                        metadata={"symbol": self.symbol, "side": side, "addon_usd": self.addon_trade_usd},
+                                        priority=3
+                                    )
+                                )
+                            except Exception as we:
+                                logger.error(f"Failed to emit HITL webhook: {we}")
+                    else:
+                        # 3. Execute automated HIGH_RISK_ADD and composite SL (1.25%)
+                        try:
+                            order_info = await self.executor.execute_order(
+                                symbol=self.symbol,
+                                side=side,
+                                amount=addon_order_amount,
+                                stop_loss_pct=0.0125,  # Composite SL 1.25%
+                                leverage=1.0,
+                                price=signal.price
+                            )
+                            outcome = f"EXECUTED_{signal.signal_type}"
+                            details = f"Executed High Risk Add order for 30% cap (${self.addon_trade_usd:.2f} USD / {addon_order_amount} units) with composite SL=1.25%"
+                            if self.state_manager.hermes_webhook:
+                                try:
+                                    from mms4tk.hermes_webhook import HermesWebhookEvent
+                                    self.state_manager.hermes_webhook.emit_event(
+                                        HermesWebhookEvent(
+                                            event_type="HIGH_RISK_ADD_EXECUTED",
+                                            title=f"Automated HIGH_RISK_ADD Executed ({side} {self.symbol})",
+                                            body=f"Automated High Risk Add 30% (${self.addon_trade_usd:.2f}) executed on OKX EEA X-Perp. Composite SL updated to 1.25%.",
+                                            metadata={"symbol": self.symbol, "side": side, "addon_usd": self.addon_trade_usd, "order_id": order_info.get("id")},
+                                            priority=4
+                                        )
+                                    )
+                                except Exception as we:
+                                    logger.error(f"Failed to emit execution webhook: {we}")
+                        except Exception as e:
+                            outcome = f"ERROR_{signal.signal_type}"
+                            details = f"Failed to execute High Risk Add: {str(e)}"
 
         # 4. Log cycle outcome and state metrics
         self.logger_db.log_cycle(
