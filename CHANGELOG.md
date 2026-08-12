@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 📌 [0.6.1] - 2026-08-12
+
+### 🐛 Fixes & Dynamic Version Resolution
+- 📌 **Docker Volume Version Mounting**: Mounted `./VERSION:/app/VERSION:ro` in `docker-compose.yml` so `ui_dashboard` container accesses the authoritative root `VERSION` file.
+- 🔄 **Dynamic Package Version Import**: Added fallback import of `mms4tk.__version__` in `app.py` to prevent stale version string fallbacks.
+
+---
+
 ## 📊 [0.6.0] - 2026-08-12
 
 ### ✨ Scalable Analytics & Interactive Charts Redesign

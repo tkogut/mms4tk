@@ -219,14 +219,25 @@ def fetch_closed_trades_df():
 
 
 # Version Reader
-VERSION_FILE_PATH = os.path.join(os.path.dirname(__file__), "..", "VERSION")
-APP_VERSION = "0.5.2"
-if os.path.exists(VERSION_FILE_PATH):
-    try:
-        with open(VERSION_FILE_PATH, "r", encoding="utf-8") as vf:
-            APP_VERSION = vf.read().strip()
-    except Exception:
-        pass
+APP_VERSION = "0.6.1"
+try:
+    from mms4tk import __version__ as mms_ver
+    APP_VERSION = mms_ver
+except Exception:
+    pass
+
+for v_path in [
+    os.path.join(os.path.dirname(__file__), "..", "VERSION"),
+    os.path.join(os.path.dirname(__file__), "VERSION"),
+    "/app/VERSION"
+]:
+    if os.path.exists(v_path):
+        try:
+            with open(v_path, "r", encoding="utf-8") as vf:
+                APP_VERSION = vf.read().strip()
+                break
+        except Exception:
+            pass
 
 # Navigation Title Header
 st.markdown(f"""

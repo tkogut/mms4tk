@@ -23,6 +23,7 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./.agents/swarm:/app/.agents/swarm:ro
+      - ./VERSION:/app/VERSION:ro
     env_file:
       - .env
     labels:
