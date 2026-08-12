@@ -31,18 +31,9 @@ services:
       - "traefik.http.routers.mastermind_ui.rule=Host(`mastermind.srv1490214.hstgr.cloud`)"
       - "traefik.http.routers.mastermind_ui.tls.certresolver=letsencrypt"
       - "traefik.http.routers.mastermind_ui.tls=true"
+      - "traefik.http.routers.mastermind_ui.middlewares=mastermind-auth"
+      - "traefik.http.middlewares.mastermind-auth.basicauth.users=${MMS4_UI_BASIC_AUTH:-admin:$$apr1$$bOlaZh5l$$zvGYEbcw40PvXbQEhpSkM1}"
       - "traefik.http.services.mastermind_ui.loadbalancer.server.port=8501"
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared_mastermind
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    networks:
-      - internal_swarm_net
-      - traefik-proxy
-    env_file:
-      - .env
 
 networks:
   internal_swarm_net:
