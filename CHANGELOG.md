@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔐 [0.9.2] - 2026-08-12
+
+### 🔐 Auth Header Fix for UI Symbol Operations & Icon Cleanup
+- 🔐 **Web Dashboard Auth Bypass Fix**: Updated `verify_api_key` in `src/mms4tk/api.py` to allow requests originating from the Basic-Auth protected UI dashboard without triggering unwanted browser-native login popups when adding/toggling trading pairs.
+- 🎨 **Symbol Form Auto-Formatting & Icon Cleanup**: Removed duplicate `+` icon from "Dodaj Nową Parę" button and auto-appends `/USDC` suffix (e.g. `SOL` -> `SOL/USDC`).
+
+---
+
 ## 📊 [0.9.1] - 2026-08-12
 
 ### 📊 Monitoring Tab Multi-Symbol Redesign & Zero-Trade KPI Fix

@@ -34,7 +34,15 @@ export function SymbolsTab({ apiKey }) {
 
   const handleAddSymbol = async (e) => {
     e.preventDefault();
-    if (!newSymbolInput.trim()) return;
+    let raw = newSymbolInput.trim().toUpperCase();
+    if (!raw) return;
+    if (!raw.includes('/')) {
+      if (raw.endsWith('USDC')) {
+        raw = raw.replace('USDC', '/USDC');
+      } else {
+        raw = raw + '/USDC';
+      }
+    }
     setLoading(true);
     try {
       const currentKey = apiKey || 'test-api-auth-key-unit-test';
@@ -44,21 +52,22 @@ export function SymbolsTab({ apiKey }) {
           'Content-Type': 'application/json',
           'X-MMS4-API-KEY': currentKey
         },
-        body: JSON.stringify({ symbol: newSymbolInput.trim().toUpperCase(), is_active: true })
+        body: JSON.stringify({ symbol: raw, is_active: true })
       });
       if (res.ok) {
-        setMsg(`✓ Para ${newSymbolInput.toUpperCase()} została pomyślnie aktywowana!`);
+        setMsg(`✓ Para ${raw} została pomyślnie aktywowana!`);
         setNewSymbolInput('');
         setIsModalOpen(false);
         fetchSymbols();
       } else {
-        setMsg('❌ Błąd dodawania pary');
+        const errData = await res.json().catch(() => ({}));
+        setMsg(`❌ Błąd dodawania pary: ${errData.detail || 'Operacja odrzucona'}`);
       }
     } catch (err) {
       setMsg('❌ Błąd połączenia z API');
     } finally {
       setLoading(false);
-      setTimeout(() => setMsg(''), 4000);
+      setTimeout(() => setMsg(''), 5000);
     }
   };
 
@@ -113,10 +122,10 @@ export function SymbolsTab({ apiKey }) {
 
         <button
           onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-colors shadow-md shadow-blue-500/20"
+          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-colors shadow-md shadow-blue-500/20"
         >
           <Plus className="w-4 h-4" />
-          <span>➕ Dodaj Nową Parę</span>
+          <span>Dodaj Nową Parę</span>
         </button>
       </div>
 
