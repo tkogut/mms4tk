@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## ⏱️ [0.6.5] - 2026-08-12
+
+### 📈 Dynamic Plotly X-Axis Range Scaling Across Timeframes
+- ⏱️ **Explicit Axis Range Scaling (`range=[cutoff_dt, now]`)**: Dynamically pass `xaxis_range` to Plotly for every timeframe option (`4h`, `1d`, `7d`, `30d`, `3m`, `6m`, `1y`, `5y`).
+- 🎯 **Visual Context Expansion**: Ensures the X-axis visibly expands and scales to match the selected timeframe even when data is sparse or young (e.g. 14 hours of history).
+
+---
+
 ## ⏱️ [0.6.4] - 2026-08-12
 
 ### 🐛 Timeframe Filter Datetime & Fallback Fixes

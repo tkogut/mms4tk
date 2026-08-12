@@ -370,34 +370,36 @@ with tab_analytics:
         # Filter DataFrame by selected time_range safely with UTC Timestamps
         now = pd.Timestamp.now(tz="UTC")
         filtered_df = df.copy()
+        cutoff_dt = None
+
         if time_range == "4h":
-            cutoff = now - pd.Timedelta(hours=4)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(hours=4)
         elif time_range == "1d":
-            cutoff = now - pd.Timedelta(days=1)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=1)
         elif time_range == "7d":
-            cutoff = now - pd.Timedelta(days=7)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=7)
         elif time_range == "30d":
-            cutoff = now - pd.Timedelta(days=30)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=30)
         elif time_range == "3m":
-            cutoff = now - pd.Timedelta(days=90)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=90)
         elif time_range == "6m":
-            cutoff = now - pd.Timedelta(days=180)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=180)
         elif time_range == "1y":
-            cutoff = now - pd.Timedelta(days=365)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=365)
         elif time_range == "5y":
-            cutoff = now - pd.Timedelta(days=1825)
-            filtered_df = df[df["timestamp"] >= cutoff]
+            cutoff_dt = now - pd.Timedelta(days=1825)
+
+        if cutoff_dt is not None:
+            filtered_df = df[df["timestamp"] >= cutoff_dt]
 
         if filtered_df.empty:
             st.info(f"ℹ️ Brak zamkniętych pozycji w wybranym oknie czasowym ({time_range}). Wyświetlanie pełnej dostępnej historii.")
             filtered_df = df
+
+        # Dynamic X-Axis Range for Plotly
+        xaxis_config = dict(showgrid=True, gridcolor="#1e293b")
+        if cutoff_dt is not None:
+            xaxis_config["range"] = [cutoff_dt, now]
 
         # 1. Equity Curve Chart
         st.markdown("#### 📈 Cumulative PnL (Equity Curve)")
@@ -420,7 +422,7 @@ with tab_analytics:
             margin=dict(l=15, r=15, t=35, b=25),
             showlegend=False,
             modebar=dict(orientation="h", bgcolor="rgba(0,0,0,0)", color="#94a3b8", activecolor="#60a5fa"),
-            xaxis=dict(showgrid=True, gridcolor="#1e293b"),
+            xaxis=xaxis_config,
             yaxis=dict(showgrid=True, gridcolor="#1e293b", title="PnL (USD)")
         )
         st.plotly_chart(fig_equity, use_container_width=True, config={"displayModeBar": True, "displaylogo": False, "scrollZoom": False})
@@ -468,7 +470,7 @@ with tab_analytics:
                     bgcolor="rgba(0,0,0,0)",
                     font=dict(size=11, color="#94a3b8")
                 ),
-                xaxis=dict(showgrid=True, gridcolor="#1e293b"),
+                xaxis=xaxis_config,
                 yaxis=dict(showgrid=True, gridcolor="#1e293b", title="Return %")
             )
             st.plotly_chart(fig_bench, use_container_width=True, config={"displayModeBar": True, "displaylogo": False, "scrollZoom": False})
