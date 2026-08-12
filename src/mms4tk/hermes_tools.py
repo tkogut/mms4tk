@@ -131,7 +131,7 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "high_risk_add",
-                    "description": "Force high-risk position addition (leverage x1, tight SL=1%). Blocked in SCOUT_MODE. Requires X-MMS4-API-KEY header.",
+                    "description": "Force high-risk position addition (30% cap, composite SL=1.25%). Blocked in SCOUT_MODE. Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
                         "properties": {
