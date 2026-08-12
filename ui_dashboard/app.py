@@ -397,19 +397,8 @@ with tab_analytics:
         if filtered_df.empty:
             filtered_df = df.iloc[-10:] if len(df) >= 10 else df
 
-        # Common Plotly Rangeselector Buttons Configuration
-        plotly_range_buttons = list([
-            dict(count=4, label="4h", step="hour", stepmode="backward"),
-            dict(count=1, label="1d", step="day", stepmode="backward"),
-            dict(count=7, label="7d", step="day", stepmode="backward"),
-            dict(count=30, label="30d", step="day", stepmode="backward"),
-            dict(count=3, label="3m", step="month", stepmode="backward"),
-            dict(count=6, label="6m", step="month", stepmode="backward"),
-            dict(count=1, label="1y", step="year", stepmode="backward"),
-            dict(step="all", label="ALL")
-        ])
-
         # 1. Equity Curve Chart
+        st.markdown("#### 📈 Cumulative PnL (Equity Curve)")
         fig_equity = bg.Figure()
         fig_equity.add_trace(bg.Scatter(
             x=filtered_df["timestamp"],
@@ -421,44 +410,30 @@ with tab_analytics:
             fillcolor="rgba(16, 185, 129, 0.12)"
         ))
         fig_equity.update_layout(
-            title="Cumulative PnL (Equity Curve)",
             template="plotly_dark",
             paper_bgcolor="#0f172a",
             plot_bgcolor="#0f172a",
             hovermode="x unified",
-            margin=dict(l=20, r=20, t=50, b=30),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1,
-                bgcolor="rgba(0,0,0,0)",
-                font=dict(size=11, color="#94a3b8")
-            ),
-            xaxis=dict(
-                showgrid=True, gridcolor="#1e293b",
-                rangeselector=dict(
-                    buttons=plotly_range_buttons,
-                    bgcolor="#1e293b",
-                    activecolor="#3b82f6",
-                    font=dict(color="#f8fafc", size=10)
-                )
-            ),
+            margin=dict(l=15, r=15, t=15, b=25),
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor="#1e293b"),
             yaxis=dict(showgrid=True, gridcolor="#1e293b", title="PnL (USD)")
         )
-        st.plotly_chart(fig_equity, use_container_width=True)
+        st.plotly_chart(fig_equity, use_container_width=True, config={"displayModeBar": False})
 
         # 2. Benchmark vs Buy & Hold Chart
-        if "entry_price" in filtered_df.columns and not filtered_df.empty:
-            base_price = filtered_df["entry_price"].iloc[0] if filtered_df["entry_price"].iloc[0] > 0 else 1.0
-            filtered_df["btc_benchmark"] = (filtered_df["entry_price"] / base_price - 1.0) * 100
-            filtered_df["bot_return_pct"] = (filtered_df["cum_pnl"] / 10.0) * 100
+        st.markdown("#### ⚖️ Mastermind Bot vs BTC Buy & Hold Benchmark")
+        bench_df = filtered_df[filtered_df.get("entry_price", pd.Series([0])) > 0].copy() if "entry_price" in filtered_df.columns else pd.DataFrame()
+        
+        if not bench_df.empty:
+            base_price = bench_df["entry_price"].iloc[0]
+            bench_df["btc_benchmark"] = ((bench_df["entry_price"] / base_price) - 1.0) * 100
+            bench_df["bot_return_pct"] = (bench_df["cum_pnl"] / 10.0) * 100
 
             fig_bench = bg.Figure()
             fig_bench.add_trace(bg.Scatter(
-                x=filtered_df["timestamp"],
-                y=filtered_df["bot_return_pct"],
+                x=bench_df["timestamp"],
+                y=bench_df["bot_return_pct"],
                 mode="lines",
                 name="Mastermind Bot Return %",
                 line=dict(color="#3b82f6", width=3),
@@ -466,40 +441,31 @@ with tab_analytics:
                 fillcolor="rgba(59, 130, 246, 0.12)"
             ))
             fig_bench.add_trace(bg.Scatter(
-                x=filtered_df["timestamp"],
-                y=filtered_df["btc_benchmark"],
+                x=bench_df["timestamp"],
+                y=bench_df["btc_benchmark"],
                 mode="lines",
                 name="BTC Buy & Hold %",
                 line=dict(color="#f59e0b", width=2, dash="dash")
             ))
             fig_bench.update_layout(
-                title="Mastermind Bot vs BTC Buy & Hold Benchmark",
                 template="plotly_dark",
                 paper_bgcolor="#0f172a",
                 plot_bgcolor="#0f172a",
                 hovermode="x unified",
-                margin=dict(l=20, r=20, t=50, b=30),
+                margin=dict(l=15, r=15, t=35, b=25),
                 legend=dict(
                     orientation="h",
                     yanchor="bottom",
                     y=1.02,
-                    xanchor="right",
-                    x=1,
+                    xanchor="left",
+                    x=0,
                     bgcolor="rgba(0,0,0,0)",
                     font=dict(size=11, color="#94a3b8")
                 ),
-                xaxis=dict(
-                    showgrid=True, gridcolor="#1e293b",
-                    rangeselector=dict(
-                        buttons=plotly_range_buttons,
-                        bgcolor="#1e293b",
-                        activecolor="#3b82f6",
-                        font=dict(color="#f8fafc", size=10)
-                    )
-                ),
+                xaxis=dict(showgrid=True, gridcolor="#1e293b"),
                 yaxis=dict(showgrid=True, gridcolor="#1e293b", title="Return %")
             )
-            st.plotly_chart(fig_bench, use_container_width=True)
+            st.plotly_chart(fig_bench, use_container_width=True, config={"displayModeBar": False})
     else:
         st.info("Insufficient trade history in SQLite (logs.db) to render Plotly charts. The 15-min sync worker runs automatically in background.")
 

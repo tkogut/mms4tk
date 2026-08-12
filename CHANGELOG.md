@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 🎨 [0.6.2] - 2026-08-12
+
+### 🐛 Chart Overlap Fixes & Benchmark Y-Axis Normalization
+- 🎨 **Chart Title & Legend Collision Fix**: Extracted chart headers to Markdown headings (`st.markdown("#### ...")`) and positioned legend neatly at top-left (`y=1.02`, `x=0`), removing native Plotly rangeselector/modebar overlaps.
+- 📈 **Benchmark Y-Axis Normalization**: Filtered out invalid 0.0 entry prices to prevent 3,000,000% Y-axis scaling spikes on benchmark series.
+
+---
+
 ## 📌 [0.6.1] - 2026-08-12
 
 ### 🐛 Fixes & Dynamic Version Resolution
