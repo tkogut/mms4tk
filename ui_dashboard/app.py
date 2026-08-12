@@ -34,7 +34,7 @@ ENV_FILE_PATH = os.environ.get("MMS4_ENV_PATH", ".env")
 # Page Config
 st.set_page_config(
     page_title="Mastermind Control Center",
-    page_icon="🤖",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -48,6 +48,8 @@ def load_mobile_pwa_assets():
         <meta name="mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
         <link rel="manifest" href="/app/static/manifest.json">
+        <link rel="icon" type="image/png" href="/app/static/icon.png">
+        <link rel="apple-touch-icon" href="/app/static/icon.png">
 
         <!-- Service Worker Registration -->
         <script>
