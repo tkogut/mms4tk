@@ -25,6 +25,12 @@
       "label": "Okx Api Guide",
       "type": "Expert Knowledge",
       "description": "Knowledge base note synchronized from NotebookLM: Okx Api Guide"
+    },
+    {
+      "id": ".agents/specs/knowledge/okx_europe_eea_x_perps.md",
+      "label": "Okx Europe Eea X Perps",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: OKX Europe (EEA) X-Perps API Guide"
     }
   ],
   "edges": [
@@ -42,10 +48,15 @@
       "source": ".agents/specs/AGENTS-OS.md",
       "target": ".agents/specs/knowledge/okx-api-guide.md",
       "relation": "governs_knowledge"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/okx_europe_eea_x_perps.md",
+      "relation": "governs_knowledge"
     }
   ],
   "metadata": {
-    "last_distillation": "2026-08-09",
+    "last_distillation": "2026-08-12",
     "source": "Inception Engine"
   }
 }

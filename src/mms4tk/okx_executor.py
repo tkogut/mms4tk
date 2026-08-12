@@ -144,6 +144,28 @@ class OKXExecutor:
         logger.error(f"Error fetching candles from OKX for {target_symbol}: {type(last_error).__name__}: {str(last_error)}. Falling back to mock candles.")
         return _generate_mock_candles(count=limit)
 
+    async def discover_eea_xperp_symbol(self, symbol: str = "BTC") -> Optional[str]:
+        """
+        Discover active live X-Perp instrument ID for OKX Europe (EEA).
+        Queries OKX FUTURES instruments and filters ruleType=='xperp' and state=='live'.
+        Example return: 'BTC-USD_UM_XPERP-310404'
+        """
+        clean_base = symbol.split("/")[0].split("-")[0].split(":")[0].upper()
+        try:
+            ex = self.exchange or ccxt.okx({"enableRateLimit": True, "urls": {"api": {"rest": "https://eea.okx.com"}}})
+            res = await ex.publicGetPublicInstruments({"instType": "FUTURES"})
+            if res and "data" in res:
+                for inst in res["data"]:
+                    if inst.get("ruleType") == "xperp" and inst.get("state") == "live":
+                        inst_id = inst.get("instId", "")
+                        inst_family = inst.get("instFamily", "")
+                        if clean_base in inst_id or clean_base in inst_family:
+                            logger.info(f"Discovered OKX EEA X-Perp instrument for {symbol}: {inst_id}")
+                            return inst_id
+        except Exception as e:
+            logger.warning(f"Failed to discover EEA X-Perp instrument for {symbol}: {e}")
+        return None
+
     def calculate_order_amount(self, symbol: str, target_usd: float, price: float) -> float:
         """
         Calculate precise order amount (contracts or coins) for target USD allocation.
@@ -156,10 +178,10 @@ class OKXExecutor:
             try:
                 market = self.exchange.market(symbol)
                 contract_size = market.get("contractSize") or 1.0
-                is_contract = market.get("swap", False) or market.get("contract", False) or ":" in symbol
+                is_contract = market.get("swap", False) or market.get("contract", False) or ":" in symbol or "XPERP" in symbol
                 if is_contract and contract_size > 0:
                     raw_contracts = target_usd / (price * contract_size)
-                    min_amt = market.get("limits", {}).get("amount", {}).get("min") or 0.01
+                    min_amt = market.get("limits", {}).get("amount", {}).get("min") or 1.0
                     amount = max(raw_contracts, min_amt)
                     formatted = self.exchange.amount_to_precision(symbol, amount)
                     return float(formatted)
@@ -169,6 +191,12 @@ class OKXExecutor:
                     return float(formatted)
             except Exception as e:
                 logger.warning(f"Failed to compute precision amount for {symbol}: {e}")
+
+        # Fallback contract calculation for OKX EEA BTC X-Perp (ctVal = 0.0001 BTC per contract)
+        if "XPERP" in symbol or "BTC" in symbol:
+            ct_val = 0.0001
+            raw_contracts = max(1.0, round(target_usd / (price * ct_val)))
+            return raw_contracts
 
         return round(target_usd / price, 6)
 
@@ -184,15 +212,22 @@ class OKXExecutor:
     ) -> Dict[str, Any]:
         """
         Execute market order on OKX.
-        For Futures/Swap markets, automatically sets leverage and attaches Stop Loss trigger price.
+        For Futures/Swap/X-Perp markets, automatically resolves EEA instId, sets leverage, and attaches Stop Loss trigger price.
         """
         side_lower = side.lower()
 
+        # Attempt to resolve EEA X-Perp instrument if symbol is standard spot/swap
+        target_symbol = symbol
+        if "XPERP" not in symbol and ":" not in symbol:
+            eea_xperp = await self.discover_eea_xperp_symbol(symbol)
+            if eea_xperp:
+                target_symbol = eea_xperp
+
         if not self.has_credentials or self.exchange is None:
-            logger.info(f"Mock Order Execution: symbol={symbol}, side={side}, amount={amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
+            logger.info(f"Mock Order Execution: symbol={target_symbol}, side={side}, amount={amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
             return {
                 "id": f"mock_order_{int(time.time()*1000)}",
-                "symbol": symbol,
+                "symbol": target_symbol,
                 "side": side_lower,
                 "amount": amount,
                 "leverage": leverage,
@@ -203,45 +238,51 @@ class OKXExecutor:
 
         try:
             is_spot = False
-            if self.exchange.markets and symbol in self.exchange.markets:
-                is_spot = self.exchange.markets[symbol].get("spot", False)
-            elif ":" not in symbol:
+            if self.exchange.markets and target_symbol in self.exchange.markets:
+                is_spot = self.exchange.markets[target_symbol].get("spot", False)
+            elif ":" not in target_symbol and "XPERP" not in target_symbol:
                 is_spot = True
 
             if not is_spot:
                 try:
-                    await self.set_leverage(leverage, symbol)
+                    await self.set_leverage(leverage, target_symbol)
                 except Exception as lev_err:
-                    logger.warning(f"Skipping set_leverage for {symbol}: {lev_err}")
+                    logger.warning(f"Skipping set_leverage for {target_symbol}: {lev_err}")
 
             params = {}
+            if not is_spot:
+                params["tdMode"] = "cross"
+
             if not is_spot and stop_loss_pct > 0:
                 current_price = price
                 if not current_price or current_price <= 0:
                     try:
-                        ticker = await self.exchange.fetch_ticker(symbol)
+                        ticker = await self.exchange.fetch_ticker(target_symbol)
                         current_price = float(ticker.get("last") or ticker.get("close") or 0.0)
                     except Exception as tick_err:
-                        logger.warning(f"Could not fetch ticker price for SL calculation on {symbol}: {tick_err}")
+                        logger.warning(f"Could not fetch ticker price for SL calculation on {target_symbol}: {tick_err}")
                 
                 if current_price and current_price > 0:
                     if side_lower == "buy":
                         sl_price = current_price * (1.0 - stop_loss_pct)
                     else:
                         sl_price = current_price * (1.0 + stop_loss_pct)
-                    params["stopLoss"] = {"triggerPrice": self.exchange.price_to_precision(symbol, sl_price)}
+                    try:
+                        params["stopLoss"] = {"triggerPrice": self.exchange.price_to_precision(target_symbol, sl_price)}
+                    except Exception:
+                        params["stopLoss"] = {"triggerPrice": str(round(sl_price, 1))}
 
             order = await self.exchange.create_order(
-                symbol=symbol,
+                symbol=target_symbol,
                 type="market",
                 side=side_lower,
                 amount=amount,
                 params=params
             )
-            logger.info(f"Successfully executed OKX order {order.get('id')} for {symbol}")
+            logger.info(f"Successfully executed OKX order {order.get('id')} for {target_symbol}")
             return order
         except Exception as e:
-            logger.error(f"Error executing order on OKX: {type(e).__name__}: {str(e)}")
+            logger.error(f"Error executing order on OKX for {target_symbol}: {type(e).__name__}: {str(e)}")
             raise
 
     async def set_hedge_mode(self, symbol: Optional[str] = None) -> Dict[str, Any]:
