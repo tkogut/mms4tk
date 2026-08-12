@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 📋 [0.6.6] - 2026-08-12
+
+### 🐛 Dashboard Kanban Cards & Completed Status Filter
+- 📋 **Live Kanban Status Filtering**: Updated `fetch_kanban_cards()` to query active Hermes CLI card statuses (filtering out `done`, `closed`, and `archived` cards).
+- 🧹 **Undispatched Webhook Events Filter**: Filtered `webhook_events` to only display pending undispatched events (`dispatched = 0`), preventing historic completed alerts from polluting Tab 1 Monitoring.
+
+---
+
 ## ⏱️ [0.6.5] - 2026-08-12
 
 ### 📈 Dynamic Plotly X-Axis Range Scaling Across Timeframes

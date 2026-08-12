@@ -168,15 +168,38 @@ def fetch_okx_positions():
     return []
 
 def fetch_kanban_cards():
-    """Fetch Kanban cards from Hermes SQLite or mms4tk webhook_events."""
+    """Fetch pending undispatched Kanban cards / HITL events from logs.db or Hermes CLI."""
     cards = []
-    # 1. Try mms4tk webhook_events in logs.db
+    # 1. Try Hermes CLI / JSON if available inside environment
+    try:
+        import subprocess, json
+        res = subprocess.run(["hermes", "kanban", "list", "--json"], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0 and res.stdout.strip():
+            kanban_data = json.loads(res.stdout)
+            for k in kanban_data:
+                status = str(k.get("status", "")).lower()
+                if status not in ["done", "archived", "closed"]:
+                    cards.append({
+                        "id": k.get("id"),
+                        "title": k.get("title"),
+                        "body": k.get("description", k.get("title")),
+                        "event_type": status.upper(),
+                        "dispatched": 1,
+                        "timestamp": k.get("created_at", "")
+                    })
+            if cards:
+                return cards
+    except Exception:
+        pass
+
+    # 2. Fallback to undispatched (pending) webhook_events in logs.db
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM webhook_events ORDER BY id DESC LIMIT 20")
+            # Only fetch undispatched (pending) events! Events already sent & completed by Hermes are ignored.
+            cursor.execute("SELECT * FROM webhook_events WHERE dispatched = 0 ORDER BY id DESC LIMIT 20")
             rows = cursor.fetchall()
             for r in rows:
                 cards.append({
@@ -219,7 +242,7 @@ def fetch_closed_trades_df():
 
 
 # Version Reader
-APP_VERSION = "0.6.4"
+APP_VERSION = "0.6.6"
 try:
     from mms4tk import __version__ as mms_ver
     APP_VERSION = mms_ver
