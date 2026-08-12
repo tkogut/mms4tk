@@ -194,9 +194,9 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Activity className="w-5 h-5 text-emerald-400" />
-              <h3 className="font-semibold text-gray-200">Ścieżka Ceny BTC & Pasma TMA ({currentTfObj.label})</h3>
+              <h3 className="font-semibold text-gray-200">Ścieżka Ceny {selectedSymbol} & Pasma TMA ({currentTfObj.label})</h3>
             </div>
-            <span className="text-xs text-slate-400 font-mono">OKX Spot BTC/USDC</span>
+            <span className="text-xs text-slate-400 font-mono">OKX Spot {selectedSymbol}</span>
           </div>
 
           <div className="h-64 w-full">
@@ -215,7 +215,7 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
                   <Tooltip 
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#fff' }}
                   />
-                  <Area type="monotone" dataKey="price" stroke="#10b981" fillOpacity={1} fill="url(#priceGrad)" strokeWidth={2} name="Cena BTC" />
+                  <Area type="monotone" dataKey="price" stroke="#10b981" fillOpacity={1} fill="url(#priceGrad)" strokeWidth={2} name={`Cena ${selectedSymbol.split('/')[0]}`} />
                   <Line type="monotone" dataKey="tma" stroke="#3b82f6" strokeWidth={1.5} dot={false} name="Średnia TMA" />
                   <Line type="monotone" dataKey="upper" stroke="#ef4444" strokeWidth={1} strokeDasharray="3 3" dot={false} name="Górne Pasmo" />
                   <Line type="monotone" dataKey="lower" stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 3" dot={false} name="Dolne Pasmo" />

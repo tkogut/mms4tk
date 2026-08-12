@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 📈 [0.9.3] - 2026-08-12
+
+### 📈 Dynamic Symbol Titles & Labels in Analytics Price Chart
+- 📈 **Dynamic Chart Titles**: Updated `AnalyticsTab.jsx` price chart title and tooltips to adapt dynamically to the currently selected symbol (e.g. `Ścieżka Ceny ETH/USDC & Pasma TMA`, `Cena ETH`), removing all hardcoded BTC text.
+
+---
+
 ## 🔐 [0.9.2] - 2026-08-12
 
 ### 🔐 Auth Header Fix for UI Symbol Operations & Icon Cleanup
