@@ -33,6 +33,17 @@ services:
       - "traefik.http.routers.mastermind_ui.tls=true"
       - "traefik.http.services.mastermind_ui.loadbalancer.server.port=8501"
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared_mastermind
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks:
+      - internal_swarm_net
+      - traefik-proxy
+    env_file:
+      - .env
+
 networks:
   internal_swarm_net:
     driver: bridge
