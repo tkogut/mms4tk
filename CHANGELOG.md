@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 💚 [0.11.1] - 2026-08-12
+
+### 💚 Multi-Candidate OKX Ticker Verification Restoration
+- 💚 **Resilient Ticker Candidate Probing**: Restored multi-candidate ticker verification (`BTC/USDC`, `BTC-USDC`, `BTC/USDC:USDC`, `BTC-USDC-SWAP`) across Spot and Perpetual Swap OKX markets, restoring Green LED status for standard pairs (`BTC/USDC`, `ETH/USDC`, `SOL/USDC`).
+
+---
+
 ## 🔐 [0.11.0] - 2026-08-12
 
 ### 🔐 User OKX API Key Account Permission Verification

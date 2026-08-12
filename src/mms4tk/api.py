@@ -596,7 +596,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
         leverage = state_manager.get_symbol_leverage(sym)
         
         # Live one-time OKX API verification lookup
-        if sym not in okx_verification_cache:
+        if sym not in okx_verification_cache or not okx_verification_cache[sym].get("okx_verified"):
             v_res = await executor.verify_symbol_with_okx(sym)
             okx_verification_cache[sym] = v_res
         else:

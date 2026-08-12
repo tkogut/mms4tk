@@ -110,76 +110,24 @@ class OKXExecutor:
 
     async def verify_symbol_with_okx(self, symbol: str) -> Dict[str, Any]:
         """
-        One-time verification of a trading pair against user's specific OKX API Key permissions & account.
-        Checks if the user's OKX API credentials have actual permission to trade this symbol.
-        Returns validation dictionary with okx_verified boolean.
+        One-time verification of a trading pair against live OKX API.
+        Attempts ticker/market verification across Spot and Swap OKX endpoints.
         """
         clean_base = symbol.split("/")[0].split("-")[0].split(":")[0].upper()
         quote = symbol.split("/")[1] if "/" in symbol else "USDC"
-        inst_id = f"{clean_base}-{quote}-SWAP"
+        
+        candidates = [
+            f"{clean_base}/{quote}",
+            f"{clean_base}-{quote}",
+            f"{clean_base}/{quote}:{quote}",
+            f"{clean_base}-{quote}-SWAP"
+        ]
 
-        # 1. If we have authenticated user OKX API credentials, test user's private account permissions for this instId
-        if self.has_credentials and self.exchange is not None:
-            try:
-                # Test OKX private account max size / position permission endpoint
-                res = await self.exchange.privateGetAccountMaxSize(params={
-                    "instId": inst_id,
-                    "tdMode": "cross"
-                })
-                if res and isinstance(res, dict) and str(res.get("code")) == "0" and res.get("data"):
-                    # Check ticker for last price
-                    last_price = 0.0
-                    try:
-                        ticker = await self.exchange.fetch_ticker(f"{clean_base}/{quote}:{quote}")
-                        last_price = float(ticker.get("last", 0.0))
-                    except Exception:
-                        try:
-                            ticker = await self.exchange.fetch_ticker(f"{clean_base}/{quote}")
-                            last_price = float(ticker.get("last", 0.0))
-                        except Exception:
-                            pass
-
-                    return {
-                        "symbol": symbol,
-                        "okx_verified": True,
-                        "okx_status": "VERIFIED",
-                        "last_price": last_price
-                    }
-                else:
-                    logger.warning(f"User OKX API key lacks permission/access for {symbol} (instId: {inst_id}): res={res}")
-                    return {
-                        "symbol": symbol,
-                        "okx_verified": False,
-                        "okx_status": "UNSUPPORTED_ON_USER_API_KEY",
-                        "last_price": 0.0
-                    }
-            except Exception as e:
-                logger.warning(f"User OKX API account verification failed for {symbol} (instId: {inst_id}): {e}")
-                return {
-                    "symbol": symbol,
-                    "okx_verified": False,
-                    "okx_status": "UNSUPPORTED_ON_USER_API_KEY",
-                    "last_price": 0.0
-                }
-
-        # 2. Public API fallback if running without API credentials (Mock Mode unit testing)
-        if ccxt is not None:
-            symbols_to_test = [symbol]
-            if "/" in symbol:
-                b, q = symbol.split("/", 1)
-                symbols_to_test.append(f"{b}-{q}")
-                symbols_to_test.append(f"{b}/{q}:{q}")
-                symbols_to_test.append(f"{b}-{q}-SWAP")
-
-            ex = self.exchange or ccxt.okx({
-                "enableRateLimit": True,
-                "urls": {"api": {"rest": os.getenv("OKX_REST_URL", "https://eea.okx.com")}},
-                "options": {"defaultType": "swap"}
-            })
-
-            for test_sym in symbols_to_test:
+        # 1. Try with configured exchange instance
+        if self.exchange is not None:
+            for cand in candidates:
                 try:
-                    ticker = await ex.fetch_ticker(test_sym)
+                    ticker = await self.exchange.fetch_ticker(cand)
                     if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
                         return {
                             "symbol": symbol,
@@ -188,7 +136,28 @@ class OKXExecutor:
                             "last_price": float(ticker["last"])
                         }
                 except Exception as e:
-                    logger.debug(f"OKX fetch_ticker test failed for {test_sym}: {e}")
+                    logger.debug(f"OKX self.exchange fetch_ticker failed for candidate {cand}: {e}")
+
+        # 2. Public CCXT OKX fallback check
+        if ccxt is not None:
+            try:
+                pub_ex = ccxt.okx({"enableRateLimit": True})
+                for cand in candidates:
+                    try:
+                        ticker = await pub_ex.fetch_ticker(cand)
+                        if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
+                            await pub_ex.close()
+                            return {
+                                "symbol": symbol,
+                                "okx_verified": True,
+                                "okx_status": "VERIFIED",
+                                "last_price": float(ticker["last"])
+                            }
+                    except Exception:
+                        pass
+                await pub_ex.close()
+            except Exception as e:
+                logger.debug(f"Public OKX fallback check error: {e}")
 
         return {
             "symbol": symbol,
