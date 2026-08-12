@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔑 [0.13.0] - 2026-08-12
+
+### 🔑 OKX API Key Trade Fee Permission Probe (`GET /api/v5/account/trade-fee`)
+- 🔑 **Authenticated Trade Fee Probe**: Updated `verify_symbol_with_okx` in `src/mms4tk/okx_executor.py` to query `privateGetAccountTradeFee` directly for the user's specific API Key. This asks OKX's private authenticated API for exact trading permissions and fee schedules per pair, correctly setting Red LED badges 🔴 for unpermitted pairs.
+
+---
+
 ## 🎯 [0.12.2] - 2026-08-12
 
 ### 🎯 Account-Specific Permitted Instrument Whitelist Check (`GET /api/v5/account/instruments`)

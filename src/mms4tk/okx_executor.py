@@ -171,38 +171,21 @@ class OKXExecutor:
             inst_spot = f"{clean_base}-{quote}"
             
             permitted = False
-            error_reason = f"Para {symbol} nie jest włączona na Twoim koncie OKX"
+            error_reason = f"Klucz API OKX nie posiada uprawnień do tradowania pary {symbol} na Twoim koncie"
 
-            # Query OKX private account instruments permission list (GET /api/v5/account/instruments)
-            user_allowed_inst_ids = set()
-            for itype in ["SWAP", "SPOT", "FUTURES", "MARGIN"]:
+            # Query OKX authenticated private trade fee endpoint (GET /api/v5/account/trade-fee)
+            for target_inst in [inst_swap, inst_spot, f"{clean_base}-USDC"]:
                 try:
-                    res = await self.exchange.privateGetAccountInstruments({"instType": itype})
+                    res = await self.exchange.privateGetAccountTradeFee({"instId": target_inst})
                     if res and isinstance(res, dict) and str(res.get("code")) == "0" and res.get("data"):
-                        for item in res["data"]:
-                            if item.get("instId"):
-                                user_allowed_inst_ids.add(item["instId"].upper())
-                            if item.get("instFamily"):
-                                user_allowed_inst_ids.add(item["instFamily"].upper())
-                except Exception as e:
-                    logger.debug(f"OKX privateGetAccountInstruments failed for {itype}: {e}")
-
-            if user_allowed_inst_ids:
-                # Check if any candidate for this base/quote exists in user's allowed instruments
-                for target_inst in [inst_swap, inst_spot, f"{clean_base}-{quote}"]:
-                    if target_inst.upper() in user_allowed_inst_ids:
-                        permitted = True
-                        break
-            else:
-                # Fallback: test private account leverage info
-                for target_inst in [inst_swap, inst_spot]:
-                    try:
-                        res = await self.exchange.privateGetAccountPositions({"instId": target_inst})
-                        if res and isinstance(res, dict) and str(res.get("code")) == "0":
+                        # Verify data contains valid fee rate for this instId
+                        fees = res.get("data", [])
+                        if len(fees) > 0 and (fees[0].get("instId") or fees[0].get("category")):
                             permitted = True
+                            logger.info(f"Verified OKX API key autotrading permission for {symbol} (instId: {target_inst})")
                             break
-                    except Exception:
-                        pass
+                except Exception as e:
+                    logger.debug(f"OKX privateGetAccountTradeFee check failed for {target_inst}: {e}")
 
             if not permitted:
                 return {
