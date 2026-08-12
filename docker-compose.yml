@@ -25,6 +25,13 @@ services:
       - ./.agents/swarm:/app/.agents/swarm:ro
     env_file:
       - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mastermind_ui.entrypoints=websecure"
+      - "traefik.http.routers.mastermind_ui.rule=Host(`mastermind.srv1490214.hstgr.cloud`)"
+      - "traefik.http.routers.mastermind_ui.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.mastermind_ui.tls=true"
+      - "traefik.http.services.mastermind_ui.loadbalancer.server.port=8501"
 
 networks:
   internal_swarm_net:
