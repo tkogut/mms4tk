@@ -110,8 +110,8 @@ class OKXExecutor:
 
     async def verify_symbol_with_okx(self, symbol: str) -> Dict[str, Any]:
         """
-        One-time verification of a trading pair against live OKX API.
-        Attempts ticker/market verification across Spot and Swap OKX endpoints.
+        One-time verification of a trading pair against OKX API & User Account permissions.
+        Differentiates between Public Ticker availability vs Private Autotrading Permission on User's API Key.
         """
         clean_base = symbol.split("/")[0].split("-")[0].split(":")[0].upper()
         quote = symbol.split("/")[1] if "/" in symbol else "USDC"
@@ -123,47 +123,86 @@ class OKXExecutor:
             f"{clean_base}-{quote}-SWAP"
         ]
 
-        # 1. Try with configured exchange instance
+        # 1. Fetch public last price first
+        last_price = 0.0
+        public_ticker_found = False
+
         if self.exchange is not None:
             for cand in candidates:
                 try:
                     ticker = await self.exchange.fetch_ticker(cand)
                     if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
-                        return {
-                            "symbol": symbol,
-                            "okx_verified": True,
-                            "okx_status": "VERIFIED",
-                            "last_price": float(ticker["last"])
-                        }
+                        last_price = float(ticker["last"])
+                        public_ticker_found = True
+                        break
                 except Exception as e:
                     logger.debug(f"OKX self.exchange fetch_ticker failed for candidate {cand}: {e}")
 
-        # 2. Public CCXT OKX fallback check
-        if ccxt is not None:
+        if not public_ticker_found and ccxt is not None:
             try:
                 pub_ex = ccxt.okx({"enableRateLimit": True})
                 for cand in candidates:
                     try:
                         ticker = await pub_ex.fetch_ticker(cand)
                         if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
+                            last_price = float(ticker["last"])
+                            public_ticker_found = True
                             await pub_ex.close()
-                            return {
-                                "symbol": symbol,
-                                "okx_verified": True,
-                                "okx_status": "VERIFIED",
-                                "last_price": float(ticker["last"])
-                            }
+                            break
                     except Exception:
                         pass
                 await pub_ex.close()
             except Exception as e:
                 logger.debug(f"Public OKX fallback check error: {e}")
 
+        if not public_ticker_found:
+            return {
+                "symbol": symbol,
+                "okx_verified": False,
+                "autotrade_permitted": False,
+                "okx_status": "UNSUPPORTED",
+                "last_price": 0.0,
+                "reason": "Instrument nie istnieje na giełdzie OKX"
+            }
+
+        # 2. Check private account autotrading permissions if user API credentials exist
+        if self.has_credentials and self.exchange is not None:
+            inst_swap = f"{clean_base}-{quote}-SWAP"
+            inst_spot = f"{clean_base}-{quote}"
+            
+            permitted = False
+            error_reason = "Klucz API nie posiada uprawnień do składania zleceń na tym koncie"
+
+            # Check leverage info or account positions permission for this instId
+            for target_inst in [inst_swap, inst_spot]:
+                try:
+                    res = await self.exchange.privateGetAccountLeverageInfo({"instId": target_inst, "mgnMode": "cross"})
+                    if res and isinstance(res, dict) and str(res.get("code")) == "0":
+                        permitted = True
+                        break
+                except Exception as e:
+                    err_msg = str(e)
+                    if "51001" in err_msg or "51000" in err_msg or "50004" in err_msg:
+                        error_reason = f"Para {symbol} nie jest dostępna do tradingu na Twoim koncie OKX"
+                    logger.warning(f"OKX private leverage check failed for {target_inst}: {e}")
+
+            if not permitted:
+                return {
+                    "symbol": symbol,
+                    "okx_verified": False,
+                    "autotrade_permitted": False,
+                    "okx_status": "AUTOTRADE_RESTRICTED_ON_API_KEY",
+                    "last_price": last_price,
+                    "reason": error_reason
+                }
+
         return {
             "symbol": symbol,
-            "okx_verified": False,
-            "okx_status": "UNSUPPORTED",
-            "last_price": 0.0
+            "okx_verified": True,
+            "autotrade_permitted": True,
+            "okx_status": "AUTOTRADE_READY",
+            "last_price": last_price,
+            "reason": "Para w pełni zweryfikowana i gotowa do automatycznego handlu"
         }
 
     async def fetch_candles(

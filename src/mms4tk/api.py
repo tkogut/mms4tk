@@ -608,8 +608,10 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "leverage": leverage,
             "is_active": is_act,
             "okx_verified": v_res.get("okx_verified", True),
-            "okx_status": v_res.get("okx_status", "VERIFIED"),
+            "autotrade_permitted": v_res.get("autotrade_permitted", True),
+            "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
             "okx_price": v_res.get("last_price", 0.0),
+            "reason": v_res.get("reason", ""),
             "directional_bias": state_manager.strategy_profile.directional_bias,
             "risk_profile": state_manager.strategy_profile.risk_profile
         })

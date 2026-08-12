@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🤖 [0.12.0] - 2026-08-12
+
+### 🤖 Autotrading Account Permission Verification & Badge Differentiation
+- 🤖 **Private Autotrading Permission Check**: Differentiated public ticker availability from private autotrading execution permissions on the User's OKX API Key (`privateGetAccountLeverageInfo`).
+- 🔴 **Red LED for Blocked Autotrading**: `SymbolsTab.jsx` explicitly displays **`🔴 HANDEL AUTOMATYCZNY: BLOKOWANY`** when a pair (e.g. `AVAX/USDC`) lacks autotrading execution permissions on the user's OKX API Key, while showing **`🟢 HANDEL AUTOMATYCZNY: GOTOWY`** for permitted pairs (`BTC/USDC`, `ETH/USDC`, `SOL/USDC`).
+
+---
+
 ## 💚 [0.11.1] - 2026-08-12
 
 ### 💚 Multi-Candidate OKX Ticker Verification Restoration

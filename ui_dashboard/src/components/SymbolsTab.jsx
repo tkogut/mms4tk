@@ -165,7 +165,7 @@ export function SymbolsTab({ apiKey }) {
       {/* Grid of Symbol Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {symbols.map((s) => {
-          const isVerified = s.okx_verified !== false;
+          const isAutotradeReady = s.autotrade_permitted !== false && s.okx_verified !== false;
           return (
             <div
               key={s.symbol}
@@ -177,11 +177,11 @@ export function SymbolsTab({ apiKey }) {
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {/* OKX API Kontrolka LED: Zielona (Verified) / Czerwona (Unsupported) */}
+                  {/* OKX API Autotrading LED Kontrolka: Zielona (Ready) / Czerwona (Blocked) */}
                   <div className="relative flex items-center justify-center">
                     <span
                       className={`w-3.5 h-3.5 rounded-full shadow-md ${
-                        isVerified
+                        isAutotradeReady
                           ? 'bg-emerald-500 animate-pulse shadow-emerald-500/60'
                           : 'bg-red-500 shadow-red-500/60'
                       }`}
@@ -212,28 +212,37 @@ export function SymbolsTab({ apiKey }) {
                 </button>
               </div>
 
-              {/* OKX API Verification Badge Banner */}
+              {/* Autotrading API Permission Verification Banner */}
               <div
-                className={`p-2 rounded-lg border text-[11px] font-mono flex items-center justify-between ${
-                  isVerified
+                className={`p-2.5 rounded-lg border text-[11px] font-mono space-y-1 ${
+                  isAutotradeReady
                     ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
                     : 'bg-red-950/40 border-red-500/30 text-red-300'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isVerified ? 'bg-emerald-400' : 'bg-red-400'
-                    }`}
-                  ></span>
-                  <span>
-                    Status API OKX: {isVerified ? 'ZWERYFIKOWANA (API OKX)' : (s.okx_status === 'UNSUPPORTED_ON_USER_API_KEY' ? 'BRAK UPRAWNIEŃ W KLUCZU API' : 'NIEZNANY TIKER')}
-                  </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 font-bold">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isAutotradeReady ? 'bg-emerald-400' : 'bg-red-400'
+                      }`}
+                    ></span>
+                    <span>
+                      {isAutotradeReady
+                        ? '🟢 HANDEL AUTOMATYCZNY: GOTOWY'
+                        : '🔴 HANDEL AUTOMATYCZNY: BLOKOWANY'}
+                    </span>
+                  </div>
+                  {s.okx_price > 0 && (
+                    <span className="font-bold text-gray-200">
+                      ${Number(s.okx_price).toLocaleString()}
+                    </span>
+                  )}
                 </div>
-                {s.okx_price > 0 && (
-                  <span className="font-bold text-gray-200">
-                    ${Number(s.okx_price).toLocaleString()}
-                  </span>
+                {!isAutotradeReady && (
+                  <p className="text-[10px] text-red-400/90 leading-tight">
+                    {s.reason || 'Klucz API OKX nie posiada uprawnień do tradowania tej pary na Twoim koncie.'}
+                  </p>
                 )}
               </div>
 
