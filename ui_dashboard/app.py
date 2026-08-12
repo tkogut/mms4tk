@@ -219,7 +219,7 @@ def fetch_closed_trades_df():
 
 
 # Version Reader
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.3"
 try:
     from mms4tk import __version__ as mms_ver
     APP_VERSION = mms_ver
@@ -414,12 +414,14 @@ with tab_analytics:
             paper_bgcolor="#0f172a",
             plot_bgcolor="#0f172a",
             hovermode="x unified",
-            margin=dict(l=15, r=15, t=15, b=25),
+            dragmode=False,  # Prevents accidental touch drag while scrolling on mobile
+            margin=dict(l=15, r=15, t=35, b=25),
             showlegend=False,
+            modebar=dict(orientation="h", bgcolor="rgba(0,0,0,0)", color="#94a3b8", activecolor="#60a5fa"),
             xaxis=dict(showgrid=True, gridcolor="#1e293b"),
             yaxis=dict(showgrid=True, gridcolor="#1e293b", title="PnL (USD)")
         )
-        st.plotly_chart(fig_equity, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_equity, use_container_width=True, config={"displayModeBar": True, "displaylogo": False, "scrollZoom": False})
 
         # 2. Benchmark vs Buy & Hold Chart
         st.markdown("#### ⚖️ Mastermind Bot vs BTC Buy & Hold Benchmark")
@@ -452,7 +454,9 @@ with tab_analytics:
                 paper_bgcolor="#0f172a",
                 plot_bgcolor="#0f172a",
                 hovermode="x unified",
-                margin=dict(l=15, r=15, t=35, b=25),
+                dragmode=False,  # Prevents accidental touch drag while scrolling on mobile
+                margin=dict(l=15, r=15, t=45, b=25),
+                modebar=dict(orientation="h", bgcolor="rgba(0,0,0,0)", color="#94a3b8", activecolor="#60a5fa"),
                 legend=dict(
                     orientation="h",
                     yanchor="bottom",
@@ -465,7 +469,7 @@ with tab_analytics:
                 xaxis=dict(showgrid=True, gridcolor="#1e293b"),
                 yaxis=dict(showgrid=True, gridcolor="#1e293b", title="Return %")
             )
-            st.plotly_chart(fig_bench, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_bench, use_container_width=True, config={"displayModeBar": True, "displaylogo": False, "scrollZoom": False})
     else:
         st.info("Insufficient trade history in SQLite (logs.db) to render Plotly charts. The 15-min sync worker runs automatically in background.")
 

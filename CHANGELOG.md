@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 📱 [0.6.3] - 2026-08-12
+
+### 📱 Touch Safety & Plotly ModeBar Re-activation
+- 🎛️ **Re-enabled Plotly ModeBar Toolbar**: Restored modebar controls (`displayModeBar: true`) so tools like zoom in/out, pan, autoscale, and download plot are available on demand.
+- 📱 **Mobile Touch Drag Safety (`dragmode=False`)**: Disabled default touch dragging/zooming when swiping across chart areas on smartphones, allowing smooth page scrolling without accidental chart parameter mutations.
+
+---
+
 ## 🎨 [0.6.2] - 2026-08-12
 
 ### 🐛 Chart Overlap Fixes & Benchmark Y-Axis Normalization
