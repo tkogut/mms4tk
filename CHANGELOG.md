@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 📱 [0.5.1] - 2026-08-12
+
+### 📱 PWA & Mobile Enhancements
+- Enforced mobile PWA `manifest.json` static serving (`--server.enableStaticServing=true`).
+- Added iOS (`apple-mobile-web-app-capable`) & Android standalone viewport meta headers for instant "Add to Home Screen" installation on mobile devices.
+
+---
+
 ## 🎛️ [0.5.0] - 2026-08-12
 
 ### ✨ Added

@@ -45,7 +45,8 @@ def load_mobile_pwa_assets():
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <meta name="theme-color" content="#0e1117">
         <meta name="apple-mobile-web-app-capable" content="yes">
-        <link rel="manifest" href="/static/manifest.json">
+        <meta name="mobile-web-app-capable" content="yes">
+        <link rel="manifest" href="/app/static/manifest.json">
     """, unsafe_allow_html=True)
 
     css_path = os.path.join(os.path.dirname(__file__), "style.css")
