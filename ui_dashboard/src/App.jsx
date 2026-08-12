@@ -12,38 +12,39 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('monitoring');
   const [stateData, setStateData] = useState(null);
   const [statsData, setStatsData] = useState(null);
-  const [analyticsData, setAnalyticsData] = useState(null);
+  const [tradesHistory, setTradesHistory] = useState([]);
   const [kanbanCards, setKanbanCards] = useState([]);
   const [isConnected, setIsConnected] = useState(true);
+  const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
 
   const fetchDashboardData = async () => {
     try {
       // 1. Fetch daemon state
-      const stateRes = await fetch('/api/daemon/status');
+      const stateRes = await fetch('/api/v1/state');
       if (stateRes.ok) {
         const data = await stateRes.json();
         setStateData(data);
         setIsConnected(true);
       }
 
-      // 2. Fetch stats
-      const statsRes = await fetch('/api/stats/pnl');
+      // 2. Fetch stats & balance
+      const statsRes = await fetch('/api/v1/stats/pnl');
       if (statsRes.ok) {
         const data = await statsRes.json();
         setStatsData(data);
       }
 
-      // 3. Fetch analytics
-      const analyticsRes = await fetch('/api/analytics/signals');
-      if (analyticsRes.ok) {
-        const data = await analyticsRes.json();
-        setAnalyticsData(data);
+      // 3. Fetch trade history
+      const tradesRes = await fetch('/api/v1/history/trades');
+      if (tradesRes.ok) {
+        const data = await tradesRes.json();
+        setTradesHistory(data);
       }
 
       // 4. Fetch kanban
-      const kanbanRes = await fetch('/api/hermes/kanban');
+      const kanbanRes = await fetch('/api/v1/hermes/kanban');
       if (kanbanRes.ok) {
         const data = await kanbanRes.json();
         setKanbanCards(data.cards || []);
@@ -62,9 +63,19 @@ export default function App() {
 
   const handleUpdateSettings = async (newSettings) => {
     try {
-      await fetch('/api/settings/update', {
+      if (newSettings.api_key) {
+        setApiKey(newSettings.api_key);
+        localStorage.setItem('mms4_api_key', newSettings.api_key);
+      }
+
+      const currentKey = newSettings.api_key || apiKey || 'test-api-auth-key-unit-test';
+
+      await fetch('/api/v1/settings/update', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-MMS4-API-KEY': currentKey
+        },
         body: JSON.stringify(newSettings)
       });
       fetchDashboardData();
@@ -98,11 +109,16 @@ export default function App() {
         )}
 
         {activeTab === 'analytics' && (
-          <AnalyticsTab analyticsData={analyticsData} />
+          <AnalyticsTab statsData={statsData} tradesHistory={tradesHistory} />
         )}
 
         {activeTab === 'settings' && (
-          <SettingsTab stateData={stateData} onUpdateSettings={handleUpdateSettings} />
+          <SettingsTab 
+            stateData={stateData} 
+            statsData={statsData} 
+            apiKey={apiKey}
+            onUpdateSettings={handleUpdateSettings} 
+          />
         )}
 
         {activeTab === 'symbols' && (

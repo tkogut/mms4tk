@@ -1,11 +1,17 @@
 import React from 'react';
-import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, Award, Percent, AlertOctagon, Scale } from 'lucide-react';
 
 export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) {
-  const isScoutMode = stateData?.scout_mode || false;
-  const activeMode = stateData?.mode || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
+  const isScoutMode = stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false;
+  const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
   const leverage = stateData?.leverage || 3.0;
-  const stopLoss = stateData?.stop_loss_pct || 1.25;
+
+  const freeUsdc = statsData?.free_balance !== undefined ? Number(statsData.free_balance).toFixed(2) : '0.00';
+  const btcBalance = statsData?.btc_balance !== undefined ? Number(statsData.btc_balance).toFixed(5) : '0.00000';
+  const winRate = statsData?.win_rate !== undefined ? Number(statsData.win_rate).toFixed(1) : '0.0';
+  const profitFactor = statsData?.profit_factor !== undefined ? Number(statsData.profit_factor).toFixed(2) : '0.00';
+  const maxDd = statsData?.max_drawdown !== undefined ? Number(statsData.max_drawdown).toFixed(2) : '0.00';
+  const avgRr = statsData?.average_rr !== undefined ? Number(statsData.average_rr).toFixed(2) : '0.00';
 
   return (
     <div className="space-y-6">
@@ -39,7 +45,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
 
           <button
             onClick={onRefresh}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm font-medium transition-colors border border-slate-700 shadow-sm"
           >
             <RefreshCw className="w-4 h-4 text-blue-400" />
             <span>Odśwież Dane</span>
@@ -47,7 +53,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
         </div>
       </div>
 
-      {/* Grid of Key Metrics Cards */}
+      {/* Primary Account Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
@@ -55,7 +61,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
             <Wallet className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-gray-100 font-mono">
-            ${statsData?.free_balance !== undefined ? Number(statsData.free_balance).toFixed(2) : '---'}
+            ${freeUsdc}
           </div>
           <div className="text-xs text-slate-400 mt-1">Dostępny w portfelu SPOT</div>
         </div>
@@ -66,7 +72,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
             <TrendingUp className="w-4 h-4 text-blue-400" />
           </div>
           <div className="text-2xl font-bold text-gray-100 font-mono">
-            {statsData?.btc_balance !== undefined ? Number(statsData.btc_balance).toFixed(5) : '---'} BTC
+            {btcBalance} BTC
           </div>
           <div className="text-xs text-slate-400 mt-1">Rynek OKX Spot BTC/USDC</div>
         </div>
@@ -79,18 +85,66 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
           <div className="text-2xl font-bold text-gray-100 font-mono">
             {leverage.toFixed(1)}x
           </div>
-          <div className="text-xs text-slate-400 mt-1">Dźwignia docelowa alokatora</div>
+          <div className="text-xs text-slate-400 mt-1">Alokator dźwigni (Maks 10.0x)</div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
-            <span className="text-xs font-medium">Stop Loss (SL)</span>
-            <ShieldAlert className="w-4 h-4 text-red-400" />
+            <span className="text-xs font-medium">Wygenerowane PnL ($)</span>
+            <Award className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-gray-100 font-mono">
-            {stopLoss.toFixed(2)}%
+          <div className={`text-2xl font-bold font-mono ${
+            Number(statsData?.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
+          }`}>
+            ${Number(statsData?.realized_pnl || 0).toFixed(2)}
           </div>
-          <div className="text-xs text-slate-400 mt-1">Maksymalny próg ryzyka świecy</div>
+          <div className="text-xs text-slate-400 mt-1">Skumulowany zysk z SQLite</div>
+        </div>
+      </div>
+
+      {/* KPI Tiles Section (Win Rate, Profit Factor, MDD, R:R) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
+        <h3 className="font-semibold text-gray-200 text-sm flex items-center gap-2">
+          <Award className="w-4 h-4 text-amber-400" />
+          <span>Kafelki Wydajności Algorytmu (KPI Summary)</span>
+        </h3>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3.5">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-xs font-medium">Win Rate</span>
+              <Percent className="w-3.5 h-3.5 text-emerald-400" />
+            </div>
+            <div className="text-xl font-bold text-emerald-400 font-mono">{winRate}%</div>
+            <div className="text-[10px] text-slate-500">Skuteczność transakcji</div>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3.5">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-xs font-medium">Profit Factor</span>
+              <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
+            </div>
+            <div className="text-xl font-bold text-blue-400 font-mono">{profitFactor}</div>
+            <div className="text-[10px] text-slate-500">Stosunek zysku do strat</div>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3.5">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-xs font-medium">Max Drawdown</span>
+              <AlertOctagon className="w-3.5 h-3.5 text-red-400" />
+            </div>
+            <div className="text-xl font-bold text-red-400 font-mono">${maxDd}</div>
+            <div className="text-[10px] text-slate-500">Maksymalne obsunięcie</div>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3.5">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-xs font-medium">R:R Ratio</span>
+              <Scale className="w-3.5 h-3.5 text-amber-400" />
+            </div>
+            <div className="text-xl font-bold text-amber-400 font-mono">{avgRr}</div>
+            <div className="text-[10px] text-slate-500">Zysk do ryzyka</div>
+          </div>
         </div>
       </div>
 

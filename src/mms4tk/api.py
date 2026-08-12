@@ -79,11 +79,16 @@ class StateResponse(BaseModel):
 
 
 class PnLResponse(BaseModel):
-    daily_roe: float = Field(description="Daily Return on Equity percentage")
-    realized_pnl: float = Field(description="Realized Profit and Loss")
-    unrealized_pnl: float = Field(description="Unrealized Profit and Loss")
-    total_trades: int = Field(description="Total number of trades executed")
-    win_rate: float = Field(description="Win rate percentage (0.0 to 1.0)")
+    daily_roe: float = Field(default=0.0, description="Daily Return on Equity percentage")
+    realized_pnl: float = Field(default=0.0, description="Realized Profit and Loss")
+    unrealized_pnl: float = Field(default=0.0, description="Unrealized Profit and Loss")
+    total_trades: int = Field(default=0, description="Total number of trades executed")
+    win_rate: float = Field(default=0.0, description="Win rate percentage (0.0 to 100.0)")
+    profit_factor: float = Field(default=0.0, description="Profit factor ratio")
+    max_drawdown: float = Field(default=0.0, description="Max Drawdown USD or %")
+    average_rr: float = Field(default=0.0, description="Average Risk to Reward ratio")
+    free_balance: float = Field(default=0.0, description="Free available USDC balance")
+    btc_balance: float = Field(default=0.0, description="BTC asset balance")
 
 
 class EmergencyKillallResponse(BaseModel):
@@ -189,17 +194,32 @@ async def get_balance() -> Dict[str, Any]:
 
 @app.get("/api/v1/stats/pnl", response_model=PnLResponse, tags=["Stats"])
 async def get_pnl() -> Dict[str, Any]:
-    """Get daily ROE %, realized PnL, unrealized PnL, and trade stats."""
+    """Get daily ROE %, realized PnL, unrealized PnL, KPI summary, and account balances."""
     summary = state_manager.get_summary()
-    pnl = summary.get("realized_pnl", 0.0)
-    trades = summary.get("total_trades", 0)
+    kpi = logger_db.get_kpi_summary()
+
+    free_usdc = 0.0
+    btc_bal = 0.0
+    try:
+        bal_data = await executor.fetch_balance()
+        free_usdc = float(bal_data.get("free", {}).get("USDC", 0.0))
+        btc_bal = float(bal_data.get("total", {}).get("BTC", 0.0))
+    except Exception as err:
+        logger.warning(f"Could not fetch OKX live balance for /api/v1/stats/pnl: {err}")
+
     return {
         "daily_roe": 0.0,
-        "realized_pnl": pnl,
+        "realized_pnl": kpi.get("total_pnl_usd", summary.get("realized_pnl", 0.0)),
         "unrealized_pnl": 0.0,
-        "total_trades": trades,
-        "win_rate": 0.0
+        "total_trades": kpi.get("total_trades", summary.get("total_trades", 0)),
+        "win_rate": kpi.get("win_rate", 0.0),
+        "profit_factor": kpi.get("profit_factor", 0.0),
+        "max_drawdown": kpi.get("max_drawdown", 0.0),
+        "average_rr": kpi.get("average_rr", 0.0),
+        "free_balance": free_usdc,
+        "btc_balance": btc_bal
     }
+
 
 
 @app.post("/api/v1/analytics/calculate", response_model=CalculateResponse, tags=["Analytics"])
@@ -444,3 +464,68 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
         "scout_mode_relaxed": relaxed,
         "profile": updated.model_dump(),
     }
+
+
+# ─── Dashboard Integration Endpoints ─────────────────────────────────────────
+
+@app.get("/api/v1/history/trades", tags=["History"])
+async def get_history_trades(limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetch real historical closed trades from SQLite logger_db."""
+    return logger_db.get_closed_trades(limit=limit)
+
+
+@app.get("/api/v1/history/candles", tags=["History"])
+async def get_history_candles(symbol: str = "BTC/USDC", timeframe: str = "1h", limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetch live/historical candles from OKX for technical charts."""
+    try:
+        candles = await executor.fetch_candles(symbol=symbol, timeframe=timeframe, limit=limit)
+        return [c.model_dump() for c in candles]
+    except Exception as e:
+        logger.warning(f"Error fetching candles for {symbol} ({timeframe}): {e}")
+        return []
+
+
+@app.get("/api/v1/hermes/kanban", tags=["Hermes Integration"])
+async def get_kanban_cards() -> Dict[str, Any]:
+    """Fetch active Kanban cards and undispatched events."""
+    events = hermes_webhook.get_pending_events(limit=20)
+    cards = []
+    for ev in events:
+        cards.append({
+            "id": ev.get("id"),
+            "status": ev.get("initial_status", "IN_PROGRESS"),
+            "title": ev.get("title", "Hermes Alert"),
+            "description": ev.get("body", ""),
+            "created_at": ev.get("timestamp", "")
+        })
+    return {"cards": cards, "total": len(cards)}
+
+
+class SettingsUpdateRequest(BaseModel):
+    leverage: Optional[float] = 3.0
+    stop_loss_pct: Optional[float] = 1.25
+    scout_mode: Optional[bool] = False
+    api_key: Optional[str] = None
+    capital_split_ratio: Optional[float] = 0.70
+    max_margin_usd: Optional[float] = 10.0
+
+
+@app.post("/api/v1/settings/update", tags=["Settings"], dependencies=[Depends(verify_api_key)])
+async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
+    """Update runtime strategy parameters, leverage (up to 10x), SL %, and risk profile."""
+    if req.leverage is not None:
+        state_manager.leverage = max(1.0, min(10.0, req.leverage))
+    if req.scout_mode is not None:
+        if req.scout_mode:
+            state_manager.current_state = MMS4State.SCOUT_MODE
+        else:
+            state_manager.relax_scout_mode()
+
+    state_manager.save_state(reason="Settings update via Web Dashboard")
+    return {
+        "status": "success",
+        "leverage": state_manager.leverage,
+        "state": state_manager.current_state.value,
+        "scout_mode": state_manager.scout_mode
+    }
+
