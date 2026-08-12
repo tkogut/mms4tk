@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## ⚡ [0.8.1] - 2026-08-12
+
+### ⚡ Multi-Symbol Async Execution Loop (Phase 2)
+- ⚡ **Parallel Multi-Symbol Loop**: Upgraded `MMS4Daemon` in `src/mms4tk/daemon.py` with `execute_multi_symbol_cycle()` running parallel candle fetching (`asyncio.gather`) and signal evaluation across all active trading symbols (`BTC/USDC`, `ETH/USDC`, `SOL/USDC`).
+- 📊 **Per-Symbol Audit Logging**: Extended `LoggerDB` cycle logging to record individual cycle results per active trading symbol.
+
+---
+
 ## 🔀 [0.8.0] - 2026-08-12
 
 ### 🚀 Multi-Symbol Trading Backend & State Isolation

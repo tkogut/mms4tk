@@ -75,3 +75,18 @@ def test_add_remove_trading_symbol_api():
     get_res2 = client.get("/api/v1/symbols")
     syms2 = [s["symbol"] for s in get_res2.json()["symbols"]]
     assert "DOGE/USDC" not in syms2
+
+
+def test_multi_symbol_daemon_cycle():
+    """Test MMS4Daemon.execute_multi_symbol_cycle for parallel async execution."""
+    import asyncio
+    from mms4tk.daemon import MMS4Daemon
+    daemon = MMS4Daemon(symbol="BTC/USDC")
+    results = asyncio.run(daemon.execute_multi_symbol_cycle(["BTC/USDC", "ETH/USDC", "SOL/USDC"]))
+
+    assert len(results) == 3
+    symbols_evaluated = [r["symbol"] for r in results]
+    assert "BTC/USDC" in symbols_evaluated
+    assert "ETH/USDC" in symbols_evaluated
+    assert "SOL/USDC" in symbols_evaluated
+

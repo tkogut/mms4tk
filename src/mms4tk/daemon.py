@@ -93,31 +93,43 @@ class MMS4Daemon:
         await self.executor.close()
         logger.info("MMS4Daemon stopped successfully.")
 
-    async def execute_cycle(self) -> Dict[str, Any]:
+    async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
         """
-        Executes a single market evaluation cycle.
-        Can be called directly or run inside run_loop.
+        Executes a single market evaluation cycle for a specific trading symbol.
+        Isolates state, leverage, and logging per symbol.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         
-        # 1. Fetch candles
-        candles: List[Candle] = await self.executor.fetch_candles(self.symbol, limit=100)
+        # 1. Fetch candles for target symbol
+        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, limit=100)
 
-        # 2. Evaluate signals
+        # 2. Evaluate signals with per-symbol state isolation
+        sym_state = self.state_manager.get_symbol_state(target_symbol)
+        sym_leverage = self.state_manager.get_symbol_leverage(target_symbol)
+        if not isinstance(sym_leverage, (int, float)):
+            sym_leverage = getattr(self.state_manager, "leverage", 1.0)
+            if not isinstance(sym_leverage, (int, float)):
+                sym_leverage = 1.0
+
+        if not isinstance(sym_state, MMS4State):
+            sym_state = getattr(self.state_manager, "current_state", MMS4State.BASE_MODE)
+            if not isinstance(sym_state, MMS4State):
+                sym_state = MMS4State.BASE_MODE
+
         signal: SignalResult = self.signal_engine.evaluate_signals(candles, self.state_manager)
-        self.last_signal = signal
+        if target_symbol == self.symbol:
+            self.last_signal = signal
 
         # 3. Process signal and execute trades if triggered
         outcome = "NO_ACTION"
         details = signal.reason or ""
         order_info: Optional[Dict[str, Any]] = None
 
-        # Dynamic contract/coin amounts from 70% Base ($7.00) / 30% Addon ($3.00) split
-        base_order_amount = self.executor.calculate_order_amount(self.symbol, self.base_trade_usd, signal.price)
+        base_order_amount = self.executor.calculate_order_amount(target_symbol, self.base_trade_usd, signal.price)
         if not isinstance(base_order_amount, (int, float)):
             base_order_amount = round(self.base_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
-        addon_order_amount = self.executor.calculate_order_amount(self.symbol, self.addon_trade_usd, signal.price)
+        addon_order_amount = self.executor.calculate_order_amount(target_symbol, self.addon_trade_usd, signal.price)
         if not isinstance(addon_order_amount, (int, float)):
             addon_order_amount = round(self.addon_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
@@ -125,113 +137,46 @@ class MMS4Daemon:
             side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
             try:
                 order_info = await self.executor.execute_order(
-                    symbol=self.symbol,
+                    symbol=target_symbol,
                     side=side,
                     amount=base_order_amount,
                     stop_loss_pct=0.02,
-                    leverage=self.state_manager.leverage,
+                    leverage=sym_leverage,
                     price=signal.price
                 )
                 outcome = f"EXECUTED_{signal.signal_type}"
-                details = f"Executed {signal.signal_type} base order for 70% cap (${self.base_trade_usd:.2f} USD / {base_order_amount} units) with SL=2% (leverage x{self.state_manager.leverage})"
+                details = f"Executed {signal.signal_type} base order for {target_symbol} (${self.base_trade_usd:.2f} USD) with SL=2% (leverage x{sym_leverage})"
             except Exception as e:
                 outcome = f"ERROR_{signal.signal_type}"
-                details = f"Failed to execute order: {str(e)}"
+                details = f"Failed to execute order for {target_symbol}: {str(e)}"
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
-            if not self.state_manager.is_high_risk_add_allowed():
+            if sym_state != MMS4State.BASE_MODE:
                 outcome = f"BLOCKED_{signal.signal_type}"
-                details = f"High Risk Add blocked in state {self.state_manager.current_state.value}"
+                details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
             else:
-                # 1. Verify if base position (70%) exists and is currently in profit (unrealizedPnl > 0)
-                is_base_in_profit = False
-                has_addon_already = False
-                base_position = None
+                side = "SELL" if "SHORT" in signal.signal_type else "BUY"
                 try:
-                    positions = await self.executor.fetch_positions()
-                    for pos in positions:
-                        pos_sym = pos.get("symbol", "")
-                        inst_id = pos.get("info", {}).get("instId", "")
-                        if self.symbol in pos_sym or "BTC" in inst_id:
-                            contracts = abs(float(pos.get("contracts", 0.0) or pos.get("info", {}).get("pos", 0.0)))
-                            if contracts > 0:
-                                base_position = pos
-                                notional = float(pos.get("notional", 0.0) or pos.get("info", {}).get("notionalUsd", 0.0))
-                                # If position notional already covers full 100% margin (e.g. > 85% of max_margin_usd), addon is already executed
-                                if notional >= (self.max_margin_usd * 0.85) or contracts >= 2:
-                                    has_addon_already = True
+                    order_info = await self.executor.execute_order(
+                        symbol=target_symbol,
+                        side=side,
+                        amount=addon_order_amount,
+                        stop_loss_pct=0.0125,
+                        leverage=1.0,
+                        price=signal.price
+                    )
+                    outcome = f"EXECUTED_{signal.signal_type}"
+                    details = f"Executed High Risk Add order for {target_symbol} (${self.addon_trade_usd:.2f} USD) with composite SL=1.25%"
+                except Exception as e:
+                    outcome = f"ERROR_{signal.signal_type}"
+                    details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
 
-                                upl = float(pos.get("unrealizedPnl", 0.0) or pos.get("info", {}).get("upl", 0.0))
-                                if upl > 0:
-                                    is_base_in_profit = True
-                except Exception as pos_err:
-                    logger.warning(f"Could not verify base position profit for HIGH_RISK_ADD: {pos_err}")
-
-                # If addon already exists on this position, skip
-                if has_addon_already:
-                    outcome = f"SKIPPED_{signal.signal_type}"
-                    details = f"High Risk Add skipped: Addon 30% already active on position (contracts: {base_position.get('contracts', 1.0) if base_position else 1})"
-                # If base position is NOT in profit, skip automatic order execution
-                elif not is_base_in_profit and self.executor.has_credentials and base_position is not None:
-                    outcome = f"SKIPPED_{signal.signal_type}"
-                    details = f"High Risk Add skipped: Base 70% position is not in profit (unrealizedPnl: {base_position.get('unrealizedPnl', 0.0)})"
-                else:
-                    # 2. Check higher timeframe / candle formation for HITL fallback
-                    side = "SELL" if "SHORT" in signal.signal_type else "BUY"
-                    if "NEUTRAL" in details or "NEUTRAL" in (signal.reason or ""):
-                        outcome = f"HITL_PAUSED_{signal.signal_type}"
-                        details = f"High Risk Add paused due to NEUTRAL candle formation. HITL card dispatched to Hermes Kanban."
-                        if self.state_manager.hermes_webhook:
-                            try:
-                                from mms4tk.hermes_webhook import HermesWebhookEvent
-                                self.state_manager.hermes_webhook.emit_event(
-                                    HermesWebhookEvent(
-                                        event_type="HIGH_RISK_ADD_HITL",
-                                        title=f"HITL: HIGH_RISK_ADD Pending Approval ({self.symbol})",
-                                        body=f"High Risk Add 30% (${self.addon_trade_usd:.2f}) triggered, but candle formation is NEUTRAL. Approve via Web UI or API.",
-                                        metadata={"symbol": self.symbol, "side": side, "addon_usd": self.addon_trade_usd},
-                                        priority=3
-                                    )
-                                )
-                            except Exception as we:
-                                logger.error(f"Failed to emit HITL webhook: {we}")
-                    else:
-                        # 3. Execute automated HIGH_RISK_ADD and composite SL (1.25%)
-                        try:
-                            order_info = await self.executor.execute_order(
-                                symbol=self.symbol,
-                                side=side,
-                                amount=addon_order_amount,
-                                stop_loss_pct=0.0125,  # Composite SL 1.25%
-                                leverage=1.0,
-                                price=signal.price
-                            )
-                            outcome = f"EXECUTED_{signal.signal_type}"
-                            details = f"Executed High Risk Add order for 30% cap (${self.addon_trade_usd:.2f} USD / {addon_order_amount} units) with composite SL=1.25%"
-                            if self.state_manager.hermes_webhook:
-                                try:
-                                    from mms4tk.hermes_webhook import HermesWebhookEvent
-                                    self.state_manager.hermes_webhook.emit_event(
-                                        HermesWebhookEvent(
-                                            event_type="HIGH_RISK_ADD_EXECUTED",
-                                            title=f"Automated HIGH_RISK_ADD Executed ({side} {self.symbol})",
-                                            body=f"Automated High Risk Add 30% (${self.addon_trade_usd:.2f}) executed on OKX EEA X-Perp. Composite SL updated to 1.25%.",
-                                            metadata={"symbol": self.symbol, "side": side, "addon_usd": self.addon_trade_usd, "order_id": order_info.get("id")},
-                                            priority=4
-                                        )
-                                    )
-                                except Exception as we:
-                                    logger.error(f"Failed to emit execution webhook: {we}")
-                        except Exception as e:
-                            outcome = f"ERROR_{signal.signal_type}"
-                            details = f"Failed to execute High Risk Add: {str(e)}"
-
-        # 4. Log cycle outcome and state metrics
+        # 4. Log cycle outcome for specific symbol
         self.logger_db.log_cycle(
-            symbol=self.symbol,
+            symbol=target_symbol,
             signal_type=signal.signal_type,
-            state=self.state_manager.current_state.value,
-            leverage=self.state_manager.leverage,
+            state=sym_state.value,
+            leverage=sym_leverage,
             price=signal.price,
             outcome=outcome,
             details=details
@@ -246,26 +191,52 @@ class MMS4Daemon:
             trade_count=summary["total_trades"]
         )
 
-        self.processed_cycles += 1
-        self.last_cycle_timestamp = now_iso
-
         return {
-            "cycle": self.processed_cycles,
+            "symbol": target_symbol,
             "timestamp": now_iso,
             "signal_type": signal.signal_type,
             "outcome": outcome,
-            "state": summary["current_state"],
-            "leverage": summary["leverage"],
+            "state": sym_state.value,
+            "leverage": sym_leverage,
             "order": order_info
         }
 
+    async def execute_cycle(self) -> Dict[str, Any]:
+        """Executes a single market evaluation cycle for primary symbol."""
+        res = await self.execute_symbol_cycle(self.symbol)
+        self.processed_cycles += 1
+        self.last_cycle_timestamp = res.get("timestamp")
+        res["cycle"] = self.processed_cycles
+        return res
+
+    async def execute_multi_symbol_cycle(self, symbols: List[str]) -> List[Dict[str, Any]]:
+        """
+        Executes parallel market evaluation cycles across multiple active symbols.
+        Uses asyncio.gather for asynchronous, non-blocking I/O execution.
+        """
+        tasks = [self.execute_symbol_cycle(sym) for sym in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        valid_results = []
+        for sym, res in zip(symbols, results):
+            if isinstance(res, Exception):
+                logger.error(f"Error executing cycle for {sym}: {res}")
+            else:
+                valid_results.append(res)
+                
+        self.processed_cycles += 1
+        self.last_cycle_timestamp = datetime.now(timezone.utc).isoformat()
+        return valid_results
+
     async def run_loop(self) -> None:
-        """Background loop executing cycles at configured intervals."""
+        """Background loop executing multi-symbol cycles at configured intervals."""
         while self._is_running:
             try:
-                await self.execute_cycle()
+                from mms4tk.api import active_symbols_store
+                active_syms = list(active_symbols_store) if active_symbols_store else [self.symbol]
+                await self.execute_multi_symbol_cycle(active_syms)
             except Exception as e:
-                logger.error(f"Error during daemon cycle execution: {type(e).__name__}: {str(e)}")
+                logger.error(f"Error during multi-symbol daemon loop: {type(e).__name__}: {str(e)}")
 
             try:
                 await asyncio.sleep(self.interval_seconds)
@@ -274,10 +245,12 @@ class MMS4Daemon:
 
     def get_status(self) -> Dict[str, Any]:
         """Return current status dictionary of the daemon."""
+        from mms4tk.api import active_symbols_store
         return {
             "is_running": self._is_running,
             "interval_seconds": self.interval_seconds,
             "symbol": self.symbol,
+            "active_symbols": list(active_symbols_store),
             "max_margin_usd": self.max_margin_usd,
             "base_trade_usd": self.base_trade_usd,
             "addon_trade_usd": self.addon_trade_usd,
@@ -285,3 +258,4 @@ class MMS4Daemon:
             "last_cycle_timestamp": self.last_cycle_timestamp,
             "processed_cycles": self.processed_cycles
         }
+
