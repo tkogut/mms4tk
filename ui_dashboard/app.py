@@ -150,11 +150,21 @@ def fetch_closed_trades_df():
     return pd.DataFrame()
 
 
+# Version Reader
+VERSION_FILE_PATH = os.path.join(os.path.dirname(__file__), "..", "VERSION")
+APP_VERSION = "0.5.0"
+if os.path.exists(VERSION_FILE_PATH):
+    try:
+        with open(VERSION_FILE_PATH, "r", encoding="utf-8") as vf:
+            APP_VERSION = vf.read().strip()
+    except Exception:
+        pass
+
 # Navigation Title Header
-st.markdown("""
+st.markdown(f"""
     <div style="text-align: center; padding-bottom: 10px;">
         <h2 style="margin: 0; color: #f3f4f6;">🤖 Mastermind Control Center</h2>
-        <p style="color: #9ca3af; margin: 0; font-size: 0.85rem;">VPS Autotrading & Strategy Supervisor Engine</p>
+        <p style="color: #9ca3af; margin: 0; font-size: 0.85rem;">VPS Autotrading Engine & Strategy Supervisor — <span style="background-color: #1f2937; color: #10b981; padding: 2px 8px; border-radius: 12px; font-weight: bold;">v{APP_VERSION}</span></p>
     </div>
 """, unsafe_allow_html=True)
 

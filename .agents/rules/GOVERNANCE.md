@@ -43,6 +43,13 @@ Every agent session operates under the Triad model. Switching roles requires a f
 - **Commit Strategy**: Coordinator is the only role allowed to trigger production pushes.
 - **Sequential Pattern [SEQ]**: No code changes allowed without a numbered plan in `.agents/plans/`.
 
+### G-02: Mandatory Application Version Bump
+- **Mandatory Versioning**: Prior to any git commit or deployment push, every agent MUST bump the application version in `VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`, and `ui_dashboard/app.py`.
+- **SemVer Increment**:
+  - `PATCH` (+0.0.1) for bug fixes, refactoring, or maintenance updates.
+  - `MINOR` (+0.1.0) for new features, API endpoints, or UI additions.
+  - `MAJOR` (+1.0.0) for breaking architecture changes.
+
 ---
 
 ## 3. REMOTE BROWSER & "PROOF OF LIFE"

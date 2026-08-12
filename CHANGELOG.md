@@ -6,6 +6,24 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 🎛️ [0.5.0] - 2026-08-12
+
+### ✨ Added
+- 📱 **Mastermind Control Center Web UI (`ui_dashboard`)**:
+  - Built dedicated Streamlit microservice (Python 3.11) with Mobile-First PWA support (`manifest.json` + iOS/Android viewport headers).
+  - 4 Interactive Tabs: **Monitoring** (live OKX positions & Hermes HITL), **Analytics** (KPIs & 3 Plotly charts), **Settings** (.env editor & UI password change), **Symbols** (X-Perps manager).
+- 🔄 **15-Min OKX Trade Sync Worker (`trade_sync.py`)**:
+  - Asynchronous background worker syncing closed trades from OKX API into SQLite `closed_trades` table in `logs.db`.
+- 📊 **KPI Analytics Engine (`logger_db.py`)**:
+  - Instant calculations for Win Rate (Total/Long/Short), Profit Factor, Max Drawdown (MDD %), and Average R:R.
+- 🛡️ **Traefik HTTPS & HTTP BasicAuth Protection**:
+  - Traefik reverse proxy integration with Let's Encrypt TLS and HTTP BasicAuth middleware on `mastermind.srv1490214.hstgr.cloud`.
+  - Added in-app password manager UI in Tab 3 Settings.
+- 📌 **Application Versioning Protocol**:
+  - Root `VERSION` file, `src/mms4tk/__init__.py`, `ui_dashboard/app.py` badge, and strict agent governance rules requiring version increment on every commit.
+
+---
+
 ## 🇪🇺 [0.4.1] - 2026-08-12
 
 ### ✨ Added & Improved
