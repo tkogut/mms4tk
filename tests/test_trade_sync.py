@@ -51,36 +51,40 @@ def test_logger_db_closed_trades_and_kpi(tmp_path):
     assert kpi["total_pnl_usd"] == -1.0
 
 
-@pytest.mark.asyncio
-async def test_trade_sync_worker(tmp_path):
-    db_file = os.path.join(tmp_path, "test_logs.db")
-    db = LoggerDB(db_path=db_file)
+def test_trade_sync_worker(tmp_path):
+    import asyncio
+    
+    async def _async_test():
+        db_file = os.path.join(tmp_path, "test_logs.db")
+        db = LoggerDB(db_path=db_file)
 
-    mock_executor = MagicMock()
-    mock_executor.has_credentials = True
-    mock_executor.initialize = AsyncMock()
-    mock_executor.exchange = MagicMock()
-    mock_executor.exchange.private_get_trade_orders_history_archive = AsyncMock(return_value={
-        "data": [
-            {
-                "ordId": "ord_100",
-                "state": "filled",
-                "instId": "BTC-USD_UM_XPERP-310404",
-                "side": "buy",
-                "posSide": "short",
-                "avgPx": "63723.7",
-                "sz": "1.0",
-                "pnl": "1.5",
-                "uTime": "1786525312271"
-            }
-        ]
-    })
+        mock_executor = MagicMock()
+        mock_executor.has_credentials = True
+        mock_executor.initialize = AsyncMock()
+        mock_executor.exchange = MagicMock()
+        mock_executor.exchange.private_get_trade_orders_history_archive = AsyncMock(return_value={
+            "data": [
+                {
+                    "ordId": "ord_100",
+                    "state": "filled",
+                    "instId": "BTC-USD_UM_XPERP-310404",
+                    "side": "buy",
+                    "posSide": "short",
+                    "avgPx": "63723.7",
+                    "sz": "1.0",
+                    "pnl": "1.5",
+                    "uTime": "1786525312271"
+                }
+            ]
+        })
 
-    worker = OKXTradeSyncWorker(executor=mock_executor, logger_db=db, interval_seconds=10.0)
-    synced = await worker.sync_closed_trades()
+        worker = OKXTradeSyncWorker(executor=mock_executor, logger_db=db, interval_seconds=10.0)
+        synced = await worker.sync_closed_trades()
 
-    assert synced == 1
-    trades = db.get_closed_trades()
-    assert len(trades) == 1
-    assert trades[0]["trade_id"] == "ord_100"
-    assert trades[0]["pnl_usd"] == 1.5
+        assert synced == 1
+        trades = db.get_closed_trades()
+        assert len(trades) == 1
+        assert trades[0]["trade_id"] == "ord_100"
+        assert trades[0]["pnl_usd"] == 1.5
+
+    asyncio.run(_async_test())
