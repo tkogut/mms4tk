@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as bg
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime, timezone
 
 # Ensure src/ is in python path for importing mms4tk modules
@@ -278,10 +279,115 @@ for v_path in [
 # Navigation Title Header
 st.markdown(f"""
     <div style="text-align: center; padding-bottom: 10px;">
-        <h2 style="margin: 0; color: #f3f4f6;">🤖 Mastermind Control Center</h2>
+        <h2 style="margin: 0; color: #f3f4f6;">🧠 Mastermind Control Center</h2>
         <p style="color: #9ca3af; margin: 0; font-size: 0.85rem;">VPS Autotrading Engine & Strategy Supervisor — <span style="background-color: #1f2937; color: #10b981; padding: 2px 8px; border-radius: 12px; font-weight: bold;">v{APP_VERSION}</span></p>
     </div>
 """, unsafe_allow_html=True)
+
+# Native Streamlit PWA Expander Banner (100% Guaranteed to work on all browsers & devices)
+with st.expander("📲 **Zainstaluj Aplikację na Pulpicie (PWA)**"):
+    st.markdown("""
+    **Jak dodać ikonę Mastermind do ekranu głównego telefonu lub komputera:**
+    
+    * 🤖 **Android (Chrome)**: Kliknij menu `⋮` (prawy górny róg) &rarr; wybierz **Zainstaluj aplikację** lub **Dodaj do ekranu głównego**.
+    * 🍎 **iPhone / iPad (Safari)**: Dotknij przycisku Udostępnij `📤` (na dole paska) &rarr; wybierz **Dodaj do ekranu początkowego**.
+    * 💻 **Komputer (Chrome / Edge / Brave)**: Kliknij ikonę `⊕` po prawej stronie paska adresu URL.
+    """)
+
+# Interactive PWA Component (iframe sandbox)
+components.html("""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; background: transparent; }
+        .pwa-card {
+            background: #1e293b;
+            border: 1px solid #3b82f6;
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: #ffffff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .pwa-text { flex-grow: 1; }
+        .pwa-title { font-weight: bold; color: #60a5fa; font-size: 0.95rem; }
+        .pwa-sub { font-size: 0.8rem; color: #94a3b8; margin-top: 2px; }
+        .pwa-btn {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            white-space: nowrap;
+            margin-left: 12px;
+        }
+        .pwa-btn:hover { background: #1d4ed8; }
+        .instructions-box {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            background: #0f172a;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            font-size: 0.8rem;
+            color: #cbd5e1;
+        }
+    </style>
+</head>
+<body>
+    <div class="pwa-card">
+        <div class="pwa-text">
+            <div class="pwa-title">📲 Zainstaluj Mastermind App</div>
+            <div class="pwa-sub">Szybki dostęp z pulpitu telefonu i komputera</div>
+        </div>
+        <button class="pwa-btn" onclick="handleClick()">📲 Dodaj / Zainstaluj</button>
+    </div>
+    <div id="inst-box" class="instructions-box">
+        <p style="margin:0 0 4px 0; font-weight:bold; color:#60a5fa;">💡 Wskazówki instalacji:</p>
+        <ul style="margin:0; padding-left:16px;">
+            <li><strong>Android</strong>: Menu <code>⋮</code> &rarr; <em>Dodaj do ekranu głównego</em></li>
+            <li><strong>iPhone (Safari)</strong>: Przygotuj <code>📤 Udostępnij</code> &rarr; <em>Dodaj do ekranu początkowego</em></li>
+            <li><strong>PC Chrome</strong>: Ikona <code>⊕</code> na pasku adresu</li>
+        </ul>
+    </div>
+
+    <script>
+    let promptEvent = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        promptEvent = e;
+    });
+    if (window.parent) {
+        window.parent.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            promptEvent = e;
+        });
+    }
+
+    async function handleClick() {
+        const box = document.getElementById('inst-box');
+        if (promptEvent) {
+            try {
+                promptEvent.prompt();
+                const { outcome } = await promptEvent.userChoice;
+                promptEvent = null;
+            } catch(e) {
+                box.style.display = (box.style.display === 'block') ? 'none' : 'block';
+            }
+        } else {
+            box.style.display = (box.style.display === 'block') ? 'none' : 'block';
+        }
+    }
+    </script>
+</body>
+</html>
+""", height=120)
 
 # 4 Core Tabs
 tab_monitoring, tab_analytics, tab_settings, tab_symbols = st.tabs([
