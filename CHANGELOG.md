@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 📊 [0.9.1] - 2026-08-12
+
+### 📊 Monitoring Tab Multi-Symbol Redesign & Zero-Trade KPI Fix
+- 📊 **Multi-Symbol Active Grid**: Redesigned `MonitoringTab.jsx` layout to render a live grid of all active trading pairs (`BTC/USDC`, `ETH/USDC`, `SOL/USDC`), displaying individual operating mode (`BASE_MODE`/`SCOUT_MODE`), leverage, and capital allocation.
+- 🎯 **Zero-Trade KPI Guard**: Fixed KPI calculations for Win Rate %, Profit Factor, Max Drawdown, and R:R Ratio when 0 trades exist in SQLite `logs.db`, cleanly displaying `0.0%` / `0.00` and `"Oczekiwanie na pierwsze transakcje z OKX"`.
+
+---
+
 ## 🎛️ [0.9.0] - 2026-08-12
 
 ### 🎛️ User-Controlled Multi-Symbol UI Manager & Hermes Multi-Pair Tools

@@ -1,17 +1,45 @@
-import React from 'react';
-import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, Award, Percent, AlertOctagon, Scale } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, Award, Percent, AlertOctagon, Scale, Layers } from 'lucide-react';
 
 export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) {
+  const [activeSymbols, setActiveSymbols] = useState([
+    { symbol: 'BTC/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
+    { symbol: 'ETH/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
+    { symbol: 'SOL/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true }
+  ]);
+
+  useEffect(() => {
+    const fetchSymbols = async () => {
+      try {
+        const res = await fetch('/api/v1/symbols');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.symbols && Array.isArray(data.symbols)) {
+            setActiveSymbols(data.symbols);
+          }
+        }
+      } catch (err) {
+        console.warn('[MonitoringTab] Error fetching symbols:', err);
+      }
+    };
+    fetchSymbols();
+  }, []);
+
   const isScoutMode = stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false;
   const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
   const leverage = stateData?.leverage || 3.0;
 
+  const totalTrades = statsData?.total_trades || 0;
+  const hasTraded = totalTrades > 0;
+
   const freeUsdc = statsData?.free_balance !== undefined ? Number(statsData.free_balance).toFixed(2) : '0.00';
   const btcBalance = statsData?.btc_balance !== undefined ? Number(statsData.btc_balance).toFixed(5) : '0.00000';
-  const winRate = statsData?.win_rate !== undefined ? Number(statsData.win_rate).toFixed(1) : '0.0';
-  const profitFactor = statsData?.profit_factor !== undefined ? Number(statsData.profit_factor).toFixed(2) : '0.00';
-  const maxDd = statsData?.max_drawdown !== undefined ? Number(statsData.max_drawdown).toFixed(2) : '0.00';
-  const avgRr = statsData?.average_rr !== undefined ? Number(statsData.average_rr).toFixed(2) : '0.00';
+  
+  // KPI Metrics: Only display real values if total_trades > 0, else 0.0 / Brak Transakcji
+  const winRate = hasTraded && statsData?.win_rate !== undefined ? Number(statsData.win_rate).toFixed(1) : '0.0';
+  const profitFactor = hasTraded && statsData?.profit_factor !== undefined ? Number(statsData.profit_factor).toFixed(2) : '0.00';
+  const maxDd = hasTraded && statsData?.max_drawdown !== undefined ? Number(statsData.max_drawdown).toFixed(2) : '0.00';
+  const avgRr = hasTraded && statsData?.average_rr !== undefined ? Number(statsData.average_rr).toFixed(2) : '0.00';
 
   return (
     <div className="space-y-6">
@@ -53,7 +81,48 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
         </div>
       </div>
 
-      {/* Primary Account Metrics */}
+      {/* Multi-Symbol Active Pairs Grid Header */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-100 text-base flex items-center gap-2">
+            <Layers className="w-5 h-5 text-blue-400" />
+            <span>Stan Aktywnych Par Rynkowych ({activeSymbols.length} Aktywne)</span>
+          </h3>
+          <span className="text-xs bg-blue-950 border border-blue-500/30 text-blue-300 px-3 py-1 rounded-full font-mono">
+            Multi-Symbol Active Grid
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {activeSymbols.map((s) => (
+            <div key={s.symbol} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                <span className="font-extrabold text-gray-100 font-mono text-sm">{s.symbol}</span>
+                <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold border ${
+                  s.state === 'SCOUT_MODE'
+                    ? 'bg-amber-950 text-amber-300 border-amber-500/40'
+                    : 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                }`}>
+                  {s.state || 'BASE_MODE'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Dźwignia:</span>
+                  <span className="font-bold text-blue-400">{Number(s.leverage || leverage).toFixed(1)}x</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Alokacja Base/Add:</span>
+                  <span className="font-bold text-slate-300">70% / 30%</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Primary Account Balances Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
@@ -68,7 +137,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
-            <span className="text-xs font-medium">Pozycja BTC</span>
+            <span className="text-xs font-medium">Saldo BTC</span>
             <TrendingUp className="w-4 h-4 text-blue-400" />
           </div>
           <div className="text-2xl font-bold text-gray-100 font-mono">
@@ -79,13 +148,13 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
-            <span className="text-xs font-medium">Dźwignia Rynkowa</span>
+            <span className="text-xs font-medium">Liczba Zorganizowanych Transakcji</span>
             <Zap className="w-4 h-4 text-amber-400" />
           </div>
           <div className="text-2xl font-bold text-gray-100 font-mono">
-            {leverage.toFixed(1)}x
+            {totalTrades}
           </div>
-          <div className="text-xs text-slate-400 mt-1">Alokator dźwigni (Maks 10.0x)</div>
+          <div className="text-xs text-slate-400 mt-1">Zamknięte w SQLite logs.db</div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -102,12 +171,19 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
         </div>
       </div>
 
-      {/* KPI Tiles Section (Win Rate, Profit Factor, MDD, R:R) */}
+      {/* KPI Summary Section (Win Rate, Profit Factor, MDD, R:R) */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
-        <h3 className="font-semibold text-gray-200 text-sm flex items-center gap-2">
-          <Award className="w-4 h-4 text-amber-400" />
-          <span>Kafelki Wydajności Algorytmu (KPI Summary)</span>
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-gray-200 text-sm flex items-center gap-2">
+            <Award className="w-4 h-4 text-amber-400" />
+            <span>Kafelki Wydajności Algorytmu (KPI Summary)</span>
+          </h3>
+          {!hasTraded && (
+            <span className="text-[10px] text-amber-400 font-mono bg-amber-950/60 px-2 py-0.5 rounded border border-amber-500/30">
+              Oczekiwanie na pierwsze zrealizowane transakcje z OKX
+            </span>
+          )}
+        </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3.5">
@@ -115,7 +191,9 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
               <span className="text-xs font-medium">Win Rate</span>
               <Percent className="w-3.5 h-3.5 text-emerald-400" />
             </div>
-            <div className="text-xl font-bold text-emerald-400 font-mono">{winRate}%</div>
+            <div className="text-xl font-bold text-emerald-400 font-mono">
+              {hasTraded ? `${winRate}%` : '0.0%'}
+            </div>
             <div className="text-[10px] text-slate-500">Skuteczność transakcji</div>
           </div>
 
@@ -124,7 +202,9 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
               <span className="text-xs font-medium">Profit Factor</span>
               <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
             </div>
-            <div className="text-xl font-bold text-blue-400 font-mono">{profitFactor}</div>
+            <div className="text-xl font-bold text-blue-400 font-mono">
+              {hasTraded ? profitFactor : '0.00'}
+            </div>
             <div className="text-[10px] text-slate-500">Stosunek zysku do strat</div>
           </div>
 
@@ -133,7 +213,9 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
               <span className="text-xs font-medium">Max Drawdown</span>
               <AlertOctagon className="w-3.5 h-3.5 text-red-400" />
             </div>
-            <div className="text-xl font-bold text-red-400 font-mono">${maxDd}</div>
+            <div className="text-xl font-bold text-red-400 font-mono">
+              {hasTraded ? `$${maxDd}` : '$0.00'}
+            </div>
             <div className="text-[10px] text-slate-500">Maksymalne obsunięcie</div>
           </div>
 
@@ -142,7 +224,9 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
               <span className="text-xs font-medium">R:R Ratio</span>
               <Scale className="w-3.5 h-3.5 text-amber-400" />
             </div>
-            <div className="text-xl font-bold text-amber-400 font-mono">{avgRr}</div>
+            <div className="text-xl font-bold text-amber-400 font-mono">
+              {hasTraded ? avgRr : '0.00'}
+            </div>
             <div className="text-[10px] text-slate-500">Zysk do ryzyka</div>
           </div>
         </div>
@@ -178,8 +262,8 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
             ))}
           </div>
         ) : (
-          <div className="text-center py-8 text-slate-500 text-sm bg-slate-950/40 rounded-lg border border-slate-800/60">
-            Brak aktywnych zadań w kolejce Hermes Kanban. Wszystkie systemy działają nominalnie.
+          <div className="text-center py-6 text-slate-500 text-xs font-mono bg-slate-950/40 rounded-lg border border-slate-800/60">
+            Brak oczekujących zadań w systemie Hermes Kanban.
           </div>
         )}
       </div>
