@@ -232,9 +232,12 @@ class MMS4Daemon:
         """Background loop executing multi-symbol cycles at configured intervals."""
         while self._is_running:
             try:
-                from mms4tk.api import active_symbols_store
-                active_syms = list(active_symbols_store) if active_symbols_store else [self.symbol]
-                await self.execute_multi_symbol_cycle(active_syms)
+                from mms4tk.api import configured_symbols_store
+                symbols = [s for s, act in configured_symbols_store.items() if act]
+            except Exception:
+                symbols = [self.symbol]
+            try:
+                await self.execute_multi_symbol_cycle(symbols)
             except Exception as e:
                 logger.error(f"Error during multi-symbol daemon loop: {type(e).__name__}: {str(e)}")
 
@@ -245,12 +248,16 @@ class MMS4Daemon:
 
     def get_status(self) -> Dict[str, Any]:
         """Return current status dictionary of the daemon."""
-        from mms4tk.api import active_symbols_store
+        try:
+            from mms4tk.api import configured_symbols_store
+            active_syms = [s for s, act in configured_symbols_store.items() if act]
+        except Exception:
+            active_syms = [self.symbol]
         return {
             "is_running": self._is_running,
             "interval_seconds": self.interval_seconds,
             "symbol": self.symbol,
-            "active_symbols": list(active_symbols_store),
+            "active_symbols": active_syms,
             "max_margin_usd": self.max_margin_usd,
             "base_trade_usd": self.base_trade_usd,
             "addon_trade_usd": self.addon_trade_usd,

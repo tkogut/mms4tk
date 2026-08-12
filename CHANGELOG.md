@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## ⏸️ [0.9.4] - 2026-08-12
+
+### ⏸️ Paused Symbol UI Persistence & OKX Instrument Mapping Clarification
+- ⏸️ **UI Paused Symbol State**: Refactored symbol store in `src/mms4tk/api.py` so deactivated pairs remain visible in `SymbolsTab.jsx` with the **`[WSTRZYMANA]`** status badge instead of disappearing from the manager view.
+- 🔗 **Automatic OKX Ticker Resolution**: OKX Executor automatically formats standard trading pairs (`ETH/USDC` -> `ETH-USDC` / `ETH-USDC-SWAP`) without manual ID lookup.
+
+---
+
 ## 📈 [0.9.3] - 2026-08-12
 
 ### 📈 Dynamic Symbol Titles & Labels in Analytics Price Chart

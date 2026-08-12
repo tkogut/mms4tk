@@ -1,6 +1,6 @@
 import pytest
 from mms4tk.state_manager import MMS4StateManager, MMS4State
-from mms4tk.api import app, active_symbols_store
+from mms4tk.api import app, configured_symbols_store
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -63,18 +63,18 @@ def test_add_remove_trading_symbol_api():
 
     # Verify added
     get_res = client.get("/api/v1/symbols")
-    syms = [s["symbol"] for s in get_res.json()["symbols"]]
+    syms = [s["symbol"] for s in get_res.json()["symbols"] if s["is_active"]]
     assert "DOGE/USDC" in syms
 
-    # Delete DOGE/USDC
+    # Delete (Pause) DOGE/USDC
     del_res = client.delete("/api/v1/symbols/DOGE/USDC", headers=headers)
     assert del_res.status_code == 200
-    assert del_res.json()["removed"] == "DOGE/USDC"
+    assert del_res.json()["paused"] == "DOGE/USDC"
 
-    # Verify removed
+    # Verify paused
     get_res2 = client.get("/api/v1/symbols")
-    syms2 = [s["symbol"] for s in get_res2.json()["symbols"]]
-    assert "DOGE/USDC" not in syms2
+    active_syms = [s["symbol"] for s in get_res2.json()["symbols"] if s["is_active"]]
+    assert "DOGE/USDC" not in active_syms
 
 
 def test_multi_symbol_daemon_cycle():

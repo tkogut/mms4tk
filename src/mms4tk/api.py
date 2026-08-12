@@ -572,7 +572,11 @@ async def change_password(req: PasswordChangeRequest) -> Dict[str, Any]:
 
 # ─── Multi-Symbol Trading Endpoints ─────────────────────────────────────────
 
-active_symbols_store: List[str] = ["BTC/USDC", "ETH/USDC", "SOL/USDC"]
+configured_symbols_store: Dict[str, bool] = {
+    "BTC/USDC": True,
+    "ETH/USDC": True,
+    "SOL/USDC": True
+}
 
 
 class AddSymbolRequest(BaseModel):
@@ -582,16 +586,16 @@ class AddSymbolRequest(BaseModel):
 
 @app.get("/api/v1/symbols", tags=["Multi-Symbol"])
 async def get_trading_symbols() -> Dict[str, Any]:
-    """Get active trading symbols with per-symbol operating state and leverage."""
+    """Get all configured trading symbols with active status, per-symbol operating state and leverage."""
     result = []
-    for sym in active_symbols_store:
+    for sym, is_act in configured_symbols_store.items():
         state = state_manager.get_symbol_state(sym)
         leverage = state_manager.get_symbol_leverage(sym)
         result.append({
             "symbol": sym,
             "state": state.value,
             "leverage": leverage,
-            "is_active": True,
+            "is_active": is_act,
             "directional_bias": state_manager.strategy_profile.directional_bias,
             "risk_profile": state_manager.strategy_profile.risk_profile
         })
@@ -600,30 +604,29 @@ async def get_trading_symbols() -> Dict[str, Any]:
 
 @app.post("/api/v1/symbols/add", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 async def add_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
-    """Add a new trading pair to active multi-symbol trading list."""
+    """Add or activate a trading pair in multi-symbol list."""
     formatted_sym = req.symbol.upper().strip()
-    if formatted_sym not in active_symbols_store:
-        active_symbols_store.append(formatted_sym)
-        state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair addition via API")
+    configured_symbols_store[formatted_sym] = req.is_active
+    state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair addition/activation via API")
     return {
         "status": "success",
         "symbol": formatted_sym,
-        "active_symbols": active_symbols_store
+        "is_active": req.is_active,
+        "configured_symbols": configured_symbols_store
     }
 
 
 @app.delete("/api/v1/symbols/{symbol:path}", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 async def remove_trading_symbol(symbol: str) -> Dict[str, Any]:
-    """Remove or deactivate a trading pair from active multi-symbol list."""
+    """Deactivate (pause) a trading pair without deleting it from the manager UI."""
     formatted_sym = symbol.upper().strip()
-    if formatted_sym in active_symbols_store:
-        if len(active_symbols_store) == 1:
-            raise HTTPException(status_code=400, detail="Cannot remove the last active trading symbol.")
-        active_symbols_store.remove(formatted_sym)
+    if formatted_sym in configured_symbols_store:
+        configured_symbols_store[formatted_sym] = False
     return {
         "status": "success",
-        "removed": formatted_sym,
-        "active_symbols": active_symbols_store
+        "paused": formatted_sym,
+        "is_active": False,
+        "configured_symbols": configured_symbols_store
     }
 
 
