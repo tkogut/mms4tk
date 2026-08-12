@@ -6,7 +6,17 @@
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**mms4tk** is a high-reliability, two-tier adaptive algorithmic trading system designed for **OKX Perpetual Swaps (e.g. BTC/USDC, ETH/USDC)**. It combines a high-speed execution daemon (`mms4tk`) with an autonomous LLM strategic supervisor ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
+**mms4tk** is a high-reliability, two-tier adaptive algorithmic trading system designed for **OKX Europe (EEA) X-Perps / Expiry Perps in USDC (e.g. BTC/USDC, ETH/USDC)** and Spot markets under MiCA/MiFID compliance. It combines a high-speed execution daemon (`mms4tk`) with an autonomous LLM strategic supervisor ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
+
+---
+
+## 🇪🇺 OKX Europe (EEA) X-Perp Derivatives Architecture
+
+For European Economic Area (EEA) users operating under MiCA/MiFID regulations on OKX Europe (`https://eea.okx.com`):
+1. **Regional API Endpoint**: Requests are routed to `https://eea.okx.com` (configured via `OKX_REST_URL`).
+2. **X-Perps (Expiry Perps in USDC)**: Global `SWAP` instruments (e.g., `BTC-USDT-SWAP`) are restricted for EEA API keys. `mms4tk` dynamically discovers live **X-Perp** instruments (`instType=FUTURES`, `ruleType=xperp`, `settleCcy=USDC`).
+3. **CCXT Symbol Resolution**: Dynamically maps OKX native instrument IDs (e.g., `BTC-USD_UM_XPERP-310404`) to CCXT unified symbols (e.g., `BTC/USD:USD-310404`).
+4. **Hedge Mode (`posMode: long_short_mode`)**: Automatically passes `posSide` (`"short"` for SELL, `"long"` for BUY) and `tdMode: "cross"` for contract orders.
 
 ---
 

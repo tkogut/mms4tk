@@ -164,3 +164,18 @@ Tools exposed to Hermes Agent:
 9. `mms4_set_strategy_profile`
 10. `mms4_get_pending_events`
 11. `mms4_hitl_resolve`
+
+---
+
+## 🇪🇺 OKX Europe (EEA) Execution Details
+
+When executing orders on OKX Europe (`https://eea.okx.com`):
+
+### 1. Symbol & Instrument Resolution
+- **Input**: Standard market symbols (e.g. `BTC/USDC`, `BTC-USDC-SWAP`).
+- **Auto-Discovery**: `discover_eea_xperp_symbol()` queries OKX `GET /api/v5/account/instruments?instType=FUTURES` filtering for `ruleType=xperp` and `state=live`.
+- **CCXT Unified Mapping**: Maps native OKX IDs (e.g. `BTC-USD_UM_XPERP-310404`) to CCXT unified symbols (e.g. `BTC/USD:USD-310404`).
+
+### 2. Order Parameters & Position Mode
+- **Hedge Mode (`posMode: long_short_mode`)**: Pass `params={"tdMode": "cross", "posSide": "short"}` for SELL orders and `params={"tdMode": "cross", "posSide": "long"}` for BUY orders.
+- **Contract Size (`ctVal`)**: Computes contract size (e.g. `ctVal = 0.0001 BTC` for BTC X-Perp) to convert target USD allocation into precise contract quantities (`sz`).

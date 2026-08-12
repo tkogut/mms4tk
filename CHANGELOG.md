@@ -6,6 +6,21 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## 🇪🇺 [0.4.1] - 2026-08-12
+
+### ✨ Added & Improved
+- 🇪🇺 **OKX Europe (EEA) X-Perp Derivatives Support**:
+  - Full support for OKX Europe regional REST domain `https://eea.okx.com` under MiCA/MiFID compliance.
+  - **Dynamic Instrument Auto-Discovery (`discover_eea_xperp_symbol`)**: Automatically queries `GET /api/v5/account/instruments?instType=FUTURES` and resolves active live X-Perp contracts (`ruleType=xperp`, `settleCcy=USDC`) such as `BTC-USD_UM_XPERP-310404`.
+  - **CCXT Unified Market Mapping**: Resolved internal CCXT market table mapping from OKX native `instId` to CCXT unified symbols (e.g. `BTC/USD:USD-310404`), eliminating `BadSymbol` exceptions.
+  - **OKX Hedge Mode (`posMode: long_short_mode`)**: Enforced `posSide` (`"short"` for SELL, `"long"` for BUY) and `tdMode: "cross"` parameters across all derivative orders.
+- 📚 **RAG Knowledge Base & Documentation**:
+  - Created `.agents/specs/knowledge/okx_europe_eea_x_perps.md` expert integration guide synchronized from NotebookLM.
+  - Registered node and edge links in `.agents/specs/graph.json`.
+  - Updated `README.md` and `docs/API.md` with OKX Europe EEA derivative details.
+
+---
+
 ## 🚀 [0.4.0] - 2026-08-11
 
 ### ✨ Added
