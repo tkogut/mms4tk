@@ -111,34 +111,35 @@ class OKXExecutor:
     async def verify_symbol_with_okx(self, symbol: str) -> Dict[str, Any]:
         """
         One-time verification of a trading pair against live OKX REST API.
-        Fetches live ticker/candles from OKX. Returns validation dictionary.
+        Strictly tests live OKX API without mock candle fallback.
+        Returns validation dictionary with okx_verified boolean.
         """
         if ccxt is not None:
-            try:
-                ex = self.exchange or ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
-                ticker = await ex.fetch_ticker(symbol)
-                if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
-                    return {
-                        "symbol": symbol,
-                        "okx_verified": True,
-                        "okx_status": "VERIFIED",
-                        "last_price": float(ticker["last"])
-                    }
-            except Exception as e:
-                logger.warning(f"OKX fetch_ticker verification failed for {symbol}: {e}")
+            symbols_to_test = [symbol]
+            if "/" in symbol:
+                base, quote = symbol.split("/", 1)
+                symbols_to_test.append(f"{base}-{quote}")
+                symbols_to_test.append(f"{base}/{quote}:{quote}")
+                symbols_to_test.append(f"{base}-{quote}-SWAP")
 
-        # Candle fallback check
-        try:
-            candles = await self.fetch_candles(symbol, timeframe="1m", limit=1)
-            if candles and len(candles) > 0 and candles[0].close > 0:
-                return {
-                    "symbol": symbol,
-                    "okx_verified": True,
-                    "okx_status": "VERIFIED",
-                    "last_price": float(candles[0].close)
-                }
-        except Exception as e:
-            logger.warning(f"OKX candle verification failed for {symbol}: {e}")
+            ex = self.exchange or ccxt.okx({
+                "enableRateLimit": True,
+                "urls": {"api": {"rest": os.getenv("OKX_REST_URL", "https://eea.okx.com")}},
+                "options": {"defaultType": "swap"}
+            })
+
+            for test_sym in symbols_to_test:
+                try:
+                    ticker = await ex.fetch_ticker(test_sym)
+                    if ticker and ticker.get("last") is not None and float(ticker["last"]) > 0:
+                        return {
+                            "symbol": symbol,
+                            "okx_verified": True,
+                            "okx_status": "VERIFIED",
+                            "last_price": float(ticker["last"])
+                        }
+                except Exception as e:
+                    logger.debug(f"OKX fetch_ticker test failed for {test_sym}: {e}")
 
         return {
             "symbol": symbol,

@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🎯 [0.10.1] - 2026-08-12
+
+### 🎯 Strict OKX Live REST API Verification Fix
+- 🔴 **Eliminated Mock Fallback in Verification**: Fixed `verify_symbol_with_okx` in `src/mms4tk/okx_executor.py` so that verification performs strict live OKX API `fetch_ticker` tests without falling back to mock candles, ensuring unsupported pairs (e.g. `AVAX/USDC`) correctly render the Red LED status light.
+
+---
+
 ## 🔴🟢 [0.10.0] - 2026-08-12
 
 ### 🔴🟢 OKX API LED Status Light & Live Pair Verification
