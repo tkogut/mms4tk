@@ -219,7 +219,7 @@ def fetch_closed_trades_df():
 
 
 # Version Reader
-APP_VERSION = "0.6.3"
+APP_VERSION = "0.6.4"
 try:
     from mms4tk import __version__ as mms_ver
     APP_VERSION = mms_ver
@@ -353,7 +353,8 @@ with tab_analytics:
 
     df = fetch_closed_trades_df()
     if not df.empty and "pnl_usd" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        df = df.sort_values("timestamp", ascending=True).reset_index(drop=True)
         df["cum_pnl"] = df["pnl_usd"].cumsum()
 
         # 1. Time Range Selector Bar
@@ -366,8 +367,8 @@ with tab_analytics:
             label_visibility="collapsed"
         )
 
-        # Filter DataFrame by selected time_range
-        now = datetime.now(timezone.utc)
+        # Filter DataFrame by selected time_range safely with UTC Timestamps
+        now = pd.Timestamp.now(tz="UTC")
         filtered_df = df.copy()
         if time_range == "4h":
             cutoff = now - pd.Timedelta(hours=4)
@@ -395,7 +396,8 @@ with tab_analytics:
             filtered_df = df[df["timestamp"] >= cutoff]
 
         if filtered_df.empty:
-            filtered_df = df.iloc[-10:] if len(df) >= 10 else df
+            st.info(f"ℹ️ Brak zamkniętych pozycji w wybranym oknie czasowym ({time_range}). Wyświetlanie pełnej dostępnej historii.")
+            filtered_df = df
 
         # 1. Equity Curve Chart
         st.markdown("#### 📈 Cumulative PnL (Equity Curve)")

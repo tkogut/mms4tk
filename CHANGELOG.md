@@ -6,6 +6,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## ⏱️ [0.6.4] - 2026-08-12
+
+### 🐛 Timeframe Filter Datetime & Fallback Fixes
+- ⏱️ **UTC Datetime Matching**: Enforced `pd.to_datetime(df['timestamp'], utc=True)` and `pd.Timestamp.now(tz='UTC')` matching to eliminate timezone-aware vs naive comparison exceptions in Streamlit.
+- ℹ️ **Empty Timeframe Fallback Informative Notice**: Added explicit user notification when zero trades fall within narrow timeframe windows (e.g. `4h`), preventing silent chart resets.
+
+---
+
 ## 📱 [0.6.3] - 2026-08-12
 
 ### 📱 Touch Safety & Plotly ModeBar Re-activation
