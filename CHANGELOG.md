@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🤖 [0.15.0] - 2026-08-13
+
+### 🤖 Hermes Swarm Agent Multi-Symbol Integration & OpenAPI Schema
+- 🤖 **OpenAPI Schema Integration**: Added `mms4_get_symbols` tool definition to `.agents/swarm/openapi.json` allowing Hermes agent to dynamically discover all configured trading symbols, allocation USD amounts, Base/Add ratios, and live states.
+- 📐 **Cron Strategy Architecture**: Formulated Unified Multi-Symbol Digest & Event-Driven Alerting architecture for Hermes agent swarm (`hermes_multi_symbol_plan.md`).
+
+---
+
 ## 🌍 [0.14.4] - 2026-08-13
 
 ### 🌐 Universal Contract Amount Precision & JSON Import Fix
