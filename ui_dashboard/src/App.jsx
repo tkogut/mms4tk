@@ -15,12 +15,20 @@ export default function App() {
   const [tradesHistory, setTradesHistory] = useState([]);
   const [kanbanCards, setKanbanCards] = useState([]);
   const [isConnected, setIsConnected] = useState(true);
+  const [appVersion, setAppVersion] = useState('0.13.1');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
 
   const fetchDashboardData = async () => {
     try {
+      // 0. Fetch health for live version
+      const healthRes = await fetch('/api/v1/health');
+      if (healthRes.ok) {
+        const hData = await healthRes.json();
+        if (hData.version) setAppVersion(hData.version);
+      }
+
       // 1. Fetch daemon state
       const stateRes = await fetch('/api/v1/state');
       if (stateRes.ok) {
@@ -92,7 +100,7 @@ export default function App() {
       )}
 
       {/* Main Header */}
-      <Header version="0.13.0" isConnected={isConnected} />
+      <Header version={appVersion} isConnected={isConnected} />
 
       {/* Navigation Tabs */}
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />

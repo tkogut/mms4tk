@@ -15,7 +15,9 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
         if (res.ok) {
           const data = await res.json();
           if (data.symbols && Array.isArray(data.symbols)) {
-            setActiveSymbols(data.symbols);
+            // Filter ONLY active symbols! Paused symbols (is_active === false) are excluded from active monitoring grid.
+            const activeOnly = data.symbols.filter(s => s.is_active !== false);
+            setActiveSymbols(activeOnly);
           }
         }
       } catch (err) {

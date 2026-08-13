@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔄 [0.13.2] - 2026-08-13
+
+### 🐛 Dynamic Header Version & Active-Only Symbol Filtering in Monitoring Grid
+- ⚡ **Dynamic Live Version Fetching**: Updated `App.jsx` and `Header.jsx` to fetch live system version from `/api/v1/health` (rendering dynamic `v0.13.2`), eliminating static fallback `0.13.0`.
+- ⏸️ **Active-Only Symbol Grid Filtering**: Updated `MonitoringTab.jsx` to filter `data.symbols` for `is_active !== false`. Paused symbols in the `Symbols` tab are now correctly hidden from the active trading grid on the `Monitoring` tab.
+
+---
+
 ## 🟢 [0.13.1] - 2026-08-13
 
 ### 🟢 Simplified Ticker Verification via Live OKX Price Confirmation
