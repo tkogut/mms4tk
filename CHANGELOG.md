@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 💬 [0.15.7] - 2026-08-13
+
+### 💬 Hermes Telegram Notification Integration
+- 💬 **Hermes Telegram Notify**: Added fallback `hermes notify --channel telegram` dispatch inside `scripts/hermes/mms4tk_multi_symbol_digest.py` via native CLI or `docker exec hermes-agent` to deliver hourly Multi-Symbol Digest reports directly to the user's Telegram chat.
+
+---
+
 ## 🔖 [0.15.6] - 2026-08-13
 
 ### 🔖 Dynamic Version Resolution & Webhook Fix Verification

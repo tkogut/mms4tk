@@ -78,6 +78,19 @@ def create_kanban_digest_card(title: str, description: str):
     except Exception:
         pass
 
+    # 3. Deliver via Hermes notification engine to Telegram
+    try:
+        notify_msg = f"{title}\n\n{description}"
+        # Try native CLI or docker exec hermes-agent
+        if os.path.exists(hermes_cli):
+            n_cmd = [hermes_cli, "notify", "--channel", "telegram", notify_msg]
+        else:
+            n_cmd = ["docker", "exec", "hermes-agent", "hermes", "notify", "--channel", "telegram", notify_msg]
+        subprocess.run(n_cmd, capture_output=True, text=True, timeout=15)
+        print("💬 Hermes Telegram notification dispatched!")
+    except Exception as ne:
+        print(f"⚠️ Hermes Telegram notify notice: {ne}", file=sys.stderr)
+
 
 def main():
     health_data = fetch_api("/api/v1/health") or {}
