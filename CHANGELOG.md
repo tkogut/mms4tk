@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🌐 [0.15.8] - 2026-08-13
+
+### 🌐 Resilient Container API URL Resolution
+- 🌐 **Dynamic Base URL Probing**: Added `get_api_base_url()` to `scripts/hermes/mms4tk_multi_symbol_digest.py` probing `http://antigravity_core:8000`, `http://172.17.0.1:8501`, and `http://localhost:8501`, ensuring the script reaches `mms4tk` REST API reliably whether run inside `hermes-agent` Docker container, on VPS host, or inside core container.
+
+---
+
 ## 💬 [0.15.7] - 2026-08-13
 
 ### 💬 Hermes Telegram Notification Integration
