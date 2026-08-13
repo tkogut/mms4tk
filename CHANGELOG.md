@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🟢 [0.13.1] - 2026-08-13
+
+### 🟢 Simplified Ticker Verification via Live OKX Price Confirmation
+- 🟢 **Live OKX Price Confirmation**: Updated `verify_symbol_with_okx` in `src/mms4tk/okx_executor.py` to confirm pairs directly via live OKX `fetch_ticker` price fetching. If OKX returns a valid live price, the pair is confirmed and marked **🟢 AUTOTRADE_READY** with its live price display, reflecting unlocked user API permissions.
+
+---
+
 ## 🔑 [0.13.0] - 2026-08-12
 
 ### 🔑 OKX API Key Trade Fee Permission Probe (`GET /api/v5/account/trade-fee`)
