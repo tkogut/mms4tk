@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 📈 [0.15.2] - 2026-08-13
+
+### 📜 Hermes Multi-Symbol Digest Script Implementation
+- 📜 **Unified Multi-Symbol Digest Script**: Added `scripts/hermes/mms4tk_multi_symbol_digest.py` executable script for Hermes agent cron (`0 * * * *`). Automatically fetches active symbols and open positions, formats structured markdown report, and posts to Hermes Kanban & Telegram.
+
+---
+
 ## 📈 [0.15.1] - 2026-08-13
 
 ### 📈 Live Open Positions Endpoint & Hermes Positions Digest Integration
