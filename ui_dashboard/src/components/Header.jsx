@@ -15,7 +15,7 @@ export function Header({ version, isConnected }) {
           <p className="text-xs text-slate-400 flex items-center justify-center sm:justify-start gap-2 mt-0.5">
             <span>VPS Autotrading Engine & Strategy Supervisor</span>
             <span className="px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
-              v{version || '0.14.3'}
+              v{version || '0.14.4'}
             </span>
           </p>
         </div>

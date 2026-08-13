@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🌍 [0.14.4] - 2026-08-13
+
+### 🌐 Universal Contract Amount Precision & JSON Import Fix
+- 🌍 **Universal Contract Precision**: Expanded contract pattern matching (`:`, `-`, `XPERP`, `SWAP`, `PERP`, `FUTURES`, or any non-spot symbol) in `calculate_order_amount` in `src/mms4tk/okx_executor.py` so integer contract amounts are guaranteed across ALL present and future pairs (`BTC`, `SOL`, `ICP`, `ETH`, `AVAX`, etc.).
+- 📦 **API JSON Import Fix**: Added `import json` at top of `src/mms4tk/api.py` to fix `Failed to save symbols.json: name 'json' is not defined` when adding dynamic symbols.
+
+---
+
 ## 🩹 [0.14.3] - 2026-08-13
 
 ### 🔢 OKX Contract Order Amount Integer Precision Enforcement
