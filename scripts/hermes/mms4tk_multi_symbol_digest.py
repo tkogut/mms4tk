@@ -80,6 +80,9 @@ def create_kanban_digest_card(title: str, description: str):
 
 
 def main():
+    health_data = fetch_api("/api/v1/health") or {}
+    ver = health_data.get("version", "0.15.6")
+
     symbols_data = fetch_api("/api/v1/symbols") or {}
     positions_data = fetch_api("/api/v1/positions") or {}
 
@@ -95,7 +98,7 @@ def main():
     total_upnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in positions)
 
     lines = []
-    lines.append(f"📊 **HERMES MULTI-SYMBOL SWARM DIGEST** (Wersja v0.15.1)")
+    lines.append(f"📊 **HERMES MULTI-SYMBOL SWARM DIGEST** (Wersja v{ver})")
     lines.append(f"")
     lines.append(f"🟢 **AKTYWNE PARY RYNTKOWE ({len(active_symbols)}/{len(symbols)})**:")
 

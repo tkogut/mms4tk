@@ -12,7 +12,7 @@ from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
 from mms4tk.okx_executor import OKXExecutor
 from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine, HigherTimeframeAnalytics
 from mms4tk.daemon import MMS4Daemon
-from mms4tk.hermes_webhook import HermesWebhookClient
+from mms4tk.hermes_webhook import HermesWebhookClient, HermesWebhookEvent
 
 from mms4tk.trade_sync import OKXTradeSyncWorker
 
@@ -439,12 +439,13 @@ class PostWebhookRequest(BaseModel):
 @app.post("/api/v1/hermes/webhook", tags=["Hermes Integration"])
 async def post_custom_webhook_event(req: PostWebhookRequest) -> Dict[str, Any]:
     """Log a custom webhook event to mms4tk database for Hermes Kanban & Dashboard display."""
-    event_id = hermes_webhook.log_event(
+    event = HermesWebhookEvent(
         event_type=req.event_type,
         title=req.title,
-        details=req.details,
+        body=req.details,
         priority=req.priority
     )
+    event_id = hermes_webhook.emit_event(event)
     return {"status": "success", "event_id": event_id}
 
 
