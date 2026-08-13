@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import math
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -258,22 +259,29 @@ class OKXExecutor:
     def calculate_order_amount(self, symbol: str, target_usd: float, price: float) -> float:
         """
         Calculate precise order amount (contracts or coins) for target USD allocation.
-        Accounts for CCXT contractSize, market type, and min/precision limits.
+        Accounts for CCXT contractSize, market type, minimum order limits, and OKX integer contract precision.
         """
         if price <= 0 or target_usd <= 0:
-            return 0.01
+            return 1.0
 
         if self.exchange and self.exchange.markets and symbol in self.exchange.markets:
             try:
                 market = self.exchange.market(symbol)
                 contract_size = market.get("contractSize") or 1.0
-                is_contract = market.get("swap", False) or market.get("contract", False) or ":" in symbol or "XPERP" in symbol
-                if is_contract and contract_size > 0:
+                is_contract = market.get("swap", False) or market.get("contract", False) or ":" in symbol or "XPERP" in symbol or market.get("type") in ["swap", "future"]
+                if is_contract:
+                    if contract_size <= 0:
+                        contract_size = 1.0
                     raw_contracts = target_usd / (price * contract_size)
-                    min_amt = market.get("limits", {}).get("amount", {}).get("min") or 1.0
-                    amount = max(raw_contracts, min_amt)
-                    formatted = self.exchange.amount_to_precision(symbol, amount)
-                    return float(formatted)
+                    min_amt = float(market.get("limits", {}).get("amount", {}).get("min") or 1.0)
+                    
+                    # On OKX futures/swaps, contracts must be integers >= 1.0
+                    contracts = math.ceil(raw_contracts) if raw_contracts > 0 else 1
+                    contracts = max(contracts, int(math.ceil(min_amt)), 1)
+                    
+                    formatted = self.exchange.amount_to_precision(symbol, float(contracts))
+                    val = float(formatted)
+                    return val if val >= 1.0 else float(contracts)
                 else:
                     raw_coins = target_usd / price
                     formatted = self.exchange.amount_to_precision(symbol, raw_coins)
@@ -281,11 +289,11 @@ class OKXExecutor:
             except Exception as e:
                 logger.warning(f"Failed to compute precision amount for {symbol}: {e}")
 
-        # Fallback contract calculation for OKX EEA BTC X-Perp (ctVal = 0.0001 BTC per contract)
-        if "XPERP" in symbol or "BTC" in symbol:
-            ct_val = 0.0001
-            raw_contracts = max(1.0, round(target_usd / (price * ct_val)))
-            return raw_contracts
+        # Fallback contract calculation for OKX EEA contract instruments (ctVal = 0.0001 BTC or 1.0 SOL)
+        if ":" in symbol or "XPERP" in symbol or "SWAP" in symbol:
+            ct_val = 0.0001 if "BTC" in symbol else 1.0
+            raw_contracts = math.ceil(target_usd / (price * ct_val))
+            return float(max(1, raw_contracts))
 
         return round(target_usd / price, 6)
 

@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🩹 [0.14.3] - 2026-08-13
+
+### 🔢 OKX Contract Order Amount Integer Precision Enforcement
+- 🔢 **Contract Integer Amount Precision**: Updated `calculate_order_amount` in `src/mms4tk/okx_executor.py` to enforce integer contract amounts (`contracts = math.ceil(raw_contracts)` and `max(contracts, 1)`) for OKX contract/futures markets. Fixes `InvalidOrder: okx amount must be greater than minimum amount precision of 1` on pairs like `SOL/USD:USD-310404`.
+
+---
+
 ## 🩹 [0.14.2] - 2026-08-13
 
 ### 🐛 Import Resolution Fix for API Version Resolver
