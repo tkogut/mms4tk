@@ -20,7 +20,7 @@ import subprocess
 import sys
 from urllib.request import Request, urlopen
 
-MMS4TK_BASE = os.environ.get("MMS4TK_BASE_URL", "http://antigravity_core:8000")
+MMS4TK_BASE = os.environ.get("MMS4TK_BASE_URL", "http://localhost:8501")
 MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "")
 
 
@@ -39,7 +39,24 @@ def fetch_api(endpoint: str):
 
 
 def create_kanban_digest_card(title: str, description: str):
-    """Create a Kanban digest report card for Hermes agent swarm."""
+    """Post digest report to mms4tk webhook API and Hermes CLI."""
+    # 1. Post to mms4tk Webhook API (instantly registers card on Dashboard Kanban & DB)
+    try:
+        headers = {"Content-Type": "application/json"}
+        if MMS4TK_API_KEY:
+            headers["X-MMS4-API-KEY"] = MMS4TK_API_KEY
+        payload = json.dumps({
+            "event_type": "MULTI_SYMBOL_DIGEST",
+            "title": title,
+            "details": description
+        }).encode("utf-8")
+        req = Request(f"{MMS4TK_BASE}/api/v1/hermes/webhook", data=payload, headers=headers, method="POST")
+        resp = urlopen(req, timeout=10)
+        print("✅ Digest card successfully posted to Dashboard Kanban & Webhook Engine!")
+    except Exception as e:
+        print(f"⚠️ Webhook API post notice: {e}", file=sys.stderr)
+
+    # 2. Attempt CLI call if hermes binary is present
     hermes_cli = "/home/tkogut/.nvm/versions/node/v20.19.0/bin/hermes"
     if not os.path.exists(hermes_cli):
         hermes_cli = "hermes"
@@ -55,13 +72,11 @@ def create_kanban_digest_card(title: str, description: str):
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode == 0:
-            print(f"📋 Hermes Digest Kanban card created: {result.stdout.strip()[:80]}")
-        else:
-            print(f"⚠️ Hermes CLI card creation notice: {result.stderr.strip()[:80]}")
-    except Exception as e:
-        print(f"⚠️ Exception running Hermes CLI: {e}", file=sys.stderr)
+            print(f"📋 Hermes CLI Kanban card created: {result.stdout.strip()[:80]}")
+    except Exception:
+        pass
 
 
 def main():
