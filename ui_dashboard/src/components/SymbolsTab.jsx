@@ -132,6 +132,34 @@ export function SymbolsTab({ apiKey }) {
     }
   };
 
+  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio) => {
+    const currentKey = apiKey || 'test-api-auth-key-unit-test';
+    try {
+      const res = await fetch('/api/v1/symbols/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-MMS4-API-KEY': currentKey
+        },
+        body: JSON.stringify({
+          symbol: symObj.symbol,
+          is_active: symObj.is_active !== false,
+          allocation_usd: parseFloat(newAlloc),
+          base_ratio: parseInt(newBaseRatio),
+          add_ratio: 100 - parseInt(newBaseRatio)
+        })
+      });
+      if (res.ok) {
+        setMsg(`✓ Zapisano indywidualne ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%)`);
+        fetchSymbols();
+      }
+    } catch (err) {
+      setMsg('❌ Błąd zapisu ustawień pary');
+    } finally {
+      setTimeout(() => setMsg(''), 4000);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header & Add Pair Button */}
@@ -142,7 +170,7 @@ export function SymbolsTab({ apiKey }) {
             <span>Zarządzanie Parami Rynkowymi (Multi-Symbol Manager)</span>
           </h3>
           <p className="text-xs text-slate-400 mt-1">
-            Użytkownik ma pełną kontrolę nad aktywacją i pauzowaniem par z kontrolkami stanu API OKX
+            Ustal indywidualną alokację ($ USD) oraz proporcje Base/Add dla każdej pary rynkowej
           </p>
         </div>
 
@@ -167,115 +195,18 @@ export function SymbolsTab({ apiKey }) {
         {symbols.map((s) => {
           const isAutotradeReady = s.autotrade_permitted !== false && s.okx_verified !== false;
           return (
-            <div
+            <SymbolCard
               key={s.symbol}
-              className={`border rounded-xl p-5 shadow-lg space-y-4 transition-all ${
-                s.is_active !== false
-                  ? 'bg-slate-900 border-slate-800'
-                  : 'bg-slate-950/60 border-slate-900 opacity-70'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {/* OKX API Autotrading LED Kontrolka: Zielona (Ready) / Czerwona (Blocked) */}
-                  <div className="relative flex items-center justify-center">
-                    <span
-                      className={`w-3.5 h-3.5 rounded-full shadow-md ${
-                        isAutotradeReady
-                          ? 'bg-emerald-500 animate-pulse shadow-emerald-500/60'
-                          : 'bg-red-500 shadow-red-500/60'
-                      }`}
-                    ></span>
-                  </div>
-
-                  <div>
-                    <h4 className="font-extrabold text-base text-gray-100 font-mono flex items-center gap-2">
-                      <span>{s.symbol}</span>
-                    </h4>
-                    <span className="text-[10px] text-slate-400 block font-mono">
-                      OKX Spot / Perpetuals
-                    </span>
-                  </div>
-                </div>
-
-                {/* User Toggle Switch: Active / Paused */}
-                <button
-                  onClick={() => handleToggleSymbol(s)}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-mono transition-all border ${
-                    s.is_active !== false
-                      ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900'
-                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
-                  }`}
-                >
-                  <Power className="w-3.5 h-3.5" />
-                  <span>{s.is_active !== false ? 'AKTYWNA' : 'WSTRZYMANA'}</span>
-                </button>
-              </div>
-
-              {/* Autotrading API Permission Verification Banner */}
-              <div
-                className={`p-2.5 rounded-lg border text-[11px] font-mono space-y-1 ${
-                  isAutotradeReady
-                    ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
-                    : 'bg-red-950/40 border-red-500/30 text-red-300'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 font-bold">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        isAutotradeReady ? 'bg-emerald-400' : 'bg-red-400'
-                      }`}
-                    ></span>
-                    <span>
-                      {isAutotradeReady
-                        ? '🟢 HANDEL AUTOMATYCZNY: GOTOWY'
-                        : '🔴 HANDEL AUTOMATYCZNY: BLOKOWANY'}
-                    </span>
-                  </div>
-                  {s.okx_price > 0 && (
-                    <span className="font-bold text-gray-200">
-                      ${Number(s.okx_price).toLocaleString()}
-                    </span>
-                  )}
-                </div>
-                {!isAutotradeReady && (
-                  <p className="text-[10px] text-red-400/90 leading-tight">
-                    {s.reason || 'Klucz API OKX nie posiada uprawnień do tradowania tej pary na Twoim koncie.'}
-                  </p>
-                )}
-              </div>
-
-              {/* Per-Symbol State Badges & Leverage */}
-              <div className="grid grid-cols-2 gap-2 pt-1 text-xs font-mono">
-                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
-                  <span className="text-[10px] text-slate-400 block mb-0.5">
-                    Stan Strategii:
-                  </span>
-                  <span
-                    className={`font-bold text-xs ${
-                      s.state === 'SCOUT_MODE' ? 'text-amber-400' : 'text-emerald-400'
-                    }`}
-                  >
-                    {s.state || 'BASE_MODE'}
-                  </span>
-                </div>
-
-                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
-                  <span className="text-[10px] text-slate-400 block mb-0.5">
-                    Aktywna Dźwignia:
-                  </span>
-                  <span className="font-bold text-xs text-blue-400">
-                    {Number(s.leverage || 3.0).toFixed(1)}x
-                  </span>
-                </div>
-              </div>
-            </div>
+              symbolObj={s}
+              isAutotradeReady={isAutotradeReady}
+              onToggle={handleToggleSymbol}
+              onSaveSettings={handleUpdateSymbolSettings}
+            />
           );
         })}
       </div>
 
-      {/* Add Symbol Modal with One-Time OKX API Verification */}
+      {/* Add Symbol Modal with OKX Verification & Allocation Setup */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl space-y-4">
@@ -341,10 +272,8 @@ export function SymbolsTab({ apiKey }) {
                     ></span>
                     <span>
                       {verifyResult.okx_verified
-                        ? '🟢 Potwierdzono dostęp do pary na Twoim koncie OKX API'
-                        : (verifyResult.okx_status === 'UNSUPPORTED_ON_USER_API_KEY'
-                            ? '🔴 Brak uprawnień do tej pary na Twoim Kluczu API OKX'
-                            : '🔴 Ticker nieodnaleziony na OKX API')}
+                        ? '🟢 Potwierdzono cenę rynkową z OKX API'
+                        : '🔴 Ticker nieodnaleziony na OKX API'}
                     </span>
                   </div>
                   {verifyResult.last_price > 0 && (
@@ -378,6 +307,139 @@ export function SymbolsTab({ apiKey }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
+  const [allocUsd, setAllocUsd] = useState(symbolObj.allocation_usd || 10.0);
+  const [baseRatio, setBaseRatio] = useState(symbolObj.base_ratio || 70);
+
+  useEffect(() => {
+    setAllocUsd(symbolObj.allocation_usd || 10.0);
+    setBaseRatio(symbolObj.base_ratio || 70);
+  }, [symbolObj]);
+
+  const addRatio = 100 - baseRatio;
+
+  return (
+    <div
+      className={`border rounded-xl p-5 shadow-lg space-y-4 transition-all ${
+        symbolObj.is_active !== false
+          ? 'bg-slate-900 border-slate-800'
+          : 'bg-slate-950/60 border-slate-900 opacity-70'
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="relative flex items-center justify-center">
+            <span
+              className={`w-3.5 h-3.5 rounded-full shadow-md ${
+                isAutotradeReady
+                  ? 'bg-emerald-500 animate-pulse shadow-emerald-500/60'
+                  : 'bg-red-500 shadow-red-500/60'
+              }`}
+            ></span>
+          </div>
+
+          <div>
+            <h4 className="font-extrabold text-base text-gray-100 font-mono flex items-center gap-2">
+              <span>{symbolObj.symbol}</span>
+            </h4>
+            <span className="text-[10px] text-slate-400 block font-mono">
+              OKX Spot / Perpetuals
+            </span>
+          </div>
+        </div>
+
+        <button
+          onClick={() => onToggle(symbolObj)}
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-mono transition-all border ${
+            symbolObj.is_active !== false
+              ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900'
+              : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+          }`}
+        >
+          <Power className="w-3.5 h-3.5" />
+          <span>{symbolObj.is_active !== false ? 'AKTYWNA' : 'WSTRZYMANA'}</span>
+        </button>
+      </div>
+
+      <div
+        className={`p-2.5 rounded-lg border text-[11px] font-mono space-y-1 ${
+          isAutotradeReady
+            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+            : 'bg-red-950/40 border-red-500/30 text-red-300'
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-bold">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isAutotradeReady ? 'bg-emerald-400' : 'bg-red-400'
+              }`}
+            ></span>
+            <span>
+              {isAutotradeReady
+                ? '🟢 HANDEL AUTOMATYCZNY: GOTOWY'
+                : '🔴 HANDEL AUTOMATYCZNY: BLOKOWANY'}
+            </span>
+          </div>
+          {symbolObj.okx_price > 0 && (
+            <span className="font-bold text-gray-200">
+              ${Number(symbolObj.okx_price).toLocaleString()}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Per-Symbol Allocation & Base/Add Ratio Controls */}
+      <div className="space-y-3 pt-1 border-t border-slate-800/80">
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1 font-mono">
+              Alokacja ($ USD):
+            </label>
+            <div className="relative">
+              <span className="absolute left-2.5 top-1.5 text-slate-400 text-xs">$</span>
+              <input
+                type="number"
+                step="1"
+                min="1"
+                value={allocUsd}
+                onChange={(e) => setAllocUsd(e.target.value)}
+                className="w-full pl-6 pr-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-emerald-400 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1 font-mono">
+              Proporcja Base / Add (%):
+            </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                step="5"
+                min="10"
+                max="90"
+                value={baseRatio}
+                onChange={(e) => setBaseRatio(Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                className="w-14 px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-blue-400 focus:outline-none focus:border-blue-500 text-center"
+              />
+              <span className="text-slate-500 text-xs font-mono">/ {addRatio}%</span>
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio)}
+          className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
+        >
+          <Check className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Zapisz Ustawienia Pary</span>
+        </button>
+      </div>
     </div>
   );
 }

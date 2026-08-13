@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 💵 [0.14.0] - 2026-08-13
+
+### 💵 Per-Symbol Trade Allocation (USD) & Base/Add Ratio Customization
+- 💵 **Individual Pair Allocation Controls**: Added per-symbol `allocation_usd` (default $10.00 USD) and `base_ratio` / `add_ratio` (default 70% / 30%) settings to `SymbolsTab.jsx` and backend store (`symbols.json`).
+- ⚡ **Dynamic API Health Version Fix**: Fixed `/api/v1/health` endpoint in `src/mms4tk/api.py` to return the real `__version__` string (e.g. `0.14.0`), removing hardcoded `"0.1.0"`.
+- 📊 **Monitoring Grid Allocation Display**: Updated `MonitoringTab.jsx` to render individual USD allocation amounts and Base/Add percentage ratios for each active symbol card.
+
+---
+
 ## 🔄 [0.13.2] - 2026-08-13
 
 ### 🐛 Dynamic Header Version & Active-Only Symbol Filtering in Monitoring Grid

@@ -572,16 +572,56 @@ async def change_password(req: PasswordChangeRequest) -> Dict[str, Any]:
 
 # ─── Multi-Symbol Trading Endpoints ─────────────────────────────────────────
 
-configured_symbols_store: Dict[str, bool] = {
-    "BTC/USDC": True,
-    "ETH/USDC": True,
-    "SOL/USDC": True
-}
+SYMBOLS_CONFIG_FILE = os.environ.get("MMS4_SYMBOLS_CONFIG_PATH", "symbols.json")
+
+
+def load_symbols_config() -> Dict[str, Dict[str, Any]]:
+    """Load per-symbol configuration from symbols.json with defaults."""
+    defaults = {
+        "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30},
+        "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30},
+        "SOL/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+    }
+    if os.path.exists(SYMBOLS_CONFIG_FILE):
+        try:
+            with open(SYMBOLS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    normalized = {}
+                    for sym, val in data.items():
+                        if isinstance(val, bool):
+                            normalized[sym] = {"is_active": val, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+                        elif isinstance(val, dict):
+                            normalized[sym] = {
+                                "is_active": bool(val.get("is_active", True)),
+                                "allocation_usd": float(val.get("allocation_usd", 10.0)),
+                                "base_ratio": int(val.get("base_ratio", 70)),
+                                "add_ratio": int(val.get("add_ratio", 30))
+                            }
+                    return normalized
+        except Exception as e:
+            logger.warning(f"Failed to load {SYMBOLS_CONFIG_FILE}: {e}")
+    return defaults
+
+
+def save_symbols_config(cfg: Dict[str, Dict[str, Any]]) -> None:
+    """Save per-symbol configuration to symbols.json."""
+    try:
+        with open(SYMBOLS_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save {SYMBOLS_CONFIG_FILE}: {e}")
+
+
+configured_symbols_store: Dict[str, Dict[str, Any]] = load_symbols_config()
 
 
 class AddSymbolRequest(BaseModel):
     symbol: str = Field(description="Trading symbol pair e.g. ETH/USDC")
     is_active: bool = True
+    allocation_usd: float = Field(default=10.0, description="Base trade allocation in USD (default 10.0 USD)")
+    base_ratio: int = Field(default=70, description="Base position ratio percentage e.g. 70")
+    add_ratio: int = Field(default=30, description="Add position ratio percentage e.g. 30")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -589,9 +629,12 @@ okx_verification_cache: Dict[str, Dict[str, Any]] = {}
 
 @app.get("/api/v1/symbols", tags=["Multi-Symbol"])
 async def get_trading_symbols() -> Dict[str, Any]:
-    """Get all configured trading symbols with live OKX verification status (LED indicator), operating state, and leverage."""
+    """Get all configured trading symbols with per-symbol allocation, Base/Add ratio, live OKX status, state, and leverage."""
     result = []
-    for sym, is_act in configured_symbols_store.items():
+    for sym, config in configured_symbols_store.items():
+        if isinstance(config, bool):
+            config = {"is_active": config, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+
         state = state_manager.get_symbol_state(sym)
         leverage = state_manager.get_symbol_leverage(sym)
         
@@ -606,7 +649,10 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "symbol": sym,
             "state": state.value,
             "leverage": leverage,
-            "is_active": is_act,
+            "is_active": config.get("is_active", True),
+            "allocation_usd": config.get("allocation_usd", 10.0),
+            "base_ratio": config.get("base_ratio", 70),
+            "add_ratio": config.get("add_ratio", 30),
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -628,11 +674,24 @@ async def verify_symbol_direct(req: AddSymbolRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/v1/symbols/add", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
-async def add_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
-    """Add or activate a trading pair in multi-symbol list with instant OKX verification."""
+@app.post("/api/v1/symbols/update", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
+async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
+    """Add, activate, or update per-symbol allocation ($ USD) & Base/Add ratio configuration."""
     formatted_sym = req.symbol.upper().strip()
-    configured_symbols_store[formatted_sym] = req.is_active
-    state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair addition/activation via API")
+    if "/" not in formatted_sym:
+        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+
+    b_ratio = req.base_ratio
+    a_ratio = 100 - b_ratio if b_ratio <= 100 else req.add_ratio
+
+    configured_symbols_store[formatted_sym] = {
+        "is_active": req.is_active,
+        "allocation_usd": float(req.allocation_usd),
+        "base_ratio": int(b_ratio),
+        "add_ratio": int(a_ratio)
+    }
+    save_symbols_config(configured_symbols_store)
+    state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")
     
     # Perform instant OKX API verification
     v_res = await executor.verify_symbol_with_okx(formatted_sym)
@@ -642,6 +701,9 @@ async def add_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
         "status": "success",
         "symbol": formatted_sym,
         "is_active": req.is_active,
+        "allocation_usd": configured_symbols_store[formatted_sym]["allocation_usd"],
+        "base_ratio": configured_symbols_store[formatted_sym]["base_ratio"],
+        "add_ratio": configured_symbols_store[formatted_sym]["add_ratio"],
         "okx_verified": v_res.get("okx_verified", True),
         "okx_status": v_res.get("okx_status", "VERIFIED"),
         "okx_price": v_res.get("last_price", 0.0),
@@ -654,7 +716,11 @@ async def remove_trading_symbol(symbol: str) -> Dict[str, Any]:
     """Deactivate (pause) a trading pair without deleting it from the manager UI."""
     formatted_sym = symbol.upper().strip()
     if formatted_sym in configured_symbols_store:
-        configured_symbols_store[formatted_sym] = False
+        if isinstance(configured_symbols_store[formatted_sym], dict):
+            configured_symbols_store[formatted_sym]["is_active"] = False
+        else:
+            configured_symbols_store[formatted_sym] = {"is_active": False, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+        save_symbols_config(configured_symbols_store)
     return {
         "status": "success",
         "paused": formatted_sym,
