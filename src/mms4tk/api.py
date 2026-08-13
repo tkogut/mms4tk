@@ -15,6 +15,28 @@ from mms4tk.hermes_webhook import HermesWebhookClient
 
 from mms4tk.trade_sync import OKXTradeSyncWorker
 
+try:
+    from mms4tk import __version__ as PKG_VERSION
+except ImportError:
+    PKG_VERSION = "0.14.2"
+
+
+def get_app_version() -> str:
+    """Safely resolve application version from VERSION file or mms4tk package."""
+    for v_path in ["VERSION", "/app/VERSION", "../VERSION"]:
+        if os.path.exists(v_path):
+            try:
+                with open(v_path, "r", encoding="utf-8") as f:
+                    ver = f.read().strip()
+                    if ver:
+                        return ver
+            except Exception:
+                pass
+    return PKG_VERSION
+
+
+APP_VERSION = get_app_version()
+
 logger = logging.getLogger("mms4tk.api")
 
 # Global instances
@@ -66,7 +88,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MMS4 Toolkit API (mms4tk)",
     description="Execution module & API interface for MMS v4 strategy managed by Hermes agent",
-    version=__version__,
+    version=APP_VERSION,
     lifespan=lifespan
 )
 
@@ -152,7 +174,7 @@ async def get_health() -> Dict[str, str]:
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": "0.1.0"
+        "version": APP_VERSION
     }
 
 

@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🩹 [0.14.2] - 2026-08-13
+
+### 🐛 Import Resolution Fix for API Version Resolver
+- ⚡ **Fixed Import & NameError**: Added `get_app_version()` resolver in `src/mms4tk/api.py` to safely resolve `APP_VERSION` from `VERSION` file or `mms4tk` package with fallback, eliminating `NameError: name '__version__' is not defined`.
+- 🩺 **Health Endpoint Synchronized**: Updated `/api/v1/health` to return dynamic `APP_VERSION` string.
+
+---
+
 ## 🎯 [0.14.1] - 2026-08-13
 
 ### 🎯 Core FastAPI & Docker Volume Version Synchronization Fix
