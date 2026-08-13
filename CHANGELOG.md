@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🎯 [0.14.1] - 2026-08-13
+
+### 🎯 Core FastAPI & Docker Volume Version Synchronization Fix
+- ⚡ **FastAPI Version Synchronization**: Fixed `app = FastAPI(..., version=__version__)` constructor in `src/mms4tk/api.py` and unit test assertions, replacing the old `0.1.0` string.
+- 🐳 **Docker Volume Alignment**: Mounted `./VERSION:/app/VERSION:ro` into the `antigravity_core` service in `docker-compose.yml` to guarantee identical container versioning.
+
+---
+
 ## 💵 [0.14.0] - 2026-08-13
 
 ### 💵 Per-Symbol Trade Allocation (USD) & Base/Add Ratio Customization

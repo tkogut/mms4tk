@@ -8,6 +8,7 @@ services:
       - traefik-proxy
     volumes:
       - ./.agents/swarm:/app/.agents/swarm
+      - ./VERSION:/app/VERSION:ro
     env_file:
       - .env
 

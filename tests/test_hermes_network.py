@@ -33,8 +33,8 @@ def test_get_health_endpoint(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert "version" in data
-    assert data["version"] == "0.1.0"
+    from mms4tk import __version__
+    assert data["version"] == __version__
 
 
 def test_get_state_endpoint(client: TestClient):

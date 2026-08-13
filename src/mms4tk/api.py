@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MMS4 Toolkit API (mms4tk)",
     description="Execution module & API interface for MMS v4 strategy managed by Hermes agent",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan
 )
 
