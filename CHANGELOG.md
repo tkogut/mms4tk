@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🔔 [0.15.4] - 2026-08-13
+
+### 🔔 Custom Webhook Event Logging REST Endpoint
+- 🔔 **POST /api/v1/hermes/webhook Endpoint**: Added endpoint in `src/mms4tk/api.py` allowing custom script events (like hourly Multi-Symbol Digest cards) to post directly to `webhook_events` DB table for instant display on Dashboard Kanban & System Status.
+
+---
+
 ## 📋 [0.15.3] - 2026-08-13
 
 ### 📋 Direct Webhook Integration for Digest Cards

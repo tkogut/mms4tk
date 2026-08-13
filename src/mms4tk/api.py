@@ -429,6 +429,25 @@ class WebhookEventResponse(BaseModel):
     error: Optional[str] = None
 
 
+class PostWebhookRequest(BaseModel):
+    event_type: str = Field(default="MULTI_SYMBOL_DIGEST")
+    title: str
+    details: str
+    priority: int = 5
+
+
+@app.post("/api/v1/hermes/webhook", tags=["Hermes Integration"])
+async def post_custom_webhook_event(req: PostWebhookRequest) -> Dict[str, Any]:
+    """Log a custom webhook event to mms4tk database for Hermes Kanban & Dashboard display."""
+    event_id = hermes_webhook.log_event(
+        event_type=req.event_type,
+        title=req.title,
+        details=req.details,
+        priority=req.priority
+    )
+    return {"status": "success", "event_id": event_id}
+
+
 @app.get("/api/v1/hermes/events", response_model=List[WebhookEventResponse], tags=["Hermes Integration"])
 async def get_pending_webhook_events() -> list:
     """
