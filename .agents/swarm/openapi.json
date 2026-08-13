@@ -182,6 +182,18 @@
     {
       "type": "function",
       "function": {
+        "name": "mms4_get_positions",
+        "description": "Fetch all live open trading positions from OKX across active trading symbols (side, contracts, entry price, mark price, notional USD, unrealized PnL).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "mms4_get_symbols",
         "description": "Fetch all configured trading symbols with active status, per-symbol USD allocation, Base/Add ratio, live OKX price, state, and leverage.",
         "parameters": {

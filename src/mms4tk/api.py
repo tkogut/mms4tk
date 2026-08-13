@@ -752,4 +752,32 @@ async def remove_trading_symbol(symbol: str) -> Dict[str, Any]:
     }
 
 
+@app.get("/api/v1/positions", tags=["Multi-Symbol"])
+async def get_active_positions() -> Dict[str, Any]:
+    """Fetch live open positions from OKX across all active trading symbols."""
+    active_syms = [s for s, cfg in configured_symbols_store.items() if (isinstance(cfg, dict) and cfg.get("is_active")) or cfg is True]
+    try:
+        raw_pos = await executor.fetch_positions(symbols=active_syms if active_syms else None)
+        cleaned = []
+        if isinstance(raw_pos, list):
+            for p in raw_pos:
+                contracts = float(p.get("contracts", 0.0) or p.get("size", 0.0) or 0.0)
+                if contracts > 0 or p.get("size", 0) != 0:
+                    cleaned.append({
+                        "symbol": p.get("symbol"),
+                        "side": p.get("side", "long"),
+                        "contracts": contracts,
+                        "notional_usd": float(p.get("notional", 0.0) or p.get("notionalUsd", 0.0) or 0.0),
+                        "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
+                        "mark_price": float(p.get("markPrice", 0.0) or 0.0),
+                        "unrealized_pnl": float(p.get("unrealizedPnl", 0.0) or 0.0),
+                        "leverage": float(p.get("leverage", 1.0) or 1.0),
+                        "liquidation_price": float(p.get("liquidationPrice", 0.0) or 0.0)
+                    })
+        return {"positions": cleaned, "total": len(cleaned)}
+    except Exception as e:
+        logger.warning(f"Failed to fetch live positions: {e}")
+        return {"positions": [], "total": 0, "error": str(e)}
+
+
 

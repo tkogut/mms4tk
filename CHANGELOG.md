@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 📈 [0.15.1] - 2026-08-13
+
+### 📈 Live Open Positions Endpoint & Hermes Positions Digest Integration
+- 📈 **GET /api/v1/positions Endpoint**: Added REST endpoint in `src/mms4tk/api.py` to fetch live open positions across all active trading symbols from OKX (side, contracts, entry price, mark price, notional USD, unrealized PnL, leverage, liquidation price).
+- 🤖 **Hermes Open Positions OpenAPI Schema**: Added `mms4_get_positions` tool definition to `.agents/swarm/openapi.json`, allowing Hermes digest reports to render live open position tables with uPnL %.
+
+---
+
 ## 🤖 [0.15.0] - 2026-08-13
 
 ### 🤖 Hermes Swarm Agent Multi-Symbol Integration & OpenAPI Schema
