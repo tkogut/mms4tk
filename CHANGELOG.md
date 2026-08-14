@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.16.1] - 2026-08-14
+
+### 🚀 30m Timeframe Support & Independent Simulation Audit
+- 🚀 **30m Timeframe Selector**: Added `30m` option to per-symbol timeframe dropdown in Web Dashboard (`SymbolsTab.jsx`) and backend symbol management.
+- 🧪 **Independent Quantitative Backtest Audit**: Created `scratch/independent_strategy_simulator.py` and saved comparative audit report to `docs/mms4_independent_simulation_audit.md` demonstrating `1h` (67.5% Win Rate) and `15m` superiority over 1m/5m/30m.
+
+---
+
 ## 🚀 [0.16.0] - 2026-08-14
 
 ### 🚀 Mastermind MMS v4 Strategy Timeframe & Signal Overhaul
