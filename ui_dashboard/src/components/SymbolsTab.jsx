@@ -132,7 +132,7 @@ export function SymbolsTab({ apiKey }) {
     }
   };
 
-  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio) => {
+  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio, newTimeframe) => {
     const currentKey = apiKey || 'test-api-auth-key-unit-test';
     try {
       const res = await fetch('/api/v1/symbols/update', {
@@ -146,11 +146,12 @@ export function SymbolsTab({ apiKey }) {
           is_active: symObj.is_active !== false,
           allocation_usd: parseFloat(newAlloc),
           base_ratio: parseInt(newBaseRatio),
-          add_ratio: 100 - parseInt(newBaseRatio)
+          add_ratio: 100 - parseInt(newBaseRatio),
+          timeframe: newTimeframe || '15m'
         })
       });
       if (res.ok) {
-        setMsg(`✓ Zapisano indywidualne ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%)`);
+        setMsg(`✓ Zapisano indywidualne ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%, Interwał: ${newTimeframe || '15m'})`);
         fetchSymbols();
       }
     } catch (err) {
@@ -314,10 +315,12 @@ export function SymbolsTab({ apiKey }) {
 function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
   const [allocUsd, setAllocUsd] = useState(symbolObj.allocation_usd || 10.0);
   const [baseRatio, setBaseRatio] = useState(symbolObj.base_ratio || 70);
+  const [timeframe, setTimeframe] = useState(symbolObj.timeframe || '15m');
 
   useEffect(() => {
     setAllocUsd(symbolObj.allocation_usd || 10.0);
     setBaseRatio(symbolObj.base_ratio || 70);
+    setTimeframe(symbolObj.timeframe || '15m');
   }, [symbolObj]);
 
   const addRatio = 100 - baseRatio;
@@ -393,31 +396,31 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
         </div>
       </div>
 
-      {/* Per-Symbol Allocation & Base/Add Ratio Controls */}
+      {/* Per-Symbol Allocation, Base/Add Ratio & Timeframe Controls */}
       <div className="space-y-3 pt-1 border-t border-slate-800/80">
-        <div className="grid grid-cols-2 gap-3 text-xs">
+        <div className="grid grid-cols-3 gap-2 text-xs">
           <div>
             <label className="text-[10px] text-slate-400 block mb-1 font-mono">
-              Alokacja ($ USD):
+              Alokacja ($):
             </label>
             <div className="relative">
-              <span className="absolute left-2.5 top-1.5 text-slate-400 text-xs">$</span>
+              <span className="absolute left-2 top-1.5 text-slate-400 text-xs">$</span>
               <input
                 type="number"
                 step="1"
                 min="1"
                 value={allocUsd}
                 onChange={(e) => setAllocUsd(e.target.value)}
-                className="w-full pl-6 pr-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-emerald-400 focus:outline-none focus:border-blue-500"
+                className="w-full pl-5 pr-1 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-emerald-400 focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
 
           <div>
             <label className="text-[10px] text-slate-400 block mb-1 font-mono">
-              Proporcja Base / Add (%):
+              Base/Add (%):
             </label>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               <input
                 type="number"
                 step="5"
@@ -425,15 +428,31 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
                 max="90"
                 value={baseRatio}
                 onChange={(e) => setBaseRatio(Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
-                className="w-14 px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-blue-400 focus:outline-none focus:border-blue-500 text-center"
+                className="w-12 px-1 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-blue-400 focus:outline-none focus:border-blue-500 text-center"
               />
-              <span className="text-slate-500 text-xs font-mono">/ {addRatio}%</span>
+              <span className="text-slate-500 text-[10px] font-mono">/{addRatio}%</span>
             </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1 font-mono">
+              Interwał:
+            </label>
+            <select
+              value={timeframe}
+              onChange={(e) => setTimeframe(e.target.value)}
+              className="w-full py-1.5 px-1 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-blue-500"
+            >
+              <option value="15m">15m ⭐</option>
+              <option value="1h">1h</option>
+              <option value="5m">5m</option>
+              <option value="1m">1m</option>
+            </select>
           </div>
         </div>
 
         <button
-          onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio)}
+          onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio, timeframe)}
           className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
         >
           <Check className="w-3.5 h-3.5 text-emerald-400" />

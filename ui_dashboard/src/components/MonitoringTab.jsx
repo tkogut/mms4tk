@@ -109,18 +109,22 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 text-xs font-mono">
+              <div className="grid grid-cols-4 gap-1.5 text-xs font-mono">
                 <div>
-                  <span className="text-slate-500 text-[10px] block">Alokacja ($):</span>
+                  <span className="text-slate-500 text-[9px] block">Alokacja ($):</span>
                   <span className="font-bold text-emerald-400">${Number(s.allocation_usd || 10.0).toFixed(2)}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 text-[10px] block">Dźwignia:</span>
+                  <span className="text-slate-500 text-[9px] block">Interwał:</span>
+                  <span className="font-bold text-amber-400">{s.timeframe || '15m'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[9px] block">Dźwignia:</span>
                   <span className="font-bold text-blue-400">{Number(s.leverage || leverage).toFixed(1)}x</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 text-[10px] block">Base / Add:</span>
-                  <span className="font-bold text-slate-300">{s.base_ratio || 70}% / {s.add_ratio || 30}%</span>
+                  <span className="text-slate-500 text-[9px] block">Base / Add:</span>
+                  <span className="font-bold text-slate-300">{s.base_ratio || 70}/{s.add_ratio || 30}%</span>
                 </div>
               </div>
             </div>

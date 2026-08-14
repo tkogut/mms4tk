@@ -279,9 +279,9 @@ class MMS4SignalEngine:
                     reason="HIGH_RISK_ADD LONG signal: follow-up candle confirmed up trend"
                 )
 
-        # 3. Evaluate Base Entries on current candle
-        curr_is_base_short = (curr_c.high >= latest_upper or curr_c.close >= latest_upper) and (curr_c.close < curr_c.open)
-        curr_is_base_long = (curr_c.low <= latest_lower or curr_c.close <= latest_lower) and (curr_c.close > curr_c.open)
+        # 3. Evaluate Base Entries on current candle (Outer TMA Band penetration)
+        curr_is_base_short = (curr_c.high >= latest_upper or curr_c.close >= latest_upper)
+        curr_is_base_long = (curr_c.low <= latest_lower or curr_c.close <= latest_lower)
 
         if curr_is_base_short:
             blocked = filter_bias("BASE_SHORT")

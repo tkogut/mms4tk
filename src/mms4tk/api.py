@@ -621,9 +621,9 @@ SYMBOLS_CONFIG_FILE = os.environ.get("MMS4_SYMBOLS_CONFIG_PATH", "symbols.json")
 def load_symbols_config() -> Dict[str, Dict[str, Any]]:
     """Load per-symbol configuration from symbols.json with defaults."""
     defaults = {
-        "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30},
-        "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30},
-        "SOL/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+        "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
+        "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
+        "SOL/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
     }
     if os.path.exists(SYMBOLS_CONFIG_FILE):
         try:
@@ -633,13 +633,14 @@ def load_symbols_config() -> Dict[str, Dict[str, Any]]:
                     normalized = {}
                     for sym, val in data.items():
                         if isinstance(val, bool):
-                            normalized[sym] = {"is_active": val, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+                            normalized[sym] = {"is_active": val, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
                         elif isinstance(val, dict):
                             normalized[sym] = {
                                 "is_active": bool(val.get("is_active", True)),
                                 "allocation_usd": float(val.get("allocation_usd", 10.0)),
                                 "base_ratio": int(val.get("base_ratio", 70)),
-                                "add_ratio": int(val.get("add_ratio", 30))
+                                "add_ratio": int(val.get("add_ratio", 30)),
+                                "timeframe": str(val.get("timeframe", "15m"))
                             }
                     return normalized
         except Exception as e:
@@ -665,6 +666,7 @@ class AddSymbolRequest(BaseModel):
     allocation_usd: float = Field(default=10.0, description="Base trade allocation in USD (default 10.0 USD)")
     base_ratio: int = Field(default=70, description="Base position ratio percentage e.g. 70")
     add_ratio: int = Field(default=30, description="Add position ratio percentage e.g. 30")
+    timeframe: str = Field(default="15m", description="Candle timeframe e.g. 15m, 1h, 5m, 1m")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -676,7 +678,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
     result = []
     for sym, config in configured_symbols_store.items():
         if isinstance(config, bool):
-            config = {"is_active": config, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+            config = {"is_active": config, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
 
         state = state_manager.get_symbol_state(sym)
         leverage = state_manager.get_symbol_leverage(sym)
@@ -696,6 +698,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "allocation_usd": config.get("allocation_usd", 10.0),
             "base_ratio": config.get("base_ratio", 70),
             "add_ratio": config.get("add_ratio", 30),
+            "timeframe": config.get("timeframe", "15m"),
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -726,12 +729,14 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
 
     b_ratio = req.base_ratio
     a_ratio = 100 - b_ratio if b_ratio <= 100 else req.add_ratio
+    tf = req.timeframe or "15m"
 
     configured_symbols_store[formatted_sym] = {
         "is_active": req.is_active,
         "allocation_usd": float(req.allocation_usd),
         "base_ratio": int(b_ratio),
-        "add_ratio": int(a_ratio)
+        "add_ratio": int(a_ratio),
+        "timeframe": tf
     }
     save_symbols_config(configured_symbols_store)
     state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")

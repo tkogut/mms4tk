@@ -1,0 +1,30 @@
+{
+  "BTC/USDC": {
+    "is_active": true,
+    "allocation_usd": 10.0,
+    "base_ratio": 70,
+    "add_ratio": 30,
+    "timeframe": "15m"
+  },
+  "ETH/USDC": {
+    "is_active": true,
+    "allocation_usd": 10.0,
+    "base_ratio": 70,
+    "add_ratio": 30,
+    "timeframe": "15m"
+  },
+  "SOL/USDC": {
+    "is_active": true,
+    "allocation_usd": 10.0,
+    "base_ratio": 70,
+    "add_ratio": 30,
+    "timeframe": "15m"
+  },
+  "ICP/USDC": {
+    "is_active": true,
+    "allocation_usd": 10.0,
+    "base_ratio": 70,
+    "add_ratio": 30,
+    "timeframe": "15m"
+  }
+}

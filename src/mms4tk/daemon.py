@@ -100,8 +100,17 @@ class MMS4Daemon:
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         
-        # 1. Fetch candles for target symbol
-        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, limit=100)
+        # 1. Fetch candles for target symbol using symbol's configured timeframe
+        sym_tf = "15m"
+        try:
+            from mms4tk.api import configured_symbols_store
+            sym_cfg = configured_symbols_store.get(target_symbol, {})
+            if isinstance(sym_cfg, dict) and sym_cfg.get("timeframe"):
+                sym_tf = str(sym_cfg.get("timeframe", "15m"))
+        except Exception:
+            pass
+
+        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, timeframe=sym_tf, limit=100)
 
         # 2. Evaluate signals with per-symbol state isolation
         sym_state = self.state_manager.get_symbol_state(target_symbol)

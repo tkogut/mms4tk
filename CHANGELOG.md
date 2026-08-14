@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.16.0] - 2026-08-14
+
+### 🚀 Mastermind MMS v4 Strategy Timeframe & Signal Overhaul
+- 🚀 **Per-Symbol Timeframe Selection**: Added per-symbol `timeframe` configuration (`15m` default, `1h`, `5m`, `1m`) across backend, `symbols.json`, `MMS4Daemon` loop, and React UI (`SymbolsTab.jsx`, `MonitoringTab.jsx`).
+- 🎯 **TMA Outer Band Penetration Trigger**: Refined signal evaluation in `src/mms4tk/analytics.py` for `BASE_LONG` and `BASE_SHORT` to trigger reliably upon outer TMA ATR band penetration on swing timeframes.
+- 📊 **Audit & Post-Implementation Documentation**: Created `/home/admin_tk/projects/mms4tk/docs/mms4_strategy_audit_report.md` and `/home/admin_tk/projects/mms4tk/docs/mms4_post_implementation_report.md`.
+
+---
+
 ## 🌐 [0.15.8] - 2026-08-13
 
 ### 🌐 Resilient Container API URL Resolution
