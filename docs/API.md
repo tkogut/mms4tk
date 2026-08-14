@@ -1,6 +1,7 @@
 # 📡 mms4tk REST API & Hermes Function Tools Reference
 
-This document provides technical documentation for all HTTP REST API endpoints exposed by `mms4tk` (FastAPI) and consumed by the **Hermes Agent** function-calling engine.
+**Application Version:** `v0.16.1`  
+This document provides technical documentation for all HTTP REST API endpoints exposed by `mms4tk` (FastAPI) and consumed by the **Hermes Agent** function-calling engine and Web Dashboard UI.
 
 ---
 
@@ -25,7 +26,7 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
     ```json
     {
       "status": "healthy",
-      "version": "0.6.6"
+      "version": "0.16.1"
     }
     ```
 
@@ -40,104 +41,151 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
       "is_running": true,
       "interval_seconds": 15.0,
       "symbol": "BTC/USDC",
+      "active_symbols": ["BTC/USDC", "ETH/USDC", "SOL/USDC", "ICP/USDC"],
+      "max_margin_usd": 10.0,
+      "base_trade_usd": 7.0,
+      "addon_trade_usd": 3.0,
       "trade_amount_usd": 10.0,
-      "last_cycle_timestamp": "2026-08-11T14:02:05.738770+00:00",
-      "processed_cycles": 142
+      "last_cycle_timestamp": "2026-08-14T12:51:17.000000+00:00",
+      "processed_cycles": 1420
     }
     ```
 
 ---
 
-### 3. State Engine Status
-- **`GET /api/v1/state`**
+### 3. Multi-Symbol Management (`symbols.json`)
+- **`GET /api/v1/symbols`**
   - **Auth**: Public
-  - **Description**: Returns active state (`BASE_MODE` / `SCOUT_MODE`), current leverage multiplier, equity, and trade metrics.
+  - **Description**: Returns all configured trading symbols with per-symbol allocation ($ USD), Base/Add ratio (%), timeframe (`15m`, `30m`, `1h`, `5m`, `1m`), live OKX price, and autotrade status.
   - **Response**:
     ```json
     {
-      "current_state": "BASE_MODE",
-      "leverage": 1.0,
+      "symbols": [
+        {
+          "symbol": "BTC/USDC",
+          "state": "BASE_MODE",
+          "leverage": 3.0,
+          "is_active": true,
+          "allocation_usd": 10.0,
+          "base_ratio": 70,
+          "add_ratio": 30,
+          "timeframe": "1h",
+          "okx_verified": true,
+          "autotrade_permitted": true,
+          "okx_status": "AUTOTRADE_READY",
+          "okx_price": 62780.0
+        },
+        {
+          "symbol": "SOL/USDC",
+          "state": "BASE_MODE",
+          "leverage": 3.0,
+          "is_active": true,
+          "allocation_usd": 7.0,
+          "base_ratio": 70,
+          "add_ratio": 30,
+          "timeframe": "15m",
+          "okx_verified": true,
+          "autotrade_permitted": true,
+          "okx_status": "AUTOTRADE_READY",
+          "okx_price": 75.39
+        }
+      ],
+      "total": 2
+    }
+    ```
+
+- **`POST /api/v1/symbols/add` / `POST /api/v1/symbols/update`**
+  - **Auth**: Required (`X-MMS4-API-KEY`)
+  - **Request Body**:
+    ```json
+    {
+      "symbol": "SOL/USDC",
+      "is_active": true,
+      "allocation_usd": 7.0,
+      "base_ratio": 70,
+      "add_ratio": 30,
+      "timeframe": "15m"
+    }
+    ```
+  - **Response**: Updated symbol entry with verification status.
+
+- **`POST /api/v1/symbols/verify`**
+  - **Auth**: Public
+  - **Description**: Performs an instant live OKX REST API verification for a symbol pair.
+
+- **`DELETE /api/v1/symbols/{symbol}`**
+  - **Auth**: Required (`X-MMS4-API-KEY`)
+  - **Description**: Deactivates a symbol pair from active trading cycles.
+
+---
+
+### 4. State Engine Status
+- **`GET /api/v1/state`**
+  - **Auth**: Public
+  - **Description**: Returns active state (`BASE_MODE` / `SCOUT_MODE`), leverage multiplier, equity, and trade metrics.
+  - **Response**:
+    ```json
+    {
+      "state": "BASE_MODE",
+      "leverage": 3.0,
       "current_equity": 30.39,
       "realized_pnl": 0.0,
-      "total_trades": 0,
-      "scout_override": false
+      "total_trades": 0
     }
     ```
 
 ---
 
-### 4. Account Balances
+### 5. Account Balances & PnL
 - **`GET /api/v1/balance`**
   - **Auth**: Public
   - **Description**: Fetches unified balances from OKX across Trading and Funding accounts.
-  - **Response**:
-    ```json
-    {
-      "USDC": {"free": 30.39, "total": 30.39},
-      "HBAR": {"free": 1412.94, "total": 1412.94},
-      "ASTER": {"free": 0.5, "total": 0.5}
-    }
-    ```
+
+- **`GET /api/v1/stats/pnl`**
+  - **Auth**: Public
+  - **Description**: Daily ROE %, realized PnL, unrealized PnL, and KPI summary.
 
 ---
 
-### 5. Strategy Profile Management
+### 6. Strategy Profile Management
 - **`GET /api/v1/strategy/profile`**
   - **Auth**: Public
-  - **Description**: Retrieves active higher timeframe strategic constraints.
   - **Response**:
     ```json
     {
       "directional_bias": "BOTH",
       "risk_profile": "MODERATE",
       "scout_override": false,
-      "reason": "Default initialization",
-      "updated_at": "2026-08-11T14:00:00.000000+00:00"
+      "reason": "Default initialization"
     }
     ```
 
 - **`POST /api/v1/strategy/profile`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
-  - **Request Body**:
-    ```json
-    {
-      "directional_bias": "LONG_ONLY",
-      "risk_profile": "MODERATE",
-      "scout_override": false,
-      "reason": "H4 TMA band bullish bounce"
-    }
-    ```
-  - **Response**: Updated `StrategyProfile` object.
 
 ---
 
-### 6. Human-in-the-Loop (HITL) Resolution
+### 7. Hermes Webhook Integration
+- **`POST /api/v1/hermes/webhook`**
+  - **Auth**: Required (`X-MMS4-API-KEY`)
+  - **Description**: Receives custom webhook events from Hermes Agent swarm.
+  - **Request Body**:
+    ```json
+    {
+      "title": "MMS4TK Alert",
+      "body": "SCOUT_MODE activated for BTC/USDC after SL hit",
+      "symbol": "BTC/USDC",
+      "initial_status": "IN_PROGRESS"
+    }
+    ```
+
 - **`POST /api/v1/hermes/hitl_resolve`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
-  - **Description**: Invoked from Hermes Kanban Web UI or CLI when human approves an ambiguous H4 candle sweep.
-  - **Request Body**:
-    ```json
-    {
-      "decision": "SWEEP_WICK",
-      "directional_bias": "BOTH",
-      "risk_profile": "MODERATE",
-      "reason": "User approved H4 sweep wick in Web UI"
-    }
-    ```
-  - **Response**:
-    ```json
-    {
-      "status": "ok",
-      "decision": "SWEEP_WICK",
-      "scout_override": true,
-      "scout_mode_relaxed": true,
-      "profile": { ... }
-    }
-    ```
+  - **Description**: Resolves Human-in-the-Loop Kanban decision from Web UI or Telegram.
 
 ---
 
-### 7. Emergency Actions
+### 8. Emergency Actions
 - **`POST /api/v1/emergency/killall`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
   - **Description**: Immediately cancels all open orders on OKX and closes active positions.
@@ -150,32 +198,26 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
 
 ## 🤖 Hermes Function Tool Manifest (`openapi.json`)
 
-The OpenAPI schema generated by `mms4tk.hermes_tools.get_hermes_tools()` is copied to `/docker/hermes-agent/data/tools/mms4tk_openapi.json` for LLM tool calling.
-
 Tools exposed to Hermes Agent:
 1. `get_state`
 2. `get_balance`
 3. `get_pnl`
-4. `calculate_analytics`
-5. `emergency_killall`
-6. `emergency_reverse`
-7. `high_risk_add`
-8. `mms4_get_higher_tf`
-9. `mms4_set_strategy_profile`
-10. `mms4_get_pending_events`
-11. `mms4_hitl_resolve`
+4. `get_trading_symbols`
+5. `add_or_update_trading_symbol`
+6. `calculate_analytics`
+7. `emergency_killall`
+8. `emergency_reverse`
+9. `high_risk_add`
+10. `mms4_get_higher_tf`
+11. `mms4_set_strategy_profile`
+12. `mms4_get_pending_events`
+13. `mms4_hitl_resolve`
 
 ---
 
 ## 🇪🇺 OKX Europe (EEA) Execution Details
 
 When executing orders on OKX Europe (`https://eea.okx.com`):
-
-### 1. Symbol & Instrument Resolution
-- **Input**: Standard market symbols (e.g. `BTC/USDC`, `BTC-USDC-SWAP`).
-- **Auto-Discovery**: `discover_eea_xperp_symbol()` queries OKX `GET /api/v5/account/instruments?instType=FUTURES` filtering for `ruleType=xperp` and `state=live`.
-- **CCXT Unified Mapping**: Maps native OKX IDs (e.g. `BTC-USD_UM_XPERP-310404`) to CCXT unified symbols (e.g. `BTC/USD:USD-310404`).
-
-### 2. Order Parameters & Position Mode
-- **Hedge Mode (`posMode: long_short_mode`)**: Pass `params={"tdMode": "cross", "posSide": "short"}` for SELL orders and `params={"tdMode": "cross", "posSide": "long"}` for BUY orders.
-- **Contract Size (`ctVal`)**: Computes contract size (e.g. `ctVal = 0.0001 BTC` for BTC X-Perp) to convert target USD allocation into precise contract quantities (`sz`).
+- **Dynamic URL Resolution**: Automatically probes `https://eea.okx.com` and fallback endpoints.
+- **Hedge Mode (`posMode: long_short_mode`)**: Passes `params={"tdMode": "cross", "posSide": "short"}` for SELL orders and `params={"tdMode": "cross", "posSide": "long"}` for BUY orders.
+- **Contract Size Calculation (`ctVal`)**: Converts target USD allocation into precise contract quantities (`sz`).
