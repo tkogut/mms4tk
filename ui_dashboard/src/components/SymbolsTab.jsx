@@ -444,7 +444,8 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
               className="w-full py-1.5 px-1 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-blue-500"
             >
               <option value="15m">15m ⭐</option>
-              <option value="1h">1h</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h ⭐</option>
               <option value="5m">5m</option>
               <option value="1m">1m</option>
             </select>

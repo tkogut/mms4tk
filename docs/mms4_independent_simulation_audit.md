@@ -10,23 +10,26 @@
 
 Skrypt symulacyjny pobrał po 300 najnowszych świec dla każdej pary rynkowej (`BTC/USDT`, `ETH/USDT`, `SOL/USDT`, `ICP/USDT`) we wszystkich czterech horyzontach czasowych (`1m`, `5m`, `15m`, `1h`) i przeprowadził pełną symulację transakcyjną z uwzględnieniem podziału kapitału 70/30, Stop-Loss 2.0%, Take-Profit 4.0% oraz maszyny stanów `BASE_MODE` / `SCOUT_MODE`.
 
-### Zestawienie Wyników według Interwału Czasowego:
+### Zestawienie Wyników według Interwału Czasowego (300 Świec per Para):
 
 | Interwał | Łącznie Transakcji | Średni Win Rate | Łączny PnL Netto ($ USD) | Średni Profit Factor | Najgorsze Obsunięcie (Max DD) | Klasyfikacja Audytorska |
 | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **`1m`** *(stary domyślny)* | **0** | **0.0%** | **+$0.00 USD** | **0.00** | **0.00%** | ❌ **Całkowity brak sygnałów** (Pasma TMA śledzą mikro-szum) |
-| **`5m`** | **0** | **0.0%** | **+$0.00 USD** | **0.00** | **0.00%** | ❌ **Brak sygnałów** |
-| **`15m`** *(wdrożony v0.16.0)* | **4** | **8.3%** | **-$0.01 USD** | **0.45** | **0.15%** | 🟡 **Wysoce selektywny handel swingowy** |
-| **`1h`** | **14** | **67.5%** | **+$0.64 USD** 🟢 | **50.66** | **0.34%** | 🟢 **Optymalna rentowność i skuteczność** |
+| **`1m`** *(stary)* | **0** | **0.0%** | **+$0.00 USD** | **0.00** | **0.00%** | ❌ **Całkowity brak sygnałów** |
+| **`5m`** | **0** | **0.0%** | **+$0.00 USD** | **0.00** | **0.00%** | ❌ **Całkowity brak sygnałów** |
+| **`15m`** *(wdrożony v0.16.0)* | **4** | **8.3%** | **-$0.01 USD** | **0.45** | **0.15%** | 🟡 **Wysoce selektywny handel taktyczny** |
+| **`30m`** *(testowany)* | **8** | **3.1%** | **-$0.32 USD** | **0.02** | **0.32%** | 🔴 **Strefa przejściowa** (Brak sygnałów na majors, szum na altach) |
+| **`1h`** | **14** | **67.5%** 🟢 | **+$0.64 USD** 🟢 | **50.66** 🟢 | **0.34%** | 🟢 **Optymalna rentowność i skuteczność** |
 
 ---
 
-## 📊 SZCZEGÓŁOWY ROZKŁAD DLA INTERWAŁU `1h` (NAJLEPSZA WYDAJNOŚĆ)
+## 📊 PORÓWNANIE INTERWAŁU `30m` VS `15m` VS `1h`
 
-- **`BTC/USDT` [1h]**: 1 transakcja | **Win Rate 100.0%** | PnL **+$0.28 USD** | Profit Factor **99.90**
-- **`ETH/USDT` [1h]**: 1 transakcja | **Win Rate 100.0%** | PnL **+$0.28 USD** | Profit Factor **99.90**
-- **`SOL/USDT` [1h]**: 2 transakcje | **Win Rate 50.0%** | PnL **+$0.14 USD** | Profit Factor **2.00**
-- **`ICP/USDT` [1h]**: 10 transakcji | Win Rate 20.0% | PnL -$0.06 USD | Profit Factor 0.85
+1. **`BTC/USDT`, `ETH/USDT`, `SOL/USDT` na 30m**:
+   - Na 300 świecach (~6 dni historii) wystąpiło **0 transakcji**. Wstęga TMA_30m na głównych parach porusza się zbyt blisko rynkowego zakresu cenowego bez dynamicznych wybięć.
+2. **`ICP/USDT` na 30m**:
+   - Wygenerowało 8 otwartych transakcji, jednak ze względu na mikro-wybicia na altcoinach większość pozycji została zamknięta na Stop Lossie (Win Rate 12.5%, PnL -$0.32 USD).
+3. **Konkluzja**:
+   Interwał **`30m`** pełni rolę "martwej strefy" pomiędzy reaktywną świecą taktyczną `15m` a stabilną rynkową świecą swingową **`1h`**.
 
 ---
 
