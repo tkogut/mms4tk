@@ -339,13 +339,37 @@ class OKXExecutor:
             if eea_xperp:
                 target_symbol = eea_xperp
 
+        is_contract_symbol = (
+            ":" in target_symbol or 
+            "-" in target_symbol or 
+            "XPERP" in target_symbol or 
+            "SWAP" in target_symbol or 
+            "PERP" in target_symbol or 
+            "FUTURES" in target_symbol
+        )
+
+        final_amount = amount
+        if is_contract_symbol and (amount < 1.0 or amount != math.floor(amount)):
+            ref_price = price or 0.0
+            if ref_price <= 0 and self.exchange is not None:
+                try:
+                    ticker = await self.exchange.fetch_ticker(target_symbol)
+                    ref_price = float(ticker.get("last") or ticker.get("close") or 0.0)
+                except Exception:
+                    ref_price = 0.0
+            
+            est_usd = (amount * ref_price) if (ref_price > 0 and amount > 0) else 7.0
+            est_usd = max(est_usd, 7.0)
+            final_amount = self.calculate_order_amount(target_symbol, est_usd, ref_price)
+            logger.info(f"Recalculated contract amount for {target_symbol}: original_amount={amount} -> contract_amount={final_amount} (${est_usd:.2f} USD)")
+
         if not self.has_credentials or self.exchange is None:
-            logger.info(f"Mock Order Execution: symbol={target_symbol}, side={side}, amount={amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
+            logger.info(f"Mock Order Execution: symbol={target_symbol}, side={side}, amount={final_amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
             return {
                 "id": f"mock_order_{int(time.time()*1000)}",
                 "symbol": target_symbol,
                 "side": side_lower,
-                "amount": amount,
+                "amount": final_amount,
                 "leverage": leverage,
                 "stop_loss_pct": stop_loss_pct,
                 "status": "executed",
@@ -393,7 +417,7 @@ class OKXExecutor:
                 symbol=target_symbol,
                 type="market",
                 side=side_lower,
-                amount=amount,
+                amount=final_amount,
                 params=params
             )
             logger.info(f"Successfully executed OKX order {order.get('id')} for {target_symbol}")

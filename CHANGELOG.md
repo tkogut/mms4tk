@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🐛 [0.16.2] - 2026-08-14
+
+### 🐛 OKX Futures / EEA Contract Lot Precision Fix
+- 🐛 **Contract Amount Recalculation**: Fixed `InvalidOrder: okx amount must be greater than minimum amount precision of 1` error in `execute_order` (`okx_executor.py`). When symbols are mapped to OKX Futures/EEA Swap contracts (`ETH/USD:USD-310404`, `SOL/USD:USD-310404`), fractional coin quantities (e.g. `0.0037 ETH`) are now dynamically converted to integer contract quantities (e.g. `1 contract`), enabling order execution.
+
+---
+
 ## 🚀 [0.16.1] - 2026-08-14
 
 ### 🚀 30m Timeframe Support & Independent Simulation Audit
