@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.18.0] - 2026-08-15
+
+### 🚀 Pure Cash Allocation Position Sizing (Leverage Multiplied Notional Target)
+- 🚀 **Pure Cash Allocation Sizing**: Updated `src/mms4tk/daemon.py` order calculation so that `max_margin_usd` ($10 USD) represents **exact real cash margin spent** ($7 USD Base / $3 USD Addon). Position notional value is now computed as `base_trade_usd * leverage` ($21 USD Notional @ 3x), ensuring the user's real cash invested matches the exact 70/30 allocation regardless of leverage.
+
+---
+
 ## 🚀 [0.17.0] - 2026-08-15
 
 ### 🚀 Live Open Positions API & Real-Time Telegram Webhook Alerts

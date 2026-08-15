@@ -134,13 +134,17 @@ class MMS4Daemon:
         details = signal.reason or ""
         order_info: Optional[Dict[str, Any]] = None
 
-        base_order_amount = self.executor.calculate_order_amount(target_symbol, self.base_trade_usd, signal.price)
-        if not isinstance(base_order_amount, (int, float)):
-            base_order_amount = round(self.base_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
+        # Calculate notional position value so that real cash margin spent matches exact 70/30 allocation
+        notional_base_usd = self.base_trade_usd * sym_leverage
+        notional_addon_usd = self.addon_trade_usd * sym_leverage
 
-        addon_order_amount = self.executor.calculate_order_amount(target_symbol, self.addon_trade_usd, signal.price)
+        base_order_amount = self.executor.calculate_order_amount(target_symbol, notional_base_usd, signal.price)
+        if not isinstance(base_order_amount, (int, float)):
+            base_order_amount = round(notional_base_usd / signal.price, 6) if signal.price > 0 else 0.0001
+
+        addon_order_amount = self.executor.calculate_order_amount(target_symbol, notional_addon_usd, signal.price)
         if not isinstance(addon_order_amount, (int, float)):
-            addon_order_amount = round(self.addon_trade_usd / signal.price, 6) if signal.price > 0 else 0.0001
+            addon_order_amount = round(notional_addon_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
@@ -154,7 +158,7 @@ class MMS4Daemon:
                     price=signal.price
                 )
                 outcome = f"EXECUTED_{signal.signal_type}"
-                details = f"Executed {signal.signal_type} base order for {target_symbol} (${self.base_trade_usd:.2f} USD) with SL=2% (leverage x{sym_leverage})"
+                details = f"Executed {signal.signal_type} base order for {target_symbol} (${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) with SL=2% (leverage x{sym_leverage})"
             except Exception as e:
                 outcome = f"ERROR_{signal.signal_type}"
                 details = f"Failed to execute order for {target_symbol}: {str(e)}"
@@ -171,11 +175,11 @@ class MMS4Daemon:
                         side=side,
                         amount=addon_order_amount,
                         stop_loss_pct=0.0125,
-                        leverage=1.0,
+                        leverage=sym_leverage,
                         price=signal.price
                     )
                     outcome = f"EXECUTED_{signal.signal_type}"
-                    details = f"Executed High Risk Add order for {target_symbol} (${self.addon_trade_usd:.2f} USD) with composite SL=1.25%"
+                    details = f"Executed High Risk Add order for {target_symbol} (${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) with composite SL=1.25% (leverage x{sym_leverage})"
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
