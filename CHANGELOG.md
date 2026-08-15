@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.14] - 2026-08-15
+
+### 🎯 Kanban DB Resolution Priority & Zero-Byte Bypass
+- 🔍 **Database Candidate Priority**: Placed `/app/hermes_data/kanban.db` as primary candidate with `os.path.getsize(cand) > 1024` validation.
+- ⚡ **True 1:1 Live Sync**: Guaranteed instantaneous reflection of active tasks and task archiving between Hermes CLI and Mastermind UI.
+
+---
+
 ## 🚀 [0.23.13] - 2026-08-15
 
 ### 🚀 Live WAL + SHM Shared Volume for Real-Time Kanban Sync

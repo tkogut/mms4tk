@@ -594,17 +594,15 @@ async def get_kanban_cards() -> Dict[str, Any]:
     
     # Check potential kanban.db paths
     db_candidates = [
-        "/app/.agents/swarm/hermes_kanban.db",
-        ".agents/swarm/hermes_kanban.db",
         "/app/hermes_data/kanban.db",
-        "/docker/hermes-agent/data/kanban.db",
         "/opt/data/kanban.db",
+        "/docker/hermes-agent/data/kanban.db",
         ".agents/swarm/kanban.db"
     ]
     
     hermes_db = None
     for cand in db_candidates:
-        if os.path.exists(cand):
+        if os.path.exists(cand) and os.path.getsize(cand) > 1024:
             hermes_db = cand
             break
             
