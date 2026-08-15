@@ -66,6 +66,11 @@ class OKXTradeSyncWorker:
                 ts_ms = int(item.get("fillTime") or item.get("uTime") or item.get("cTime") or 0)
                 ts_iso = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat() if ts_ms > 0 else datetime.now(timezone.utc).isoformat()
 
+                # Filter out pre-baseline historical test fills
+                sync_start_iso = os.getenv("MMS4_TRADE_SYNC_START_ISO", "2026-08-15T21:00:00+00:00")
+                if sync_start_iso and ts_iso < sync_start_iso:
+                    continue
+
                 symbol = item.get("instId", "BTC/USDC")
                 side = item.get("posSide") or item.get("side", "buy")
                 

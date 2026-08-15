@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.24.1] - 2026-08-15
+
+### 🧹 KPI Clean Baseline & Trade Sync Cutoff Filter
+- 🛡️ **`trade_sync.py` Cutoff Filter**: Added `MMS4_TRADE_SYNC_START_ISO` filter preventing backfilling pre-baseline corrupted historical test fills into `closed_trades`.
+- 📊 **KPI Baseline Reset**: Cleared contaminated historical test records from `logs.db`, resetting KPI metrics (Win Rate, Profit Factor, MDD, R:R) to clean zero-state baseline.
+- 🔄 **Active Position Preservation**: 4 live OKX positions (ICP, SOL, ETH, BTC) preserved and registered in Inactivity Manager.
+
+---
+
 ## 🚀 [0.24.0] - 2026-08-15
 
 ### ⏰ MMS4 Stale Position Management & Inactivity Manager
