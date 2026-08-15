@@ -2,6 +2,7 @@ services:
   antigravity_core:
     build: .
     container_name: antigravity_core
+    user: "0:0"
     restart: unless-stopped
     networks:
       - internal_swarm_net

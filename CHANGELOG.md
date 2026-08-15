@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.12] - 2026-08-15
+
+### ⚡ Direct Root Execution & Immutable SQLite Sync
+- 🛡️ **Container Permission Resolution**: Set `user: "0:0"` in `docker-compose.yml` so `antigravity_core` can read the host `/docker/hermes-agent/data/` volume directly.
+- 🗄️ **Immutable SQLite Access**: Configured `file:///app/hermes_data/kanban.db?immutable=1` URI for read-only access to Hermes Kanban board.
+
+---
+
 ## 🚀 [0.23.11] - 2026-08-15
 
 ### 🗂️ Hermes Directory Mount & WAL Sync
