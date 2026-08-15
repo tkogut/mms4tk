@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.22.0] - 2026-08-15
+
+### 🛡️ Double-Lock Single Addon Guard & Position Cap
+- 🔒 **Double-Lock Addon Order Prevention**: Enforced strict single Add-on trade execution per position lifecycle using both in-memory set lock (`_addon_executed_symbols`) and OKX live position notional check (`existing_notional >= notional_base_usd + 0.4 * notional_addon_usd`). Completely prevents duplicate 15-second add-on order stacking.
+- ⚖️ **Automatic Addon State Reset**: Automatically releases addon locks when positions are closed by SL/TP (`existing_pos is None`).
+
+---
+
 ## 🚀 [0.21.4] - 2026-08-15
 
 ### 🐞 Fix AttributeError in Daemon High Risk Add Cycle
