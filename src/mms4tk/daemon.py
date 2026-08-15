@@ -146,27 +146,55 @@ class MMS4Daemon:
         if not isinstance(addon_order_amount, (int, float)):
             addon_order_amount = round(notional_addon_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
+        # Fetch live open positions from OKX to enforce Single Position Lock Guard
+        live_positions = []
+        try:
+            live_positions = await self.executor.fetch_positions()
+        except Exception as pe:
+            logger.warning(f"Failed to fetch live positions for position guard check: {pe}")
+
+        existing_pos = None
+        for p in live_positions:
+            p_sym = p.get("symbol", "")
+            p_clean = p_sym.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+            t_clean = target_symbol.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+            if p_clean == t_clean:
+                contracts = float(p.get("contracts", 0) or 0)
+                if contracts > 0:
+                    existing_pos = p
+                    break
+
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
-            side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
-            try:
-                order_info = await self.executor.execute_order(
-                    symbol=target_symbol,
-                    side=side,
-                    amount=base_order_amount,
-                    stop_loss_pct=0.02,
-                    leverage=sym_leverage,
-                    price=signal.price
-                )
-                outcome = f"EXECUTED_{signal.signal_type}"
-                details = f"Executed {signal.signal_type} base order for {target_symbol} (${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) with SL=2% (leverage x{sym_leverage})"
-            except Exception as e:
-                outcome = f"ERROR_{signal.signal_type}"
-                details = f"Failed to execute order for {target_symbol}: {str(e)}"
+            if existing_pos is not None:
+                outcome = f"SKIPPED_{signal.signal_type}"
+                details = f"Base position already open for {target_symbol} ({existing_pos.get('contracts')} contracts). Single Position Guard active."
+            else:
+                side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                try:
+                    order_info = await self.executor.execute_order(
+                        symbol=target_symbol,
+                        side=side,
+                        amount=base_order_amount,
+                        stop_loss_pct=0.02,
+                        leverage=sym_leverage,
+                        price=signal.price
+                    )
+                    outcome = f"EXECUTED_{signal.signal_type}"
+                    details = f"Executed {signal.signal_type} base order for {target_symbol} (${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) with SL=2% (leverage x{sym_leverage})"
+                except Exception as e:
+                    outcome = f"ERROR_{signal.signal_type}"
+                    details = f"Failed to execute order for {target_symbol}: {str(e)}"
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
             if sym_state != MMS4State.BASE_MODE:
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
+            elif existing_pos is None:
+                outcome = f"BLOCKED_{signal.signal_type}"
+                details = f"High Risk Add blocked for {target_symbol} because no base position exists yet."
+            elif sym_state == MMS4State.HIGH_RISK_ADD_SHORT or sym_state == MMS4State.HIGH_RISK_ADD_LONG:
+                outcome = f"SKIPPED_{signal.signal_type}"
+                details = f"High Risk Add already executed for {target_symbol}."
             else:
                 side = "SELL" if "SHORT" in signal.signal_type else "BUY"
                 try:

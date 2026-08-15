@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.20.0] - 2026-08-15
+
+### 🛡️ Single Position Lock Guard & Duplicate Order Prevention
+- 🛡️ **Single Position Guard**: Updated `src/mms4tk/daemon.py` to query live OKX positions before executing any order. If a base position already exists for a target symbol (`contracts > 0`), duplicate order execution is immediately blocked and skipped (`SKIPPED_BASE_SHORT`). Prevents continuous 15-second re-entry loops while signals remain active.
+
+---
+
 ## 🚀 [0.19.1] - 2026-08-15
 
 ### ⚡ Hermes Kanban Optimization (Actionable Cards Only)
