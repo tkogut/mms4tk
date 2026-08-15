@@ -16,7 +16,7 @@ export default function App() {
   const [kanbanCards, setKanbanCards] = useState([]);
   const [openPositions, setOpenPositions] = useState([]);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.23.8');
+  const [appVersion, setAppVersion] = useState('0.23.9');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();

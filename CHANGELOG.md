@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.9] - 2026-08-15
+
+### 🔗 Robust SQLite URI Mode for Kanban Read-Only Sync
+- 🔒 **Read-Only URI Connection**: Configured `sqlite3.connect(f"file:{hermes_db}?mode=ro", uri=True)` so `antigravity_core` can read the live Hermes `kanban.db` directly without requiring write access or locks.
+
+---
+
 ## 🚀 [0.23.8] - 2026-08-15
 
 ### 🎯 Direct Hermes Kanban.db Sync & Zero Ghost Cards
