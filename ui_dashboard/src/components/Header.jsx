@@ -1,7 +1,10 @@
 import React from 'react';
-import { Cpu, ShieldCheck, Activity, RefreshCw } from 'lucide-react';
+import { Cpu, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
 
-export function Header({ version = "0.23.3", isConnected }) {
+export function Header({ version = "0.23.4", isConnected, stateData, onRefresh }) {
+  const isScoutMode = stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false;
+  const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
+
   const handleForceRefresh = async () => {
     try {
       if ('serviceWorker' in navigator) {
@@ -23,7 +26,7 @@ export function Header({ version = "0.23.3", isConnected }) {
   };
 
   return (
-    <header className="mb-6 flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-800">
+    <header className="mb-6 flex flex-col md:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-800">
       <div className="flex items-center gap-3 text-center sm:text-left">
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400">
           <Cpu className="w-7 h-7" />
@@ -35,7 +38,7 @@ export function Header({ version = "0.23.3", isConnected }) {
           <p className="text-xs text-slate-400 flex items-center justify-center sm:justify-start gap-2 mt-0.5">
             <span>VPS Autotrading Engine & Strategy Supervisor</span>
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
-              <span>v{version || '0.21.2'}</span>
+              <span>v{version || '0.23.4'}</span>
               <button
                 onClick={handleForceRefresh}
                 title="Wymuś czyszczenie cache PWA i odśwież wersję"
@@ -48,7 +51,21 @@ export function Header({ version = "0.23.3", isConnected }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3">
+        {/* Tryb Operacyjny Bota */}
+        <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 shadow-sm">
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider hidden sm:inline">Tryb:</div>
+          <div className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded font-mono text-xs font-bold border ${
+            isScoutMode
+              ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
+              : 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+          }`}>
+            {isScoutMode ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" /> : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+            <span>{activeMode}</span>
+          </div>
+        </div>
+
+        {/* API Live Status */}
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium ${
           isConnected 
             ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400' 
@@ -58,11 +75,19 @@ export function Header({ version = "0.23.3", isConnected }) {
           <span>{isConnected ? 'API LIVE' : 'DISCONNECTED'}</span>
         </div>
 
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-300">
-          <ShieldCheck className="w-4 h-4 text-blue-400" />
-          <span>OKX SPOT BTC/USDC</span>
-        </div>
+        {/* Global Refresh Button */}
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            title="Odśwież dane z API"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors border border-slate-700 shadow-sm"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+            <span>Odśwież</span>
+          </button>
+        )}
       </div>
     </header>
   );
 }
+

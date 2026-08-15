@@ -45,44 +45,6 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
 
   return (
     <div className="space-y-6">
-      {/* Operating Mode Header Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className={`p-3 rounded-xl border ${
-              isScoutMode 
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' 
-                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-            }`}>
-              {isScoutMode ? <ShieldAlert className="w-8 h-8" /> : <CheckCircle2 className="w-8 h-8" />}
-            </div>
-            <div>
-              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tryb Operacyjny Bota</div>
-              <div className="flex items-center gap-3 mt-1">
-                <span className={`text-xl font-bold font-mono px-3 py-1 rounded-lg border ${
-                  isScoutMode 
-                    ? 'bg-amber-950/60 border-amber-500/40 text-amber-300' 
-                    : 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
-                }`}>
-                  {activeMode}
-                </span>
-                <span className="text-xs text-slate-400 hidden sm:inline">
-                  {isScoutMode ? 'Ochrona kapitału po SL' : 'Pełny alokator alfy aktywny'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={onRefresh}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm font-medium transition-colors border border-slate-700 shadow-sm"
-          >
-            <RefreshCw className="w-4 h-4 text-blue-400" />
-            <span>Odśwież Dane</span>
-          </button>
-        </div>
-      </div>
-
       {/* Multi-Symbol Active Pairs Grid Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
         <div className="flex items-center justify-between">
