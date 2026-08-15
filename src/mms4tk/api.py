@@ -594,6 +594,8 @@ async def get_kanban_cards() -> Dict[str, Any]:
     
     # Check potential kanban.db paths
     db_candidates = [
+        "/app/.agents/swarm/hermes_kanban.db",
+        ".agents/swarm/hermes_kanban.db",
         "/app/hermes_data/kanban.db",
         "/docker/hermes-agent/data/kanban.db",
         "/opt/data/kanban.db",

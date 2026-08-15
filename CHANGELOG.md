@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.10] - 2026-08-15
+
+### 🗄️ Hermes Kanban Single File Mount Sync
+- 🔗 **Direct File Mount**: Mounted `/docker/hermes-agent/data/kanban.db:/app/.agents/swarm/hermes_kanban.db:ro` in `docker-compose.yml`, bypassing directory permission restrictions.
+- 🔄 **Real-Time Kanban Sync**: When tasks are created or archived in Hermes, `/api/v1/hermes/kanban` instantly mirrors the true live board.
+
+---
+
 ## 🚀 [0.23.9] - 2026-08-15
 
 ### 🔗 Robust SQLite URI Mode for Kanban Read-Only Sync
