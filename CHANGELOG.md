@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.20.2] - 2026-08-15
+
+### 💰 Direct Top-Level OKX availEq API Parsing
+- 💵 **Exact availEq Extraction**: Updated `src/mms4tk/okx_executor.py` (`fetch_balance`) to read top-level `availEq` directly from OKX V5 account balance API (`data[0]["availEq"]`). Reports exact real available margin ($53.44 USDC) instead of cash balance without math calculations.
+
+---
+
 ## 🚀 [0.20.1] - 2026-08-15
 
 ### 💰 Direct OKX availBal API Reporting

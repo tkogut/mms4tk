@@ -468,24 +468,35 @@ class OKXExecutor:
             }
             funding_assets = {}
 
-            # 1. Query OKX V5 Account Balance directly for exact availBal (free available margin)
+            # 1. Query OKX V5 Account Balance directly for exact top-level availEq (free available margin for trading)
             try:
                 raw_acc = await self.exchange.private_get_account_balance()
                 if raw_acc and raw_acc.get("data"):
-                    details = raw_acc["data"][0].get("details", [])
+                    data0 = raw_acc["data"][0]
+                    top_avail_eq = float(data0.get("availEq") or 0.0)
+                    top_total_eq = float(data0.get("totalEq") or 0.0)
+                    
+                    if not isinstance(bal.get("free"), dict):
+                        bal["free"] = {}
+                    if not isinstance(bal.get("total"), dict):
+                        bal["total"] = {}
+
+                    # Directly assign real OKX available equity to USDC free balance
+                    if top_avail_eq > 0:
+                        bal["free"]["USDC"] = top_avail_eq
+                        portfolio_usd["available_usd"] = top_avail_eq
+                    if top_total_eq > 0:
+                        bal["total"]["USDC"] = top_total_eq
+                        portfolio_usd["total_usd"] = top_total_eq
+
+                    details = data0.get("details", [])
                     for item in details:
                         ccy = item.get("ccy")
-                        if ccy:
-                            avail_b = float(item.get("availBal") or item.get("availEq") or 0.0)
+                        if ccy and ccy != "USDC":
+                            avail_b = float(item.get("availEq") or item.get("availBal") or 0.0)
                             tot_eq = float(item.get("eq") or item.get("cashBal") or 0.0)
-                            if not isinstance(bal.get("free"), dict):
-                                bal["free"] = {}
-                            if not isinstance(bal.get("total"), dict):
-                                bal["total"] = {}
                             bal["free"][ccy] = avail_b
                             bal["total"][ccy] = tot_eq
-                            if ccy == "USDC":
-                                portfolio_usd["available_usd"] = avail_b
             except Exception as ae:
                 logger.warning(f"Failed to fetch raw OKX v5 account balance: {ae}")
 
