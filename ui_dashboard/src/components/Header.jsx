@@ -1,7 +1,7 @@
 import React from 'react';
 import { Cpu, ShieldCheck, Activity, RefreshCw } from 'lucide-react';
 
-export function Header({ version = "0.21.2", isConnected }) {
+export function Header({ version = "0.21.3", isConnected }) {
   const handleForceRefresh = async () => {
     try {
       if ('serviceWorker' in navigator) {

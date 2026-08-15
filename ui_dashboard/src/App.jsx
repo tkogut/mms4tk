@@ -16,7 +16,7 @@ export default function App() {
   const [kanbanCards, setKanbanCards] = useState([]);
   const [openPositions, setOpenPositions] = useState([]);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.21.2');
+  const [appVersion, setAppVersion] = useState('0.21.3');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
@@ -108,7 +108,7 @@ export default function App() {
       )}
 
       {/* Main Header */}
-      <Header version="0.16.2" isConnected={isConnected} />
+      <Header version={appVersion} isConnected={isConnected} />
 
       {/* Navigation Tabs */}
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />

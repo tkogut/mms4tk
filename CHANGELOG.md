@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.21.3] - 2026-08-15
+
+### 🎯 Fix Hardcoded Version Prop in App.jsx
+- 🐞 **Fixed Header Version Prop**: Resolved root cause in `App.jsx` where `<Header>` was passed literal hardcoded string `"0.16.2"` instead of dynamic `{appVersion}` state.
+
+---
+
 ## 🚀 [0.21.2] - 2026-08-15
 
 ### ⚡ Fix Desktop PWA Caching & Nginx No-Cache Headers
