@@ -136,13 +136,13 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
-            <span className="text-xs font-medium">Kapitał Wolny (USDC)</span>
+            <span className="text-xs font-medium">Wolny Dostępny Depozyt (OKX)</span>
             <Wallet className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-gray-100 font-mono">
             ${freeUsdc}
           </div>
-          <div className="text-xs text-slate-400 mt-1">Dostępny w portfelu SPOT</div>
+          <div className="text-xs text-slate-400 mt-1">Czysty wolny margin wg OKX API (availBal)</div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">

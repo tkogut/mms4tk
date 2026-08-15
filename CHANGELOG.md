@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.20.1] - 2026-08-15
+
+### 💰 Direct OKX availBal API Reporting
+- 💵 **Direct OKX availBal API**: Updated `src/mms4tk/okx_executor.py` (`fetch_balance`) to query `/api/v5/account/balance` directly from OKX V5 API and populate `free_usdc` with exact `availBal` (pure available free margin without calculations).
+- 📊 **Updated Telegram & Dashboard Reports**: Updated Hermes multi-symbol Telegram digest (`mms4tk_multi_symbol_digest.py`) and UI Dashboard (`MonitoringTab.jsx`) to display direct OKX `availBal` ($53.28 USDC) alongside Total Equity ($83.63 USDC).
+
+---
+
 ## 🚀 [0.20.0] - 2026-08-15
 
 ### 🛡️ Single Position Lock Guard & Duplicate Order Prevention

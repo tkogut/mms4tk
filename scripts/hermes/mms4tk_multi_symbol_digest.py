@@ -134,9 +134,13 @@ def main():
 
     symbols_data = fetch_api("/api/v1/symbols") or {}
     positions_data = fetch_api("/api/v1/positions") or {}
+    balance_data = fetch_api("/api/v1/balance") or {}
 
     symbols = symbols_data.get("symbols", [])
     positions = positions_data.get("positions", [])
+
+    free_usdc = float(balance_data.get("free", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("available_usd", 0.0))
+    total_eq = float(balance_data.get("total", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("total_usd", 0.0))
 
     if not symbols:
         print("⚠️ No symbol configuration returned from API.")
@@ -188,9 +192,11 @@ def main():
         lines.append("ℹ️ Brak otwartych pozycji w tym cyklu.")
 
     lines.append(f"")
-    lines.append(f"💰 **PODSUMOWANIE PORTFELA**:")
-    lines.append(f"- **Łączna Alokacja Par**: `${total_alloc:.2f} USD`")
-    lines.append(f"- **Łączny Niezrealizowany PnL**: `{'+$' if total_upnl >= 0 else '-$'}{abs(total_upnl):.2f} USD`")
+    lines.append(f"💰 **PODSUMOWANIE PORTFELA OKX (API)**:")
+    lines.append(f"- **💵 Wolna Dostępna Gotówka**: `${free_usdc:.2f} USDC` (z OKX API)")
+    lines.append(f"- **📊 Całkowity Kapitał (Equity)**: `${total_eq:.2f} USDC`")
+    lines.append(f"- **🎯 Łączna Alokacja Par**: `${total_alloc:.2f} USD`")
+    lines.append(f"- **📈 Niezrealizowany PnL**: `{'+$' if total_upnl >= 0 else '-$'}{abs(total_upnl):.2f} USD`")
     lines.append(f"- **Status Floty OKX**: `GOTOWA` 🟢")
 
     full_digest = "\n".join(lines)

@@ -463,11 +463,33 @@ class OKXExecutor:
                 "total_usd": 0.0,
                 "funding_usd": 0.0,
                 "trading_usd": 0.0,
-                "earn_usd": 0.0
+                "earn_usd": 0.0,
+                "available_usd": 0.0
             }
             funding_assets = {}
 
-            # Attempt OKX V5 Asset Valuation call for exact breakdown
+            # 1. Query OKX V5 Account Balance directly for exact availBal (free available margin)
+            try:
+                raw_acc = await self.exchange.private_get_account_balance()
+                if raw_acc and raw_acc.get("data"):
+                    details = raw_acc["data"][0].get("details", [])
+                    for item in details:
+                        ccy = item.get("ccy")
+                        if ccy:
+                            avail_b = float(item.get("availBal") or item.get("availEq") or 0.0)
+                            tot_eq = float(item.get("eq") or item.get("cashBal") or 0.0)
+                            if not isinstance(bal.get("free"), dict):
+                                bal["free"] = {}
+                            if not isinstance(bal.get("total"), dict):
+                                bal["total"] = {}
+                            bal["free"][ccy] = avail_b
+                            bal["total"][ccy] = tot_eq
+                            if ccy == "USDC":
+                                portfolio_usd["available_usd"] = avail_b
+            except Exception as ae:
+                logger.warning(f"Failed to fetch raw OKX v5 account balance: {ae}")
+
+            # 2. Attempt OKX V5 Asset Valuation call for total USD breakdown
             try:
                 val = await self.exchange.privateGetAssetAssetValuation({"ccy": "USD"})
                 if val and val.get("data"):
@@ -480,7 +502,7 @@ class OKXExecutor:
             except Exception as ve:
                 logger.warning(f"Failed to fetch privateGetAssetAssetValuation: {ve}")
 
-            # Attempt OKX V5 Funding asset breakdown
+            # 3. Attempt OKX V5 Funding asset breakdown
             try:
                 fund = await self.exchange.privateGetAssetBalances()
                 if fund and fund.get("data"):
