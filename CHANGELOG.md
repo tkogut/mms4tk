@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.18.1] - 2026-08-15
+
+### 🐛 Telegram Position Alert Dispatch Fix
+- 🐛 **Event Dispatcher Fix**: Fixed `NameError` in `scripts/hermes/mms4tk_event_dispatcher.py` when sending Telegram alerts for executed position opening events. Updated Hermes CLI call to `hermes send --to telegram` syntax to ensure instant position opening notifications land in Telegram.
+
+---
+
 ## 🚀 [0.18.0] - 2026-08-15
 
 ### 🚀 Pure Cash Allocation Position Sizing (Leverage Multiplied Notional Target)

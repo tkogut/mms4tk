@@ -108,7 +108,9 @@ def main():
     dispatched_count = 0
     for event in events:
         event_id = event["id"]
-        print(f"Dispatching event #{event_id}: {event['title']}")
+        event_title = event.get("title", "MMS4TK Webhook Event")
+        event_body = event.get("body", "")
+        print(f"Dispatching event #{event_id}: {event_title}")
 
         success, task_id_or_error = create_kanban_card(event)
         if success:
@@ -116,10 +118,12 @@ def main():
             dispatched_count += 1
             print(f"  ✅ Card created (task_id={task_id_or_error})")
             
-            # Send Telegram alert for HITL / SCOUT_MODE events
+            # Send Telegram alert via hermes send --to telegram
             try:
-                alert_msg = f"🚨 MMS4TK ALERT: {title}\n\n{body}\n\nTask ID: {task_id_or_error}"
-                subprocess.run(["hermes", "notify", "--channel", "telegram", alert_msg], capture_output=True, timeout=10)
+                alert_msg = f"{event_title}\n\n{event_body}"
+                hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
+                cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
+                subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 print("  💬 Telegram push notification sent")
             except Exception as ne:
                 print(f"  ⚠️ Telegram notification skipped: {ne}")
