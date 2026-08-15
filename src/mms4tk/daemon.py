@@ -155,25 +155,34 @@ class MMS4Daemon:
 
         existing_pos = None
         existing_notional = 0.0
+        existing_contracts = 0.0
         for p in live_positions:
             p_sym = p.get("symbol", "")
             p_clean = p_sym.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
             t_clean = target_symbol.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
             if p_clean == t_clean:
-                contracts = float(p.get("contracts", 0) or 0)
+                contracts = float(p.get("contracts", 0.0) or p.get("info", {}).get("pos", 0.0) or 0.0)
                 if contracts > 0:
                     existing_pos = p
-                    existing_notional = float(p.get("notional_usd", 0.0) or 0.0)
+                    existing_contracts = contracts
+                    # Robust notional calculation
+                    raw_notional = float(p.get("notional") or p.get("notional_usd") or p.get("info", {}).get("notionalUsd") or 0.0)
+                    if raw_notional <= 0 and signal.price > 0:
+                        ct_size = float(p.get("contractSize", 0.0) or p.get("info", {}).get("ctVal", 0.0) or 0.0)
+                        if ct_size <= 0:
+                            ct_size = 0.0001 if "BTC" in target_symbol else 1.0
+                        raw_notional = contracts * ct_size * signal.price
+                    existing_notional = raw_notional
                     break
 
-        if existing_pos is None:
+        if existing_pos is None or existing_contracts <= 0:
             # Clear addon lock when position is fully closed
             self._addon_executed_symbols.discard(target_symbol)
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
-            if existing_pos is not None:
+            if existing_pos is not None and existing_contracts > 0:
                 outcome = f"SKIPPED_{signal.signal_type}"
-                details = f"Base position already open for {target_symbol} ({existing_pos.get('contracts')} contracts, notional=${existing_notional:.2f}). Single Position Guard active."
+                details = f"Base position already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
             else:
                 side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
                 try:
@@ -192,21 +201,25 @@ class MMS4Daemon:
                     details = f"Failed to execute order for {target_symbol}: {str(e)}"
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
-            # Check if Add-on was already executed (either by memory lock or live notional size)
+            # Addon is considered already executed if:
+            # 1. Memory lock flag is set
+            # 2. OR existing contracts exceed base order amount by >= 25% (e.g. 4 base -> 5+ contracts)
+            # 3. OR existing notional USD exceeds 80% of total allocation notional (e.g. >= $25 USD)
             is_addon_done = (
                 target_symbol in self._addon_executed_symbols or
-                existing_notional >= (notional_base_usd + 0.4 * notional_addon_usd)
+                existing_contracts >= (base_order_amount + max(1.0, 0.5 * addon_order_amount)) or
+                existing_notional >= (notional_base_usd + 0.3 * notional_addon_usd)
             )
 
             if sym_state != MMS4State.BASE_MODE:
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
-            elif existing_pos is None:
+            elif existing_pos is None or existing_contracts <= 0:
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked for {target_symbol} because no base position exists yet."
             elif is_addon_done:
                 outcome = f"SKIPPED_{signal.signal_type}"
-                details = f"High Risk Add already executed for {target_symbol} (Current notional: ${existing_notional:.2f} USD). Single Addon Guard active."
+                details = f"High Risk Add already executed for {target_symbol} (Current: {existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Addon Guard active."
             else:
                 side = "SELL" if "SHORT" in signal.signal_type else "BUY"
                 try:

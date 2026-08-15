@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.1] - 2026-08-15
+
+### 🛡️ Robust Universal Multi-Symbol Position & Add-on Guard
+- 🔒 **Exchange-Level Contract & Notional Size Check**: Fixed `daemon.py` position inspection to calculate `existing_notional` and `existing_contracts` directly from OKX CCXT position data and contract size (`contractSize` / `ctVal`).
+- 🚫 **Unbreakable Restart-Resistant Addon Lock**: Prevents add-on order stacking across container restarts by checking live OKX contract counts against base order sizes (`existing_contracts >= base_order_amount + 0.5 * addon_order_amount`) and notional allocations across all trading symbols (BTC, ETH, SOL, ICP).
+
+---
+
 ## 🚀 [0.23.0] - 2026-08-15
 
 ### 📬 Telegram Queue & Rate-Limiter Module
