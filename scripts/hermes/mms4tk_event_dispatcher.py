@@ -130,32 +130,43 @@ def main():
     dispatched_count = 0
     for event in events:
         event_id = event["id"]
+        event_type = event.get("event_type", "")
         event_title = event.get("title", "MMS4TK Webhook Event")
         event_body = event.get("body", "")
-        print(f"Dispatching event #{event_id}: {event_title}")
+        print(f"Processing event #{event_id}: {event_title}")
 
-        success, task_id_or_error = create_kanban_card(event)
-        if success:
-            mark_dispatched(event_id, str(task_id_or_error))
-            dispatched_count += 1
-            print(f"  ✅ Card created (task_id={task_id_or_error})")
-            
-            # Send Telegram alert via hermes send --to telegram
-            try:
-                alert_msg = f"{event_title}\n\n{event_body}"
-                hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
-                cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
-                subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                print("  💬 Telegram push notification sent")
-                import time
-                time.sleep(1.2)  # Throttle to respect Telegram API rate limits
-            except Exception as ne:
-                print(f"  ⚠️ Telegram notification skipped: {ne}")
-        else:
-            print(f"  ❌ Failed: {task_id_or_error}")
+        # Actionable events require Kanban cards for Hermes AI analysis or HITL review
+        is_actionable = (
+            event_type in ["SCOUT_MODE_ACTIVATED", "HITL_REVIEW", "RISK_ALERT"] or
+            event.get("initial_status") in ["blocked", "todo"]
+        ) and event_type not in ["POSITION_OPENED", "MULTI_SYMBOL_DIGEST"]
+
+        task_id = "telegram_only"
+        if is_actionable:
+            success, task_id_or_error = create_kanban_card(event)
+            if success:
+                task_id = str(task_id_or_error)
+                print(f"  📋 Kanban card created (task_id={task_id})")
+            else:
+                print(f"  ❌ Kanban card creation failed: {task_id_or_error}")
+
+        mark_dispatched(event_id, task_id)
+        dispatched_count += 1
+
+        # Send Telegram alert via hermes send --to telegram for all events
+        try:
+            alert_msg = f"{event_title}\n\n{event_body}"
+            hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
+            cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
+            subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            print("  💬 Telegram push notification sent")
+            import time
+            time.sleep(1.2)  # Throttle to respect Telegram API rate limits
+        except Exception as ne:
+            print(f"  ⚠️ Telegram notification skipped: {ne}")
 
     if dispatched_count > 0:
-        print(f"\n📋 Dispatched {dispatched_count}/{len(events)} events to Hermes Kanban")
+        print(f"\n📋 Processed {dispatched_count}/{len(events)} webhook events")
 
 
 if __name__ == "__main__":

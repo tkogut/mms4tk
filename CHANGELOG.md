@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.19.1] - 2026-08-15
+
+### ⚡ Hermes Kanban Optimization (Actionable Cards Only)
+- ⚡ **Filtered Kanban Creation**: Updated `scripts/hermes/mms4tk_event_dispatcher.py` to stop creating noisy informational Kanban cards for `POSITION_OPENED` or `MULTI_SYMBOL_DIGEST`. Informational events are dispatched **exclusively to Telegram**, reserving Hermes Kanban cards for actionable events requiring AI analysis or Human-in-the-Loop review (`SCOUT_MODE_ACTIVATED`, `HITL_REVIEW`).
+
+---
+
 ## 🚀 [0.19.0] - 2026-08-15
 
 ### 💾 Persistent Symbol Configuration Storage (.agents/swarm/symbols.json)
