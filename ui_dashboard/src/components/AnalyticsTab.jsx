@@ -112,6 +112,14 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         balance: Number((Math.sin(i / 5) * 2 + (i / candles.length) * Number(statsData?.realized_pnl || 0)).toFixed(2))
       }));
 
+  // Closed Trades Table Pagination Variables
+  const totalTrades = tradesHistory && Array.isArray(tradesHistory) ? tradesHistory.length : 0;
+  const totalPages = Math.max(1, Math.ceil(totalTrades / pageSize));
+  const validCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (validCurrentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalTrades);
+  const currentTrades = (tradesHistory && Array.isArray(tradesHistory)) ? tradesHistory.slice(startIndex, endIndex) : [];
+
   return (
     <div className="space-y-6">
       {/* Hermes H4 Analysis Report Box */}
