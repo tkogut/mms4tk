@@ -589,36 +589,49 @@ async def get_history_candles(symbol: str = "BTC/USDC", timeframe: str = "1h", l
 
 @app.get("/api/v1/hermes/kanban", tags=["Hermes Integration"])
 async def get_kanban_cards() -> Dict[str, Any]:
-    """Fetch active Kanban cards from Hermes and pending webhook events."""
+    """Fetch active Kanban cards from Hermes kanban.db (Single Source of Truth)."""
     cards = []
-    # 1. Fetch active tasks from hermes CLI if accessible
-    try:
-        import subprocess
-        res = subprocess.run(["hermes", "kanban", "list", "--json"], capture_output=True, text=True, timeout=5)
-        if res.returncode == 0 and res.stdout.strip():
-            raw_tasks = json.loads(res.stdout)
-            if isinstance(raw_tasks, list):
-                for t in raw_tasks:
-                    if t.get("status") not in ["done", "archived", "closed"]:
-                        cards.append({
-                            "id": t.get("id"),
-                            "status": str(t.get("status", "READY")).upper(),
-                            "title": t.get("title", "Hermes Zadanie"),
-                            "description": t.get("description") or t.get("body", ""),
-                            "created_at": t.get("created_at", "")
-                        })
-    except Exception:
-        pass
-
-    # 2. Also include pending/actionable webhook events from SQLite logs.db
-    try:
-        with sqlite3.connect(hermes_webhook.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                "SELECT * FROM webhook_events WHERE initial_status NOT IN ('done', 'archived') ORDER BY id DESC LIMIT 20"
-            )
-            for ev in cursor.fetchall():
-                if not any(c["title"] == ev["title"] for c in cards):
+    
+    # Check potential kanban.db paths
+    db_candidates = [
+        "/app/hermes_data/kanban.db",
+        "/docker/hermes-agent/data/kanban.db",
+        "/opt/data/kanban.db",
+        ".agents/swarm/kanban.db"
+    ]
+    
+    hermes_db = None
+    for cand in db_candidates:
+        if os.path.exists(cand):
+            hermes_db = cand
+            break
+            
+    if hermes_db:
+        try:
+            with sqlite3.connect(hermes_db) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT id, status, title, body, created_at FROM tasks WHERE status NOT IN ('done', 'archived', 'closed') ORDER BY created_at DESC"
+                )
+                for row in cursor.fetchall():
+                    cards.append({
+                        "id": row["id"],
+                        "status": str(row["status"]).upper(),
+                        "title": row["title"],
+                        "description": row["body"] or "",
+                        "created_at": row["created_at"] or ""
+                    })
+        except Exception as e:
+            logger.warning(f"Error querying Hermes kanban.db at {hermes_db}: {e}")
+    else:
+        # Fallback to undispatched actionable events only if kanban.db is missing
+        try:
+            with sqlite3.connect(hermes_webhook.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM webhook_events WHERE dispatched = 0 AND initial_status NOT IN ('done', 'archived') ORDER BY id DESC LIMIT 20"
+                )
+                for ev in cursor.fetchall():
                     cards.append({
                         "id": ev["id"],
                         "status": str(ev["initial_status"]).upper(),
@@ -626,8 +639,8 @@ async def get_kanban_cards() -> Dict[str, Any]:
                         "description": ev["body"],
                         "created_at": ev["timestamp"]
                     })
-    except Exception as e:
-        logger.warning(f"Error querying webhook_events for kanban: {e}")
+        except Exception as e:
+            logger.warning(f"Error querying webhook_events for kanban: {e}")
 
     return {"cards": cards, "total": len(cards)}
 

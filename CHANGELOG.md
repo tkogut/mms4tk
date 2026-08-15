@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.8] - 2026-08-15
+
+### 🎯 Direct Hermes Kanban.db Sync & Zero Ghost Cards
+- 🔗 **Direct Kanban SQLite Mount**: Mounted Hermes container data directory (`/docker/hermes-agent/data:/app/hermes_data:ro`) into `antigravity_core` in `docker-compose.yml`.
+- 🗄️ **Single Source of Truth**: Updated `/api/v1/hermes/kanban` in `api.py` to query active tasks directly from Hermes `kanban.db` (`tasks WHERE status NOT IN ('done', 'archived', 'closed')`). When Hermes board is clean, dashboard accurately shows 0 cards with perfect 1:1 synchronization.
+
+---
+
 ## 🚀 [0.23.7] - 2026-08-15
 
 ### 🩹 Bugfix in Stats & Kanban Query
