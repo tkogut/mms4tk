@@ -1,7 +1,27 @@
 import React from 'react';
-import { Cpu, ShieldCheck, Activity } from 'lucide-react';
+import { Cpu, ShieldCheck, Activity, RefreshCw } from 'lucide-react';
 
-export function Header({ version = "0.21.1", isConnected }) {
+export function Header({ version = "0.21.2", isConnected }) {
+  const handleForceRefresh = async () => {
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (let reg of regs) {
+          await reg.unregister();
+        }
+      }
+      if ('caches' in window) {
+        const names = await caches.keys();
+        for (let name of names) {
+          await caches.delete(name);
+        }
+      }
+    } catch (e) {
+      console.warn('Cache clear error:', e);
+    }
+    window.location.reload(true);
+  };
+
   return (
     <header className="mb-6 flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-800">
       <div className="flex items-center gap-3 text-center sm:text-left">
@@ -14,8 +34,15 @@ export function Header({ version = "0.21.1", isConnected }) {
           </h1>
           <p className="text-xs text-slate-400 flex items-center justify-center sm:justify-start gap-2 mt-0.5">
             <span>VPS Autotrading Engine & Strategy Supervisor</span>
-            <span className="px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
-              v{version || '0.16.2'}
+            <span className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
+              <span>v{version || '0.21.2'}</span>
+              <button
+                onClick={handleForceRefresh}
+                title="Wymuś czyszczenie cache PWA i odśwież wersję"
+                className="hover:text-white transition-colors"
+              >
+                <RefreshCw className="w-3 h-3 hover:rotate-180 transition-transform" />
+              </button>
             </span>
           </p>
         </div>

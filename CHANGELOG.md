@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.21.2] - 2026-08-15
+
+### ⚡ Fix Desktop PWA Caching & Nginx No-Cache Headers
+- 🚫 **Nginx No-Cache Headers**: Updated `nginx.conf` to add `Cache-Control "no-cache, no-store, must-revalidate"` for `index.html`, `sw.js`, and `registerSW.js`. Stopped Nginx from serving 7-day expires on Javascript and JSON bundles.
+- 🧹 **Header.jsx Cache Reset Button**: Removed stale `'0.16.2'` fallback version string in `Header.jsx` and added an interactive `RefreshCw` button next to the version badge that unregisters all PWA Service Workers, clears `caches` storage, and reloads the browser.
+
+---
+
 ## 🚀 [0.21.1] - 2026-08-15
 
 ### 📄 Trades History Table Pagination
