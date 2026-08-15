@@ -211,23 +211,29 @@ class HermesWebhookClient:
             logger.error(f"Failed to mark error on event #{event_id}: {e}")
 
     @staticmethod
-    def send_telegram(title: str, body: str) -> bool:
-        """Send immediate Telegram alert via Hermes send CLI if available."""
-        import subprocess
-        notify_msg = f"{title}\n\n{body}"
-        hermes_cli = os.getenv("HERMES_CLI_PATH", "/docker/hermes-agent/bin/hermes")
-        cmd_candidates = []
-        if os.path.exists(hermes_cli):
-            cmd_candidates.append([hermes_cli, "send", "--to", "telegram", notify_msg])
-        cmd_candidates.append(["docker", "exec", "hermes-agent", "hermes", "send", "--to", "telegram", notify_msg])
-        cmd_candidates.append(["hermes", "send", "--to", "telegram", notify_msg])
+    def send_telegram(title: str, body: str, priority: int = 5, dedupe_key: Optional[str] = None) -> bool:
+        """Enqueue Telegram alert via TelegramQueueManager with rate-limiting and deduplication."""
+        try:
+            from mms4tk.telegram_queue import get_telegram_queue
+            tq = get_telegram_queue()
+            return tq.enqueue(title=title, body=body, priority=priority, dedupe_key=dedupe_key)
+        except Exception as e:
+            logger.warning(f"Failed to enqueue Telegram alert, falling back to direct send: {e}")
+            import subprocess
+            notify_msg = f"{title}\n\n{body}"
+            hermes_cli = os.getenv("HERMES_CLI_PATH", "/docker/hermes-agent/bin/hermes")
+            cmd_candidates = []
+            if os.path.exists(hermes_cli):
+                cmd_candidates.append([hermes_cli, "send", "--to", "telegram", notify_msg])
+            cmd_candidates.append(["docker", "exec", "hermes-agent", "hermes", "send", "--to", "telegram", notify_msg])
+            cmd_candidates.append(["hermes", "send", "--to", "telegram", notify_msg])
 
-        for cmd in cmd_candidates:
-            try:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                if res.returncode == 0:
-                    logger.info("Successfully dispatched Telegram alert via Hermes CLI")
-                    return True
-            except Exception:
-                continue
-        return False
+            for cmd in cmd_candidates:
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                    if res.returncode == 0:
+                        logger.info("Successfully dispatched Telegram alert via fallback Hermes CLI")
+                        return True
+                except Exception:
+                    continue
+            return False

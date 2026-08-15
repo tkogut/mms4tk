@@ -4,6 +4,18 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.0] - 2026-08-15
+
+### 📬 Telegram Queue & Rate-Limiter Module
+- 🚦 **Asynchronous Rate-Limiting & Queuing**: Implemented `TelegramQueueManager` (`src/mms4tk/telegram_queue.py`) with prioritized message queuing and minimum interval pacing (3.0s between dispatches) to eliminate Telegram notification bursts and spam.
+- 🚫 **Deduplication Filter**: Added SHA-256 fingerprinting and 60-second cooldown per event/symbol key (`dedupe_key`), preventing duplicate alert floods across parallel trading cycles.
+- 🧹 **Eliminated Double-Dispatch**: Streamlined `mms4tk_event_dispatcher.py` and `daemon.py` to prevent duplicate event notification sends.
+
+### 💰 Enhanced Portfolio Digest Report
+- 💵 **Real Free Available Margin**: Updated `scripts/hermes/mms4tk_multi_symbol_digest.py` to display **Wolny Dostępny Depozyt: $XX.XX USDC** (read live from OKX API) alongside used margin and total equity.
+
+---
+
 ## 🚀 [0.22.1] - 2026-08-15
 
 ### 🐞 Fix Analytics Tab Render Crash (Black Screen)

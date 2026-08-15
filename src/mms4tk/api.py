@@ -73,9 +73,12 @@ async def verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-M
 async def lifespan(app: FastAPI):
     """
     FastAPI Lifespan context manager:
-    Starts MMS4Daemon and OKXTradeSyncWorker on application startup.
+    Starts TelegramQueueManager, MMS4Daemon, and OKXTradeSyncWorker on application startup.
     """
-    logger.info("FastAPI Startup: Launching MMS4Daemon & OKXTradeSyncWorker loops...")
+    logger.info("FastAPI Startup: Launching TelegramQueueManager, MMS4Daemon & OKXTradeSyncWorker loops...")
+    from mms4tk.telegram_queue import get_telegram_queue
+    tq = get_telegram_queue()
+    await tq.ensure_started()
     await daemon.start()
     await trade_sync_worker.start()
     try:
@@ -84,6 +87,7 @@ async def lifespan(app: FastAPI):
         logger.info("FastAPI Shutdown: Stopping background workers...")
         await daemon.stop()
         await trade_sync_worker.stop()
+        await tq.stop()
 
 
 app = FastAPI(

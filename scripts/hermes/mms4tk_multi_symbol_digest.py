@@ -191,19 +191,22 @@ def main():
     else:
         lines.append("ℹ️ Brak otwartych pozycji w tym cyklu.")
 
+    used_margin = sum((float(p.get("notional_usd", 0.0)) / max(float(p.get("leverage", 1.0)), 1.0)) for p in positions)
+
     lines.append(f"")
     lines.append(f"💰 **PODSUMOWANIE PORTFELA OKX (API)**:")
-    lines.append(f"- **💵 Wolna Dostępna Gotówka**: `${free_usdc:.2f} USDC` (z OKX API)")
+    lines.append(f"- **💵 Wolny Dostępny Depozyt**: `${free_usdc:.2f} USDC` (z OKX API)")
     lines.append(f"- **📊 Całkowity Kapitał (Equity)**: `${total_eq:.2f} USDC`")
+    lines.append(f"- **🔒 Wykorzystany Depozyt (Margin)**: `${used_margin:.2f} USD`")
     lines.append(f"- **🎯 Łączna Alokacja Par**: `${total_alloc:.2f} USD`")
-    lines.append(f"- **📈 Niezrealizowany PnL**: `{'+$' if total_upnl >= 0 else '-$'}{abs(total_upnl):.2f} USD`")
+    lines.append(f"- **📈 Niezrealizowany PnL (uPnL)**: `{'+$' if total_upnl >= 0 else '-$'}{abs(total_upnl):.2f} USD`")
     lines.append(f"- **Status Floty OKX**: `GOTOWA` 🟢")
 
     full_digest = "\n".join(lines)
     print(full_digest)
 
     # Post card to Hermes Kanban
-    title = f"📊 Hermes Digest: {len(active_symbols)} Aktywnych Par | uPnL: ${total_upnl:+.2f} USD"
+    title = f"📊 Hermes Digest: {len(active_symbols)} Aktywnych Par | Wolny Depozyt: ${free_usdc:.2f} USDC"
     create_kanban_digest_card(title, full_digest)
 
 

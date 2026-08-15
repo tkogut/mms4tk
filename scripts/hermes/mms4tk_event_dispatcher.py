@@ -153,17 +153,18 @@ def main():
         mark_dispatched(event_id, task_id)
         dispatched_count += 1
 
-        # Send Telegram alert via hermes send --to telegram for all events
-        try:
-            alert_msg = f"{event_title}\n\n{event_body}"
-            hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
-            cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
-            subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            print("  💬 Telegram push notification sent")
-            import time
-            time.sleep(1.2)  # Throttle to respect Telegram API rate limits
-        except Exception as ne:
-            print(f"  ⚠️ Telegram notification skipped: {ne}")
+        # Send Telegram alert via hermes send --to telegram for actionable/alert events
+        if event_type in ["SCOUT_MODE_ACTIVATED", "HITL_REVIEW", "RISK_ALERT"] or is_actionable:
+            try:
+                alert_msg = f"{event_title}\n\n{event_body}"
+                hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
+                cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
+                subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                print("  💬 Telegram push notification sent")
+                import time
+                time.sleep(3.0)  # Pacing to respect Telegram rate limit
+            except Exception as ne:
+                print(f"  ⚠️ Telegram notification skipped: {ne}")
 
     if dispatched_count > 0:
         print(f"\n📋 Processed {dispatched_count}/{len(events)} webhook events")
