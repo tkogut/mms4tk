@@ -9,6 +9,11 @@ export default defineConfig({
       registerType: 'autoUpdate',
       manifestFilename: 'manifest.json',
       includeAssets: ['icon.png', 'icon-192.png', 'icon-512.png'],
+      workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true
+      },
       manifest: {
         name: 'Mastermind Control Center',
         short_name: 'Mastermind',

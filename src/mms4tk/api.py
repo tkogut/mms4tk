@@ -175,7 +175,7 @@ async def get_health() -> Dict[str, str]:
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": APP_VERSION
+        "version": get_app_version()
     }
 
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
 
-export function AnalyticsTab({ statsData, tradesHistory }) {
+export function AnalyticsTab({ statsData, tradesHistory, openPositions = [] }) {
   const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDC');
   const [timeframe, setTimeframe] = useState('4h');
   const [candles, setCandles] = useState([]);
@@ -260,6 +260,85 @@ export function AnalyticsTab({ statsData, tradesHistory }) {
               </AreaChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      </div>
+
+      {/* Live Open Positions Table (OKX Real-Time Account Positions) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-gray-200 flex items-center gap-2">
+            <Activity className="w-5 h-5 text-emerald-400" />
+            <span>Aktywne Otwarte Pozycje na OKX ({openPositions.length} Otwarte)</span>
+          </h3>
+          <span className="text-xs font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-full">
+            Live OKX Positions
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          {openPositions && openPositions.length > 0 ? (
+            <table className="w-full text-xs text-left text-slate-300">
+              <thead className="bg-slate-950 text-slate-400 uppercase font-mono border-b border-slate-800">
+                <tr>
+                  <th className="px-4 py-2.5">Para</th>
+                  <th className="px-4 py-2.5">Strona</th>
+                  <th className="px-4 py-2.5">Dźwignia</th>
+                  <th className="px-4 py-2.5">Alokacja (Notional)</th>
+                  <th className="px-4 py-2.5">Depozyt (Margin)</th>
+                  <th className="px-4 py-2.5">Cena Wejścia</th>
+                  <th className="px-4 py-2.5">Cena Rynkowa</th>
+                  <th className="px-4 py-2.5">Niezrealizowany PnL (uPnL)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-mono">
+                {openPositions.map((p, idx) => {
+                  const rawSym = p.symbol || p.raw_symbol || 'N/A';
+                  const cleanSym = rawSym.split(':')[0].replace(/-\d+$/, '').replace('-USD_UM_XPERP', '/USD').replace('_XPERP', '');
+                  const side = String(p.side || 'long').toUpperCase();
+                  const isLong = side === 'BUY' || side === 'LONG';
+                  const leverage = Number(p.leverage || 1.0);
+                  const notional = Number(p.notional_usd || 0.0);
+                  const margin = leverage > 0 ? notional / leverage : notional;
+                  const entryPx = Number(p.entry_price || 0.0);
+                  const markPx = Number(p.mark_price || 0.0);
+                  const upnl = Number(p.unrealized_pnl || 0.0);
+
+                  return (
+                    <tr key={idx} className="hover:bg-slate-800/30">
+                      <td className="px-4 py-3 font-bold text-gray-100">{cleanSym}</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
+                          isLong 
+                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' 
+                            : 'bg-rose-950 text-rose-400 border border-rose-500/30'
+                        }`}>
+                          {side}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-blue-400">{leverage.toFixed(0)}x</td>
+                      <td className="px-4 py-3 font-bold text-gray-200">${notional.toFixed(2)} USD</td>
+                      <td className="px-4 py-3 text-amber-400 font-bold">${margin.toFixed(2)} USD</td>
+                      <td className="px-4 py-3 text-slate-300">${entryPx > 0 ? entryPx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</td>
+                      <td className="px-4 py-3 text-slate-300">${markPx > 0 ? markPx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</td>
+                      <td className="px-4 py-3">
+                        <span className={`font-bold px-2 py-0.5 rounded ${
+                          upnl >= 0 
+                            ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30' 
+                            : 'bg-red-950/80 text-red-400 border border-red-500/30'
+                        }`}>
+                          {upnl >= 0 ? `+$${upnl.toFixed(2)}` : `-$${Math.abs(upnl).toFixed(2)}`} USD
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="text-center py-6 text-slate-500 text-xs bg-slate-950/40 rounded-lg border border-slate-800/60 font-mono">
+              Brak otwartych pozycji w tym cyklu na koncie handlowym OKX.
+            </div>
+          )}
         </div>
       </div>
 

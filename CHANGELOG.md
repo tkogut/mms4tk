@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.21.0] - 2026-08-15
+
+### 📊 Live Open Positions Table in Analytics & PWA Cache Auto-Purge
+- 📈 **Live Open Positions Table in Analytics**: Added a dedicated real-time open positions panel in `AnalyticsTab.jsx` rendering active OKX positions with all key parameters: symbol, side (LONG/SHORT badge), leverage (e.g. 3x), allocation (notional USD), cash margin spent (USD), entry price, current mark price, and unrealized PnL (uPnL).
+- ⚡ **PWA Cache Auto-Purge**: Configured Workbox `skipWaiting: true`, `clientsClaim: true`, and `cleanupOutdatedCaches: true` in `vite.config.js` and added cache-busting timestamp `?t=...` to `/api/v1/health` API requests so the browser automatically updates PWA assets on every version release.
+
+---
+
 ## 🚀 [0.20.2] - 2026-08-15
 
 ### 💰 Direct Top-Level OKX availEq API Parsing
