@@ -200,7 +200,7 @@ class LoggerDB:
                 max_dd = dd
 
         return {
-            "total_trades": total_trades,
+            "total_trades": total_pnl_count,
             "win_rate": round(win_rate * 100, 1),
             "win_rate_long": round(win_rate_long * 100, 1),
             "win_rate_short": round(win_rate_short * 100, 1),

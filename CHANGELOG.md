@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.7] - 2026-08-15
+
+### 🩹 Bugfix in Stats & Kanban Query
+- 🐛 **KPI Variable Fix**: Fixed `total_pnl_count` variable reference in `logger_db.py`.
+- 🔌 **SQLite Import**: Added top-level `sqlite3` import in `api.py` for `/api/v1/hermes/kanban`.
+
+---
+
 ## 🚀 [0.23.6] - 2026-08-15
 
 ### 📊 KPI Accuracy, Live uPnL Card & Enhanced Kanban Query
