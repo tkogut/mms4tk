@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, Award, Percent, AlertOctagon, Scale, Layers } from 'lucide-react';
 
-export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) {
+export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions = [], onRefresh }) {
   const [activeSymbols, setActiveSymbols] = useState([
     { symbol: 'BTC/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
     { symbol: 'ETH/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
@@ -35,7 +35,10 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
   const hasTraded = totalTrades > 0;
 
   const freeUsdc = statsData?.free_balance !== undefined ? Number(statsData.free_balance).toFixed(2) : '0.00';
-  const btcBalance = statsData?.btc_balance !== undefined ? Number(statsData.btc_balance).toFixed(5) : '0.00000';
+  
+  // Live calculations across active open positions
+  const totalUnrealizedPnl = (openPositions || []).reduce((acc, p) => acc + Number(p.unrealized_pnl || 0), 0);
+  const totalNotionalUsd = (openPositions || []).reduce((acc, p) => acc + Number(p.notional_usd || 0), 0);
   
   // KPI Metrics: Only display real values if total_trades > 0, else 0.0 / Brak Transakcji
   const winRate = hasTraded && statsData?.win_rate !== undefined ? Number(statsData.win_rate).toFixed(1) : '0.0';
@@ -109,13 +112,17 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, onRefresh }) 
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
-            <span className="text-xs font-medium">Saldo BTC</span>
-            <TrendingUp className="w-4 h-4 text-blue-400" />
+            <span className="text-xs font-medium">Niezrealizowany PnL (uPnL)</span>
+            <Activity className="w-4 h-4 text-blue-400" />
           </div>
-          <div className="text-2xl font-bold text-gray-100 font-mono">
-            {btcBalance} BTC
+          <div className={`text-2xl font-bold font-mono ${
+            totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-red-400'
+          }`}>
+            {totalUnrealizedPnl >= 0 ? `+$${totalUnrealizedPnl.toFixed(2)}` : `-$${Math.abs(totalUnrealizedPnl).toFixed(2)}`}
           </div>
-          <div className="text-xs text-slate-400 mt-1">Rynek OKX Spot BTC/USDC</div>
+          <div className="text-xs text-slate-400 mt-1">
+            Wycena pozycji (${totalNotionalUsd.toFixed(2)} Notional)
+          </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">

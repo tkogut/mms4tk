@@ -161,17 +161,20 @@ class LoggerDB:
                 "total_pnl_usd": 0.0,
             }
 
-        total_trades = len(trades)
-        wins = [t for t in trades if t["is_win"] == 1 or t["pnl_usd"] > 0]
-        losses = [t for t in trades if t["is_win"] == 0 and t["pnl_usd"] <= 0]
-        
-        longs = [t for t in trades if t["side"].upper() in ["BUY", "LONG"]]
-        shorts = [t for t in trades if t["side"].upper() in ["SELL", "SHORT"]]
+        # Filter out zero-PnL entry fills to get actual closed round-trip trades with realized PnL
+        closed_pnl_trades = [t for t in trades if abs(t.get("pnl_usd", 0.0)) > 0.0001]
+        total_pnl_count = len(closed_pnl_trades)
 
-        win_rate = len(wins) / total_trades if total_trades > 0 else 0.0
+        wins = [t for t in closed_pnl_trades if t.get("is_win") == 1 or t.get("pnl_usd", 0.0) > 0]
+        losses = [t for t in closed_pnl_trades if t.get("is_win") == 0 and t.get("pnl_usd", 0.0) < 0]
         
-        long_wins = [t for t in longs if t["is_win"] == 1 or t["pnl_usd"] > 0]
-        short_wins = [t for t in shorts if t["is_win"] == 1 or t["pnl_usd"] > 0]
+        longs = [t for t in closed_pnl_trades if t["side"].upper() in ["BUY", "LONG"]]
+        shorts = [t for t in closed_pnl_trades if t["side"].upper() in ["SELL", "SHORT"]]
+
+        win_rate = len(wins) / total_pnl_count if total_pnl_count > 0 else 0.0
+        
+        long_wins = [t for t in longs if t.get("is_win") == 1 or t.get("pnl_usd", 0.0) > 0]
+        short_wins = [t for t in shorts if t.get("is_win") == 1 or t.get("pnl_usd", 0.0) > 0]
 
         win_rate_long = len(long_wins) / len(longs) if longs else 0.0
         win_rate_short = len(short_wins) / len(shorts) if shorts else 0.0

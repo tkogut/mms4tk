@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.6] - 2026-08-15
+
+### 📊 KPI Accuracy, Live uPnL Card & Enhanced Kanban Query
+- 📐 **Accurate KPI Statistics**: Filtered out zero-PnL entry and limit orders in `get_kpi_summary()` so Win Rate, Profit Factor, and R:R Ratio reflect only completed round-trip trades with realized PnL.
+- ⚡ **Live uPnL Card**: Replaced obsolete static `Saldo BTC` card on the Monitoring Dashboard with live **Niezrealizowany PnL (uPnL)** across all active open futures positions with dynamic total notional exposure.
+- 🤖 **Universal Kanban Fetch**: Updated `/api/v1/hermes/kanban` to query both active Hermes CLI tasks and SQLite `webhook_events` to ensure cards render in real-time in the UI.
+
+---
+
 ## 🚀 [0.23.5] - 2026-08-15
 
 ### 📋 Hermes Kanban Cleanup & Actionable Task Policy
