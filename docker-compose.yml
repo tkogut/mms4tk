@@ -9,7 +9,7 @@ services:
     volumes:
       - ./.agents/swarm:/app/.agents/swarm
       - ./VERSION:/app/VERSION:ro
-      - /docker/hermes-agent/data/kanban.db:/app/.agents/swarm/hermes_kanban.db:ro
+      - /docker/hermes-agent/data:/app/hermes_data:ro
     env_file:
       - .env
 

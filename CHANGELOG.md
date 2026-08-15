@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.11] - 2026-08-15
+
+### 🗂️ Hermes Directory Mount & WAL Sync
+- 📁 **Full Data Directory Mount**: Mounted `/docker/hermes-agent/data:/app/hermes_data:ro` in `docker-compose.yml` to enable SQLite WAL + SHM file tracking across containers.
+
+---
+
 ## 🚀 [0.23.10] - 2026-08-15
 
 ### 🗄️ Hermes Kanban Single File Mount Sync
