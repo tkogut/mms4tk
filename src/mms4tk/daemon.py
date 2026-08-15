@@ -192,9 +192,6 @@ class MMS4Daemon:
             elif existing_pos is None:
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked for {target_symbol} because no base position exists yet."
-            elif sym_state == MMS4State.HIGH_RISK_ADD_SHORT or sym_state == MMS4State.HIGH_RISK_ADD_LONG:
-                outcome = f"SKIPPED_{signal.signal_type}"
-                details = f"High Risk Add already executed for {target_symbol}."
             else:
                 side = "SELL" if "SHORT" in signal.signal_type else "BUY"
                 try:

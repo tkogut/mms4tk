@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.21.4] - 2026-08-15
+
+### 🐞 Fix AttributeError in Daemon High Risk Add Cycle
+- 🛠️ **Fixed Daemon Cycle Exception**: Removed obsolete `MMS4State.HIGH_RISK_ADD_SHORT` enum check in `src/mms4tk/daemon.py` which threw `AttributeError: type object 'MMS4State' has no attribute 'HIGH_RISK_ADD_SHORT'` during multi-symbol daemon cycles.
+
+---
+
 ## 🚀 [0.21.3] - 2026-08-15
 
 ### 🎯 Fix Hardcoded Version Prop in App.jsx
