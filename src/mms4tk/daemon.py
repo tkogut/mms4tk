@@ -200,13 +200,14 @@ class MMS4Daemon:
             try:
                 from mms4tk.hermes_webhook import HermesWebhookClient, HermesWebhookEvent
                 wh_client = HermesWebhookClient()
-                title = f"🚀 OTWARTIE POZYCJI OKX: {target_symbol} ({signal.signal_type})"
+                clean_sym = target_symbol.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "/USD").replace("_XPERP", "")
+                title = f"🚀 OTWARCIE POZYCJI OKX: {clean_sym} ({signal.signal_type})"
                 body = (
-                    f"Otwaro nową pozycję na OKX dla pary **{target_symbol}**!\n"
+                    f"Otwarto nową pozycję na OKX dla pary **{clean_sym}**!\n"
                     f"- Sygnał: `{signal.signal_type}`\n"
                     f"- Strona: `{side}`\n"
                     f"- Cena wejścia: `${signal.price:,.2f}`\n"
-                    f"- Dźwignia: `{sym_leverage}x`\n"
+                    f"- Dźwignia: `{sym_leverage:.0f}x`\n"
                     f"- Stop-Loss: `{2.0 if 'BASE' in signal.signal_type else 1.25}%`\n"
                     f"- Stan strategii: `{sym_state.value}`"
                 )

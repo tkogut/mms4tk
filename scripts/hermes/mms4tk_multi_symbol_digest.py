@@ -117,6 +117,16 @@ def create_kanban_digest_card(title: str, description: str):
         print(f"⚠️ Hermes Telegram notify notice: {ne}", file=sys.stderr)
 
 
+def clean_symbol_name(sym: str) -> str:
+    """Format technical OKX instId into clean readable symbol like SOL/USD or BTC/USDC."""
+    if not sym:
+        return "N/A"
+    clean = str(sym).split(":")[0]
+    clean = re.sub(r'-\d+$', '', clean)
+    clean = clean.replace("-USD_UM_XPERP", "/USD").replace("_XPERP", "")
+    return clean
+
+
 def main():
     print("🔄 Fetching multi-symbol data from MMS4 API...")
     health_data = fetch_api("/api/v1/health") or {}
