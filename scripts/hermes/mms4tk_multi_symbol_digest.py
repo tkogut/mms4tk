@@ -25,6 +25,7 @@ def get_api_base_url() -> str:
     env_url = os.environ.get("MMS4TK_BASE_URL")
     candidates = [env_url] if env_url else []
     candidates.extend([
+        "http://127.0.0.1:8501",
         "http://antigravity_core:8000",
         "http://172.17.0.1:8501",
         "http://localhost:8501",
