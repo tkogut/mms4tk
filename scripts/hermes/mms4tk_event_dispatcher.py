@@ -20,7 +20,29 @@ import sys
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-MMS4TK_BASE = os.environ.get("MMS4TK_BASE_URL", "http://antigravity_core:8000")
+def get_api_base_url() -> str:
+    """Probe candidate base URLs to reach mms4tk API anywhere."""
+    env_url = os.environ.get("MMS4TK_BASE_URL")
+    if env_url:
+        return env_url
+
+    candidates = [
+        "http://127.0.0.1:8501",
+        "http://antigravity_core:8000",
+        "http://localhost:8501",
+    ]
+    for url in candidates:
+        try:
+            req = Request(f"{url}/api/v1/health")
+            with urlopen(req, timeout=2) as resp:
+                if resp.status == 200:
+                    return url
+        except Exception:
+            continue
+    return "http://127.0.0.1:8501"
+
+
+MMS4TK_BASE = get_api_base_url()
 MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "")
 
 
