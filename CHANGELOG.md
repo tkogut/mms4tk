@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.18.2] - 2026-08-15
+
+### ⚡ Telegram Dispatch Throttling & Rate-Limit Prevention
+- ⚡ **Dispatcher Rate-Limit Throttle**: Added 1.2s sleep interval between sequential Telegram message dispatches in `scripts/hermes/mms4tk_event_dispatcher.py` to prevent Telegram API rate limits from dropping rapid multi-symbol trade alerts.
+
+---
+
 ## 🚀 [0.18.1] - 2026-08-15
 
 ### 🐛 Telegram Position Alert Dispatch Fix

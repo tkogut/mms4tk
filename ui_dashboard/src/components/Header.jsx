@@ -1,7 +1,7 @@
 import React from 'react';
 import { Cpu, ShieldCheck, Activity } from 'lucide-react';
 
-export function Header({ version = "0.18.1", isConnected }) {
+export function Header({ version = "0.18.2", isConnected }) {
   return (
     <header className="mb-6 flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-800">
       <div className="flex items-center gap-3 text-center sm:text-left">

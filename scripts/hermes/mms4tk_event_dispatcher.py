@@ -147,6 +147,8 @@ def main():
                 cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
                 subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 print("  💬 Telegram push notification sent")
+                import time
+                time.sleep(1.2)  # Throttle to respect Telegram API rate limits
             except Exception as ne:
                 print(f"  ⚠️ Telegram notification skipped: {ne}")
         else:
