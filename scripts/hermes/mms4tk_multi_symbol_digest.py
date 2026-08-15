@@ -16,6 +16,7 @@ Install via:
 
 import json
 import os
+import re
 import subprocess
 import sys
 from urllib.request import Request, urlopen
@@ -117,8 +118,9 @@ def create_kanban_digest_card(title: str, description: str):
 
 
 def main():
+    print("🔄 Fetching multi-symbol data from MMS4 API...")
     health_data = fetch_api("/api/v1/health") or {}
-    ver = health_data.get("version", "0.15.6")
+    ver = health_data.get("version", "0.18.0")
 
     symbols_data = fetch_api("/api/v1/symbols") or {}
     positions_data = fetch_api("/api/v1/positions") or {}
@@ -137,10 +139,10 @@ def main():
     lines = []
     lines.append(f"📊 **HERMES MULTI-SYMBOL SWARM DIGEST** (Wersja v{ver})")
     lines.append(f"")
-    lines.append(f"🟢 **AKTYWNE PARY RYNTKOWE ({len(active_symbols)}/{len(symbols)})**:")
+    lines.append(f"🟢 **AKTYWNE PARY RYNKOWE ({len(active_symbols)}/{len(symbols)})**:")
 
     for s in active_symbols:
-        sym = s.get("symbol", "N/A")
+        sym = clean_symbol_name(s.get("symbol", "N/A"))
         state = s.get("state", "BASE_MODE")
         alloc = float(s.get("allocation_usd", 10.0))
         base_r = s.get("base_ratio", 70)
@@ -158,18 +160,19 @@ def main():
 
     if positions:
         for p in positions:
-            sym = p.get("symbol", "N/A")
+            sym = clean_symbol_name(p.get("symbol", "N/A"))
             side = str(p.get("side", "long")).upper()
             contracts = p.get("contracts", 0.0)
             notional = float(p.get("notional_usd", 0.0))
             entry = float(p.get("entry_price", 0.0))
             mark = float(p.get("mark_price", 0.0))
             upnl = float(p.get("unrealized_pnl", 0.0))
+            leverage = float(p.get("leverage", 1.0))
             pnl_icon = "🟢" if upnl >= 0 else "🔴"
             pnl_str = f"+${upnl:.2f}" if upnl >= 0 else f"-${abs(upnl):.2f}"
 
             lines.append(
-                f"- **{sym}**: `{side} {contracts} contr` (${notional:.2f} USD) | WEJŚCIE: `${entry:,.2f}` | CENA: `${mark:,.2f}` | uPnL: {pnl_icon} **`{pnl_str} USD`**"
+                f"- **{sym}**: `{side} {contracts} contr` (${notional:.2f} USD) | Dźwignia: `{leverage:.0f}x` | WEJŚCIE: `${entry:,.2f}` | CENA: `${mark:,.2f}` | uPnL: {pnl_icon} **`{pnl_str} USD`**"
             )
     else:
         lines.append("ℹ️ Brak otwartych pozycji w tym cyklu.")
