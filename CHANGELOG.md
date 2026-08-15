@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.17.0] - 2026-08-15
+
+### 🚀 Live Open Positions API & Real-Time Telegram Webhook Alerts
+- 🚀 **GET `/api/v1/positions` Endpoint**: Added missing `/api/v1/positions` REST endpoint in `src/mms4tk/api.py` querying OKX live open positions (`executor.fetch_positions()`). Resolves Hermes hourly digest showing 0 open positions.
+- 💬 **Real-time Telegram Webhook Notifications**: Added automatic `HermesWebhookEvent` emission in `src/mms4tk/daemon.py` on order execution (`POSITION_OPENED`), delivering instant Telegram notifications when positions open.
+
+---
+
 ## 🐛 [0.16.2] - 2026-08-14
 
 ### 🐛 OKX Futures / EEA Contract Lot Precision Fix

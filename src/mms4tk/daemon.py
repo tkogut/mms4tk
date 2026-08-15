@@ -191,6 +191,32 @@ class MMS4Daemon:
             details=details
         )
 
+        # 4b. Dispatch event notification to Hermes Kanban & Telegram when order is executed
+        if "EXECUTED" in outcome:
+            try:
+                from mms4tk.hermes_webhook import HermesWebhookClient, HermesWebhookEvent
+                wh_client = HermesWebhookClient()
+                title = f"🚀 OTWARTIE POZYCJI OKX: {target_symbol} ({signal.signal_type})"
+                body = (
+                    f"Otwaro nową pozycję na OKX dla pary **{target_symbol}**!\n"
+                    f"- Sygnał: `{signal.signal_type}`\n"
+                    f"- Strona: `{side}`\n"
+                    f"- Cena wejścia: `${signal.price:,.2f}`\n"
+                    f"- Dźwignia: `{sym_leverage}x`\n"
+                    f"- Stop-Loss: `{2.0 if 'BASE' in signal.signal_type else 1.25}%`\n"
+                    f"- Stan strategii: `{sym_state.value}`"
+                )
+                wh_client.emit_event(HermesWebhookEvent(
+                    event_type="POSITION_OPENED",
+                    title=title,
+                    body=body,
+                    initial_status="in_progress",
+                    priority=4
+                ))
+                logger.info(f"Emitted Telegram webhook notification for position opening: {target_symbol}")
+            except Exception as whe:
+                logger.warning(f"Failed to emit position opening webhook notification: {whe}")
+
         summary = self.state_manager.get_summary()
         self.logger_db.log_state_metrics(
             state=summary["current_state"],

@@ -198,6 +198,59 @@ async def get_state() -> Dict[str, Any]:
     }
 
 
+class PositionItem(BaseModel):
+    symbol: str
+    side: str
+    contracts: float
+    notional_usd: float
+    entry_price: float
+    mark_price: float
+    unrealized_pnl: float
+    leverage: float
+    raw_symbol: Optional[str] = None
+
+
+class PositionsResponse(BaseModel):
+    positions: List[PositionItem] = Field(default_factory=list)
+    count: int = 0
+    error: Optional[str] = None
+
+
+@app.get("/api/v1/positions", response_model=PositionsResponse, tags=["Trading"])
+async def get_active_positions() -> Dict[str, Any]:
+    """Fetch active live open positions from OKX account."""
+    try:
+        raw_positions = await executor.fetch_positions()
+        active_positions = []
+        for pos in raw_positions:
+            contracts = float(pos.get("contracts") or pos.get("amount") or pos.get("info", {}).get("pos", 0.0))
+            if abs(contracts) > 0:
+                symbol = pos.get("symbol", "N/A")
+                side = str(pos.get("side") or pos.get("info", {}).get("posSide", "long")).lower()
+                notional = float(pos.get("notional") or pos.get("info", {}).get("notionalUsd", 0.0))
+                entry_price = float(pos.get("entryPrice") or pos.get("info", {}).get("avgPx", 0.0))
+                mark_price = float(pos.get("markPrice") or pos.get("info", {}).get("markPx") or pos.get("info", {}).get("last", 0.0))
+                unrealized_pnl = float(pos.get("unrealizedPnl") or pos.get("info", {}).get("upl", 0.0))
+                leverage = float(pos.get("leverage") or pos.get("info", {}).get("lever", 1.0))
+
+                active_positions.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "contracts": abs(contracts),
+                    "notional_usd": abs(notional),
+                    "entry_price": entry_price,
+                    "mark_price": mark_price,
+                    "unrealized_pnl": unrealized_pnl,
+                    "leverage": leverage,
+                    "raw_symbol": pos.get("info", {}).get("instId", symbol)
+                })
+
+        return {"positions": active_positions, "count": len(active_positions)}
+    except Exception as e:
+        logger.warning(f"Error fetching active positions for /api/v1/positions: {e}")
+        return {"positions": [], "count": 0, "error": str(e)}
+
+
 class BalanceResponse(BaseModel):
     free: Dict[str, float] = Field(default_factory=dict, description="Free available balances per currency in Trading account")
     total: Dict[str, float] = Field(default_factory=dict, description="Total balances per currency in Trading account")
