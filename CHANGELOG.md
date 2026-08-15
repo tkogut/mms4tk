@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.25.0] - 2026-08-15
+
+### 💰 MMS4 Opposite TMA Band Take Profit & Position Flip
+- 🎯 **Opposite Band Take Profit**: When an opposite BASE signal is triggered on M15 (e.g., `BASE_LONG` when `SHORT` is active), the open position is fully closed (`reduce_position` 100%) with Take Profit according to MMS4 rules 1.4 and 8.4.
+- 🔄 **Position Flip & Execution**: Immediately following the TP closure, the bot executes the new base order in the flipped direction with standard SL 2%.
+- 🔔 **Kanban & Telegram Dispatch**: Added `emit_take_profit_event` in `hermes_webhook.py` to post Take Profit results with PnL % to Hermes Kanban and Telegram.
+- 🧪 **Unit Tests**: Added `tests/test_take_profit.py` verifying full TP lifecycle and state reset from `SCOUT_MODE` to `BASE_MODE`.
+
+---
+
 ## 🚀 [0.24.4] - 2026-08-15
 
 ### 📈 Equity Curve Real Cumulative PnL Fix

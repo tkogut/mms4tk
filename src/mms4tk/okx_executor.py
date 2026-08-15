@@ -609,16 +609,38 @@ class OKXExecutor:
 
         # Fetch current position contracts
         positions = await self.fetch_positions()
-        clean_target = target_symbol.split(":")[0].split("-3")[0].replace(
-            "-USD_UM_XPERP", ""
-        ).replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+        clean_target = (
+            target_symbol.split(":")[0]
+            .split("-3")[0]
+            .replace("-USD_UM_XPERP", "")
+            .replace("_XPERP", "")
+            .replace("-USDC-SWAP", "")
+            .replace("-USDT-SWAP", "")
+            .replace("-USDC", "")
+            .replace("-USDT", "")
+            .replace("/USDC", "")
+            .replace("/USDT", "")
+            .replace("/USD", "")
+            .strip()
+        )
 
         matching_contracts = 0.0
         for p in positions:
             p_sym = p.get("symbol", "")
-            p_clean = p_sym.split(":")[0].split("-3")[0].replace(
-                "-USD_UM_XPERP", ""
-            ).replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+            p_clean = (
+                p_sym.split(":")[0]
+                .split("-3")[0]
+                .replace("-USD_UM_XPERP", "")
+                .replace("_XPERP", "")
+                .replace("-USDC-SWAP", "")
+                .replace("-USDT-SWAP", "")
+                .replace("-USDC", "")
+                .replace("-USDT", "")
+                .replace("/USDC", "")
+                .replace("/USDT", "")
+                .replace("/USD", "")
+                .strip()
+            )
             p_side = str(
                 p.get("side") or p.get("info", {}).get("posSide") or ""
             ).lower()

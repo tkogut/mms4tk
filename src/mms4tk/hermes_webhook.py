@@ -22,6 +22,7 @@ picks up pending events and creates Kanban cards.
 """
 
 import os
+import time
 import json
 import logging
 import sqlite3
@@ -249,6 +250,62 @@ class HermesWebhookClient:
             body=body,
             priority=4,
             dedupe_key=f"STALE_{symbol}_{action}",
+        )
+
+        return event_id
+
+    def emit_take_profit_event(
+        self,
+        symbol: str,
+        closed_side: str,
+        entry_price: float,
+        exit_price: float,
+        pnl_pct: float,
+        new_side: str = "",
+        reason: str = "Opposite TMA Band reached"
+    ) -> int:
+        """
+        Emit a Take Profit event when a position is closed with profit on opposite TMA band.
+        Creates a Kanban card and dispatches a Telegram alert.
+        """
+        pnl_sign = "+" if pnl_pct >= 0 else ""
+        title = f"💰 TAKE PROFIT: {symbol} ({closed_side.upper()}) | {pnl_sign}{pnl_pct*100:.2f}%"
+        flip_msg = f" ➔ Otwarto pozycję odwróconą {new_side.upper()}." if new_side else ""
+        body = (
+            f"🎯 Realizacja zysku na przeciwległej wstędze TMA dla {symbol}.\n\n"
+            f"• Pozycja zamknięta: {closed_side.upper()}\n"
+            f"• Cena wejścia: ${entry_price:,.4f}\n"
+            f"• Cena wyjścia (TP): ${exit_price:,.4f}\n"
+            f"• Wynik: {pnl_sign}{pnl_pct*100:.2f}%\n"
+            f"• Powód: {reason}{flip_msg}\n"
+            f"• Czas: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
+
+        event = HermesWebhookEvent(
+            event_type="TAKE_PROFIT_OPPOSITE_BAND",
+            title=title,
+            body=body,
+            metadata={
+                "symbol": symbol,
+                "closed_side": closed_side,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": round(pnl_pct, 4),
+                "new_side": new_side,
+                "reason": reason,
+                "trigger": "opposite_band_tp",
+            },
+            initial_status="done",
+            priority=9,
+        )
+        event_id = self.emit_event(event)
+
+        # Dispatch Telegram alert
+        HermesWebhookClient.send_telegram(
+            title=title,
+            body=body,
+            priority=5,
+            dedupe_key=f"TP_{symbol}_{int(time.time()/60)}",
         )
 
         return event_id

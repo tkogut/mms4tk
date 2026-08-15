@@ -163,8 +163,34 @@ class MMS4Daemon:
 
         for p in live_positions:
             p_sym = p.get("symbol", "")
-            p_clean = p_sym.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
-            t_clean = target_symbol.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+            p_clean = (
+                p_sym.split(":")[0]
+                .split("-3")[0]
+                .replace("-USD_UM_XPERP", "")
+                .replace("_XPERP", "")
+                .replace("-USDC-SWAP", "")
+                .replace("-USDT-SWAP", "")
+                .replace("-USDC", "")
+                .replace("-USDT", "")
+                .replace("/USDC", "")
+                .replace("/USDT", "")
+                .replace("/USD", "")
+                .strip()
+            )
+            t_clean = (
+                target_symbol.split(":")[0]
+                .split("-3")[0]
+                .replace("-USD_UM_XPERP", "")
+                .replace("_XPERP", "")
+                .replace("-USDC-SWAP", "")
+                .replace("-USDT-SWAP", "")
+                .replace("-USDC", "")
+                .replace("-USDT", "")
+                .replace("/USDC", "")
+                .replace("/USDT", "")
+                .replace("/USD", "")
+                .strip()
+            )
             if p_clean == t_clean:
                 contracts = float(p.get("contracts", 0.0) or p.get("info", {}).get("pos", 0.0) or 0.0)
                 if contracts > 0:
@@ -358,8 +384,72 @@ class MMS4Daemon:
                 outcome = f"SKIPPED_{signal.signal_type}"
                 details = f"Base position ({target_pos_side.upper()}) already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
             elif opposite_pos is not None and existing_contracts > 0:
-                outcome = f"BLOCKED_{signal.signal_type}"
-                details = f"Base order {signal.signal_type} blocked for {target_symbol} because opposite position ({existing_side.upper()}) is active. Opposite hedging is prohibited."
+                # MMS4 Rule 1.4 & 8.4: Opposite TMA band hit is the natural Take Profit for the existing position.
+                # Step 1: Close opposite position completely (Take Profit / Mean-Reversion Exit)
+                side_to_close = existing_side.lower()
+                pnl_pct = 0.0
+                if active_entry_price > 0:
+                    if side_to_close == "short":
+                        pnl_pct = (active_entry_price - signal.price) / active_entry_price
+                    else:
+                        pnl_pct = (signal.price - active_entry_price) / active_entry_price
+
+                pnl_str = f"+{pnl_pct*100:.2f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.2f}%"
+                logger.info(
+                    f"🎯 MMS4 Take Profit on opposite TMA band for {target_symbol}: "
+                    f"Closing {side_to_close.upper()} (Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL={pnl_str})"
+                )
+
+                try:
+                    # 1. Close existing opposite position
+                    await self.executor.reduce_position(
+                        symbol=target_symbol,
+                        side=side_to_close,
+                        reduction_pct=1.0,
+                        reason=f"TAKE_PROFIT_{signal.signal_type}"
+                    )
+                    self.inactivity_manager.stop_tracking(target_symbol)
+                    if target_symbol in self._addon_executed_symbols:
+                        self._addon_executed_symbols.discard(target_symbol)
+
+                    # 2. Transition state manager on TP hit (resets SCOUT_MODE to BASE_MODE)
+                    self.state_manager.on_take_profit_hit(target_symbol)
+
+                    # 3. Emit Take Profit webhook event & Telegram
+                    try:
+                        from mms4tk.hermes_webhook import HermesWebhookClient
+                        wh_client = HermesWebhookClient()
+                        wh_client.emit_take_profit_event(
+                            symbol=target_symbol,
+                            closed_side=side_to_close,
+                            entry_price=active_entry_price,
+                            exit_price=signal.price,
+                            pnl_pct=pnl_pct,
+                            new_side=target_pos_side,
+                            reason=f"Opposite TMA Band reached ({signal.signal_type})"
+                        )
+                    except Exception as whe:
+                        logger.warning(f"Failed to emit take profit event for {target_symbol}: {whe}")
+
+                    # 4. Open new position in the flipped direction
+                    new_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                    order_info = await self.executor.execute_order(
+                        symbol=target_symbol,
+                        side=new_side,
+                        amount=base_order_amount,
+                        stop_loss_pct=0.02,
+                        leverage=sym_leverage,
+                        price=signal.price
+                    )
+                    outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"
+                    details = (
+                        f"Take Profit on opposite TMA Band for {target_symbol}: Closed {side_to_close.upper()} "
+                        f"({existing_contracts} contracts, Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL: {pnl_str}). "
+                        f"Flipped to new {signal.signal_type} base position (${self.base_trade_usd:.2f} USD margin, SL=2%)."
+                    )
+                except Exception as e:
+                    outcome = f"ERROR_{signal.signal_type}"
+                    details = f"Failed to execute TP & Flip for {target_symbol}: {str(e)}"
             else:
                 side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
                 try:
