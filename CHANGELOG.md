@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.21.1] - 2026-08-15
+
+### 📄 Trades History Table Pagination
+- 📑 **Closed Trades Pagination**: Added full pagination controls (rows-per-page selector 5/10/25/50, prev/next buttons, page counter, index range indicator) to the "Wykaz Zarejestrowanych Transakcji Rzeczywistych" table in `AnalyticsTab.jsx`.
+
+---
+
 ## 🚀 [0.21.0] - 2026-08-15
 
 ### 📊 Live Open Positions Table in Analytics & PWA Cache Auto-Purge

@@ -1,14 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw } from 'lucide-react';
+import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
 
-export function AnalyticsTab({ statsData, tradesHistory, openPositions = [] }) {
+export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = [] }) {
   const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDC');
   const [timeframe, setTimeframe] = useState('4h');
   const [candles, setCandles] = useState([]);
   const [htfData, setHtfData] = useState(null);
   const [availableSymbols, setAvailableSymbols] = useState(['BTC/USDC', 'ETH/USDC', 'SOL/USDC']);
   const [loading, setLoading] = useState(false);
+
+  // Closed Trades Table Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Exact requested timeframes: 4H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y
   const timeframes = [
@@ -342,14 +346,40 @@ export function AnalyticsTab({ statsData, tradesHistory, openPositions = [] }) {
         </div>
       </div>
 
-      {/* Real Closed Trades History Table (SQLite logs.db) */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-        <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
-          <Layers className="w-5 h-5 text-blue-400" />
-          <span>Wykaz Zarejestrowanych Transakcji Rzeczywistych (SQLite logs.db)</span>
-        </h3>
+      {/* Real Closed Trades History Table with Pagination (SQLite logs.db) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
+        {/* Header & Controls Bar */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-2 border-b border-slate-800/80">
+          <div className="flex items-center gap-2">
+            <Layers className="w-5 h-5 text-blue-400" />
+            <h3 className="font-semibold text-gray-200">Wykaz Zarejestrowanych Transakcji Rzeczywistych (SQLite logs.db)</h3>
+            <span className="text-xs font-mono bg-blue-950/80 text-blue-300 border border-blue-500/30 px-2.5 py-0.5 rounded-full ml-2">
+              Łącznie: {totalTrades}
+            </span>
+          </div>
+
+          {/* Page Size & Quick Selector */}
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <span className="text-slate-400">Na stronę:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-blue-400 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Table Content */}
         <div className="overflow-x-auto">
-          {tradesHistory && tradesHistory.length > 0 ? (
+          {totalTrades > 0 ? (
             <table className="w-full text-xs text-left text-slate-300">
               <thead className="bg-slate-950 text-slate-400 uppercase font-mono border-b border-slate-800">
                 <tr>
@@ -363,7 +393,7 @@ export function AnalyticsTab({ statsData, tradesHistory, openPositions = [] }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
-                {tradesHistory.map((t, idx) => (
+                {currentTrades.map((t, idx) => (
                   <tr key={idx} className="hover:bg-slate-800/30">
                     <td className="px-4 py-3 text-slate-400">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
                     <td className="px-4 py-3 font-bold text-gray-200">{t.symbol || 'BTC/USDC'}</td>
@@ -390,6 +420,39 @@ export function AnalyticsTab({ statsData, tradesHistory, openPositions = [] }) {
             </div>
           )}
         </div>
+
+        {/* Pagination Controls Footer */}
+        {totalTrades > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-800/80 text-xs font-mono text-slate-400">
+            <div>
+              Wyświetlono <span className="font-bold text-gray-200">{startIndex + 1}</span> - <span className="font-bold text-gray-200">{endIndex}</span> z <span className="font-bold text-gray-200">{totalTrades}</span> transakcji
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={validCurrentPage === 1}
+                className="flex items-center gap-1 px-3 py-1.5 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 font-medium transition-all"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Poprzednia</span>
+              </button>
+
+              <span className="px-3 py-1 bg-slate-950 rounded border border-slate-800 font-bold text-blue-400">
+                {validCurrentPage} / {totalPages}
+              </span>
+
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={validCurrentPage >= totalPages}
+                className="flex items-center gap-1 px-3 py-1.5 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 font-medium transition-all"
+              >
+                <span>Następna</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
