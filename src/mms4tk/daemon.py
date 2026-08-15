@@ -213,6 +213,7 @@ class MMS4Daemon:
                     initial_status="in_progress",
                     priority=4
                 ))
+                HermesWebhookClient.send_telegram(title, body)
                 logger.info(f"Emitted Telegram webhook notification for position opening: {target_symbol}")
             except Exception as whe:
                 logger.warning(f"Failed to emit position opening webhook notification: {whe}")

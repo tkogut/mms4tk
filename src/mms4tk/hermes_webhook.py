@@ -209,3 +209,25 @@ class HermesWebhookClient:
                 conn.commit()
         except Exception as e:
             logger.error(f"Failed to mark error on event #{event_id}: {e}")
+
+    @staticmethod
+    def send_telegram(title: str, body: str) -> bool:
+        """Send immediate Telegram alert via Hermes send CLI if available."""
+        import subprocess
+        notify_msg = f"{title}\n\n{body}"
+        hermes_cli = os.getenv("HERMES_CLI_PATH", "/docker/hermes-agent/bin/hermes")
+        cmd_candidates = []
+        if os.path.exists(hermes_cli):
+            cmd_candidates.append([hermes_cli, "send", "--to", "telegram", notify_msg])
+        cmd_candidates.append(["docker", "exec", "hermes-agent", "hermes", "send", "--to", "telegram", notify_msg])
+        cmd_candidates.append(["hermes", "send", "--to", "telegram", notify_msg])
+
+        for cmd in cmd_candidates:
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if res.returncode == 0:
+                    logger.info("Successfully dispatched Telegram alert via Hermes CLI")
+                    return True
+            except Exception:
+                continue
+        return False

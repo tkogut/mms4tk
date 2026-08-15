@@ -106,9 +106,9 @@ def create_kanban_digest_card(title: str, description: str):
         notify_msg = f"{title}\n\n{description}"
         # Try native CLI or docker exec hermes-agent
         if os.path.exists(hermes_cli):
-            n_cmd = [hermes_cli, "notify", "--channel", "telegram", notify_msg]
+            n_cmd = [hermes_cli, "send", "--to", "telegram", notify_msg]
         else:
-            n_cmd = ["docker", "exec", "hermes-agent", "hermes", "notify", "--channel", "telegram", notify_msg]
+            n_cmd = ["docker", "exec", "hermes-agent", "hermes", "send", "--to", "telegram", notify_msg]
         subprocess.run(n_cmd, capture_output=True, text=True, timeout=15)
         print("💬 Hermes Telegram notification dispatched!")
     except Exception as ne:
