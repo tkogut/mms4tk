@@ -668,19 +668,37 @@ async def change_password(req: PasswordChangeRequest) -> Dict[str, Any]:
 
 # ─── Multi-Symbol Trading Endpoints ─────────────────────────────────────────
 
-SYMBOLS_CONFIG_FILE = os.environ.get("MMS4_SYMBOLS_CONFIG_PATH", "symbols.json")
+PERSISTENT_SYMBOLS_PATH = os.environ.get("MMS4_SYMBOLS_CONFIG_PATH", ".agents/swarm/symbols.json")
+LEGACY_SYMBOLS_PATH = "symbols.json"
+
+
+def get_symbols_file_path() -> str:
+    """Ensure symbols config is saved in persistent volume .agents/swarm/symbols.json."""
+    os.makedirs(os.path.dirname(PERSISTENT_SYMBOLS_PATH), exist_ok=True)
+    if not os.path.exists(PERSISTENT_SYMBOLS_PATH) and os.path.exists(LEGACY_SYMBOLS_PATH):
+        try:
+            import shutil
+            shutil.copy2(LEGACY_SYMBOLS_PATH, PERSISTENT_SYMBOLS_PATH)
+            logger.info(f"Migrated symbols config from {LEGACY_SYMBOLS_PATH} to {PERSISTENT_SYMBOLS_PATH}")
+        except Exception as e:
+            logger.warning(f"Failed to migrate symbols config: {e}")
+    return PERSISTENT_SYMBOLS_PATH
+
+
+SYMBOLS_CONFIG_FILE = get_symbols_file_path()
 
 
 def load_symbols_config() -> Dict[str, Dict[str, Any]]:
-    """Load per-symbol configuration from symbols.json with defaults."""
+    """Load per-symbol configuration from persistent volume symbols.json with defaults."""
     defaults = {
         "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
         "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
         "SOL/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
     }
-    if os.path.exists(SYMBOLS_CONFIG_FILE):
+    cfg_file = get_symbols_file_path()
+    if os.path.exists(cfg_file):
         try:
-            with open(SYMBOLS_CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(cfg_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     normalized = {}
@@ -697,17 +715,18 @@ def load_symbols_config() -> Dict[str, Dict[str, Any]]:
                             }
                     return normalized
         except Exception as e:
-            logger.warning(f"Failed to load {SYMBOLS_CONFIG_FILE}: {e}")
+            logger.warning(f"Failed to load {cfg_file}: {e}")
     return defaults
 
 
 def save_symbols_config(cfg: Dict[str, Dict[str, Any]]) -> None:
-    """Save per-symbol configuration to symbols.json."""
+    """Save per-symbol configuration to persistent volume symbols.json."""
+    cfg_file = get_symbols_file_path()
     try:
-        with open(SYMBOLS_CONFIG_FILE, "w", encoding="utf-8") as f:
+        with open(cfg_file, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
     except Exception as e:
-        logger.warning(f"Failed to save {SYMBOLS_CONFIG_FILE}: {e}")
+        logger.warning(f"Failed to save {cfg_file}: {e}")
 
 
 configured_symbols_store: Dict[str, Dict[str, Any]] = load_symbols_config()
