@@ -146,16 +146,17 @@ class MMS4Daemon:
         if not isinstance(addon_order_amount, (int, float)):
             addon_order_amount = round(notional_addon_usd / signal.price, 6) if signal.price > 0 else 0.0001
 
-        # Fetch live open positions from OKX to enforce Single Position Lock Guard
+        # Fetch live open positions from OKX to enforce Single Position & Direction Lock Guard
         live_positions = []
         try:
             live_positions = await self.executor.fetch_positions()
         except Exception as pe:
             logger.warning(f"Failed to fetch live positions for position guard check: {pe}")
 
-        existing_pos = None
-        existing_notional = 0.0
-        existing_contracts = 0.0
+        target_pos_side = "short" if "SHORT" in signal.signal_type else "long"
+        matching_pos = None
+        opposite_pos = None
+
         for p in live_positions:
             p_sym = p.get("symbol", "")
             p_clean = p_sym.split(":")[0].split("-3")[0].replace("-USD_UM_XPERP", "").replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
@@ -163,26 +164,49 @@ class MMS4Daemon:
             if p_clean == t_clean:
                 contracts = float(p.get("contracts", 0.0) or p.get("info", {}).get("pos", 0.0) or 0.0)
                 if contracts > 0:
-                    existing_pos = p
-                    existing_contracts = contracts
-                    # Robust notional calculation
-                    raw_notional = float(p.get("notional") or p.get("notional_usd") or p.get("info", {}).get("notionalUsd") or 0.0)
-                    if raw_notional <= 0 and signal.price > 0:
-                        ct_size = float(p.get("contractSize", 0.0) or p.get("info", {}).get("ctVal", 0.0) or 0.0)
-                        if ct_size <= 0:
-                            ct_size = 0.0001 if "BTC" in target_symbol else 1.0
-                        raw_notional = contracts * ct_size * signal.price
-                    existing_notional = raw_notional
-                    break
+                    p_side = str(p.get("side") or p.get("info", {}).get("posSide") or "").lower()
+                    if p_side == target_pos_side:
+                        matching_pos = p
+                    else:
+                        opposite_pos = p
 
-        if existing_pos is None or existing_contracts <= 0:
-            # Clear addon lock when position is fully closed
+        existing_pos = matching_pos or opposite_pos
+        existing_contracts = 0.0
+        existing_notional = 0.0
+        existing_side = ""
+
+        if matching_pos is not None:
+            existing_contracts = float(matching_pos.get("contracts", 0.0) or matching_pos.get("info", {}).get("pos", 0.0) or 0.0)
+            existing_side = target_pos_side
+            raw_notional = float(matching_pos.get("notional") or matching_pos.get("notional_usd") or matching_pos.get("info", {}).get("notionalUsd") or 0.0)
+            if raw_notional <= 0 and signal.price > 0:
+                ct_size = float(matching_pos.get("contractSize", 0.0) or matching_pos.get("info", {}).get("ctVal", 0.0) or 0.0)
+                if ct_size <= 0:
+                    ct_size = 0.0001 if "BTC" in target_symbol else 1.0
+                raw_notional = existing_contracts * ct_size * signal.price
+            existing_notional = raw_notional
+        elif opposite_pos is not None:
+            existing_contracts = float(opposite_pos.get("contracts", 0.0) or opposite_pos.get("info", {}).get("pos", 0.0) or 0.0)
+            existing_side = "short" if target_pos_side == "long" else "long"
+            raw_notional = float(opposite_pos.get("notional") or opposite_pos.get("notional_usd") or opposite_pos.get("info", {}).get("notionalUsd") or 0.0)
+            if raw_notional <= 0 and signal.price > 0:
+                ct_size = float(opposite_pos.get("contractSize", 0.0) or opposite_pos.get("info", {}).get("ctVal", 0.0) or 0.0)
+                if ct_size <= 0:
+                    ct_size = 0.0001 if "BTC" in target_symbol else 1.0
+                raw_notional = existing_contracts * ct_size * signal.price
+            existing_notional = raw_notional
+
+        if matching_pos is None:
+            # Clear addon lock for this direction if no matching position exists
             self._addon_executed_symbols.discard(target_symbol)
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
-            if existing_pos is not None and existing_contracts > 0:
+            if matching_pos is not None and existing_contracts > 0:
                 outcome = f"SKIPPED_{signal.signal_type}"
-                details = f"Base position already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
+                details = f"Base position ({target_pos_side.upper()}) already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
+            elif opposite_pos is not None and existing_contracts > 0:
+                outcome = f"BLOCKED_{signal.signal_type}"
+                details = f"Base order {signal.signal_type} blocked for {target_symbol} because opposite position ({existing_side.upper()}) is active. Opposite hedging is prohibited."
             else:
                 side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
                 try:
@@ -214,9 +238,9 @@ class MMS4Daemon:
             if sym_state != MMS4State.BASE_MODE:
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
-            elif existing_pos is None or existing_contracts <= 0:
+            elif matching_pos is None or existing_contracts <= 0:
                 outcome = f"BLOCKED_{signal.signal_type}"
-                details = f"High Risk Add blocked for {target_symbol} because no base position exists yet."
+                details = f"High Risk Add {signal.signal_type} blocked for {target_symbol} because no matching {target_pos_side.upper()} base position exists (Active: {existing_side.upper() if existing_side else 'NONE'})."
             elif is_addon_done:
                 outcome = f"SKIPPED_{signal.signal_type}"
                 details = f"High Risk Add already executed for {target_symbol} (Current: {existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Addon Guard active."

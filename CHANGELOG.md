@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.2] - 2026-08-15
+
+### 🧭 Strict Directional Side Alignment & Anti-Opposite Hedging Guard
+- 🛡️ **Side Direction Matching**: Updated `daemon.py` to enforce strict alignment between incoming signal side (`posSide: "long"` vs `"short"`) and live OKX position side.
+- 🚫 **Opposite Hedging Guard**: `BASE_SHORT` / `BASE_LONG` orders are blocked if an opposite position is already open.
+- 🚫 **Matching Direction Addon Guard**: `HIGH_RISK_ADD_SHORT` and `HIGH_RISK_ADD_LONG` orders are strictly blocked unless a matching base position in the exact same direction already exists.
+
+---
+
 ## 🚀 [0.23.1] - 2026-08-15
 
 ### 🛡️ Robust Universal Multi-Symbol Position & Add-on Guard
