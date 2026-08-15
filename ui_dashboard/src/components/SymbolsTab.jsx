@@ -132,7 +132,7 @@ export function SymbolsTab({ apiKey }) {
     }
   };
 
-  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio, newTimeframe) => {
+  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio, newTimeframe, staleConfig = {}) => {
     const currentKey = apiKey || 'test-api-auth-key-unit-test';
     try {
       const res = await fetch('/api/v1/symbols/update', {
@@ -147,11 +147,14 @@ export function SymbolsTab({ apiKey }) {
           allocation_usd: parseFloat(newAlloc),
           base_ratio: parseInt(newBaseRatio),
           add_ratio: 100 - parseInt(newBaseRatio),
-          timeframe: newTimeframe || '15m'
+          timeframe: newTimeframe || '15m',
+          stale_candles_threshold: parseInt(staleConfig.stale_candles_threshold ?? 12),
+          stale_atr_threshold: parseFloat(staleConfig.stale_atr_threshold ?? 0.5),
+          impulse_negation_enabled: staleConfig.impulse_negation_enabled !== false
         })
       });
       if (res.ok) {
-        setMsg(`✓ Zapisano indywidualne ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%, Interwał: ${newTimeframe || '15m'})`);
+        setMsg(`✓ Zapisano ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%, Interwał: ${newTimeframe || '15m'}, Stale: ${staleConfig.stale_candles_threshold ?? 12} świec)`);
         fetchSymbols();
       }
     } catch (err) {
@@ -316,11 +319,17 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
   const [allocUsd, setAllocUsd] = useState(symbolObj.allocation_usd || 10.0);
   const [baseRatio, setBaseRatio] = useState(symbolObj.base_ratio || 70);
   const [timeframe, setTimeframe] = useState(symbolObj.timeframe || '15m');
+  const [staleCandles, setStaleCandles] = useState(symbolObj.stale_candles_threshold ?? 12);
+  const [staleAtr, setStaleAtr] = useState(symbolObj.stale_atr_threshold ?? 0.5);
+  const [impulseNeg, setImpulseNeg] = useState(symbolObj.impulse_negation_enabled !== false);
 
   useEffect(() => {
     setAllocUsd(symbolObj.allocation_usd || 10.0);
     setBaseRatio(symbolObj.base_ratio || 70);
     setTimeframe(symbolObj.timeframe || '15m');
+    setStaleCandles(symbolObj.stale_candles_threshold ?? 12);
+    setStaleAtr(symbolObj.stale_atr_threshold ?? 0.5);
+    setImpulseNeg(symbolObj.impulse_negation_enabled !== false);
   }, [symbolObj]);
 
   const addRatio = 100 - baseRatio;
@@ -452,8 +461,68 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
           </div>
         </div>
 
+        {/* Stale Position Protection Config */}
+        <div className="pt-2 border-t border-slate-800/50">
+          <div className="flex items-center gap-2 mb-2">
+            <Shield className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-[10px] font-bold text-amber-400 font-mono tracking-wide">
+              OCHRONA STAGNACJI (MMS4)
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono">
+                Świece max:
+              </label>
+              <input
+                type="number"
+                step="1"
+                min="4"
+                max="48"
+                value={staleCandles}
+                onChange={(e) => setStaleCandles(parseInt(e.target.value) || 12)}
+                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-amber-500 text-center"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono">
+                Próg ATR:
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="2.0"
+                value={staleAtr}
+                onChange={(e) => setStaleAtr(parseFloat(e.target.value) || 0.5)}
+                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-amber-500 text-center"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono">
+                Negacja 50%:
+              </label>
+              <button
+                type="button"
+                onClick={() => setImpulseNeg(!impulseNeg)}
+                className={`w-full py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-colors ${
+                  impulseNeg
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-500 border-slate-700'
+                }`}
+              >
+                {impulseNeg ? '✓ WŁ' : '✕ WYŁ'}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <button
-          onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio, timeframe)}
+          onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio, timeframe, {
+            stale_candles_threshold: staleCandles,
+            stale_atr_threshold: staleAtr,
+            impulse_negation_enabled: impulseNeg
+          })}
           className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
         >
           <Check className="w-3.5 h-3.5 text-emerald-400" />

@@ -839,6 +839,9 @@ class AddSymbolRequest(BaseModel):
     base_ratio: int = Field(default=70, description="Base position ratio percentage e.g. 70")
     add_ratio: int = Field(default=30, description="Add position ratio percentage e.g. 30")
     timeframe: str = Field(default="15m", description="Candle timeframe e.g. 15m, 1h, 5m, 1m")
+    stale_candles_threshold: int = Field(default=12, description="Max candles of stagnation before SPLIT_50 (default 12)")
+    stale_atr_threshold: float = Field(default=0.5, description="Max price deviation as fraction of ATR (default 0.5)")
+    impulse_negation_enabled: bool = Field(default=True, description="Enable 50% impulse negation rule")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -871,6 +874,9 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "base_ratio": config.get("base_ratio", 70),
             "add_ratio": config.get("add_ratio", 30),
             "timeframe": config.get("timeframe", "15m"),
+            "stale_candles_threshold": config.get("stale_candles_threshold", 12),
+            "stale_atr_threshold": config.get("stale_atr_threshold", 0.5),
+            "impulse_negation_enabled": config.get("impulse_negation_enabled", True),
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -908,7 +914,10 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
         "allocation_usd": float(req.allocation_usd),
         "base_ratio": int(b_ratio),
         "add_ratio": int(a_ratio),
-        "timeframe": tf
+        "timeframe": tf,
+        "stale_candles_threshold": int(req.stale_candles_threshold),
+        "stale_atr_threshold": float(req.stale_atr_threshold),
+        "impulse_negation_enabled": bool(req.impulse_negation_enabled),
     }
     save_symbols_config(configured_symbols_store)
     state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")

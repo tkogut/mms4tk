@@ -166,6 +166,93 @@ class HermesWebhookClient:
         )
         return self.emit_event(event)
 
+    def emit_stale_position_event(
+        self,
+        symbol: str,
+        action: str,
+        candle_count: int,
+        entry_price: float,
+        current_price: float,
+        atr: float,
+        side: str,
+        is_split: bool = False,
+        extra_details: str = "",
+    ) -> int:
+        """
+        Emit a stale position management event for Hermes Kanban + Telegram.
+
+        Actions: SPLIT_50, FORCE_CLOSE_BE, BE_ESCAPE, FORCE_CLOSE
+        """
+        action_emoji = {
+            "SPLIT_50": "✂️",
+            "FORCE_CLOSE_BE": "🚨",
+            "BE_ESCAPE": "🏃",
+            "FORCE_CLOSE": "⚡",
+        }
+        action_label = {
+            "SPLIT_50": "Redukcja 50% (Split)",
+            "FORCE_CLOSE_BE": "Zamknięcie po stagnacji (BE/Market)",
+            "BE_ESCAPE": "Ucieczka na Break-Even",
+            "FORCE_CLOSE": "Zamknięcie (Negacja Impulsu)",
+        }
+        emoji = action_emoji.get(action, "⚠️")
+        label = action_label.get(action, action)
+
+        pnl_pct = 0.0
+        if entry_price > 0:
+            if side.lower() == "long":
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+            else:
+                pnl_pct = ((entry_price - current_price) / entry_price) * 100
+
+        title = f"{emoji} STALE POSITION: {symbol} — {label}"
+        body = (
+            f"## Zarządzanie Pozycją Stagnacyjną\n\n"
+            f"**Symbol:** {symbol}\n"
+            f"**Strona:** `{side.upper()}`\n"
+            f"**Akcja:** `{action}`\n"
+            f"**Świece stagnacji:** `{candle_count}`\n"
+            f"**Cena wejścia:** `${entry_price:,.2f}`\n"
+            f"**Cena bieżąca:** `${current_price:,.2f}`\n"
+            f"**PnL:** `{pnl_pct:+.2f}%`\n"
+            f"**ATR:** `${atr:,.2f}`\n"
+            f"**Po splicie:** `{'Tak' if is_split else 'Nie'}`\n"
+            f"**Timestamp:** {datetime.now(timezone.utc).isoformat()}\n"
+        )
+        if extra_details:
+            body += f"\n### Szczegóły\n{extra_details}\n"
+
+        event = HermesWebhookEvent(
+            event_type=f"STALE_POSITION_{action}",
+            title=title,
+            body=body,
+            metadata={
+                "symbol": symbol,
+                "action": action,
+                "side": side,
+                "candle_count": candle_count,
+                "entry_price": entry_price,
+                "current_price": current_price,
+                "atr": atr,
+                "pnl_pct": round(pnl_pct, 4),
+                "is_split": is_split,
+                "trigger": "inactivity_manager",
+            },
+            initial_status="in_progress",
+            priority=8,
+        )
+        event_id = self.emit_event(event)
+
+        # Also dispatch Telegram alert
+        HermesWebhookClient.send_telegram(
+            title=title,
+            body=body,
+            priority=4,
+            dedupe_key=f"STALE_{symbol}_{action}",
+        )
+
+        return event_id
+
     def get_pending_events(self, limit: int = 10) -> list:
         """Retrieve undispatched webhook events."""
         try:

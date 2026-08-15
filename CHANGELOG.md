@@ -4,6 +4,18 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.24.0] - 2026-08-15
+
+### ⏰ MMS4 Stale Position Management & Inactivity Manager
+- 🛡️ **New Module `inactivity_manager.py`**: Autonomous stale position detection engine implementing 4 MMS4 rules (50% impulse negation, BE escape, time-based split, two-stage ladder exit).
+- ✂️ **`OKXExecutor.reduce_position()`**: Partial/full position closure via counter-direction market order in OKX hedge mode.
+- 🔔 **Hermes Webhook `emit_stale_position_event()`**: Autonomous Kanban cards and Telegram alerts for every protective action (SPLIT_50, FORCE_CLOSE_BE, BE_ESCAPE, FORCE_CLOSE).
+- ⚙️ **Per-Symbol Stale Config**: `stale_candles_threshold`, `stale_atr_threshold`, `impulse_negation_enabled` configurable per trading pair in Symbols UI.
+- 🕯️ **Precise Candle Close Detection**: New candle timestamp tracking in daemon to avoid false stale detection on polling cycles.
+- 📊 **Inactivity Status in Daemon API**: `GET /api/v1/daemon/status` now includes `inactivity_manager` telemetry.
+
+---
+
 ## 🚀 [0.23.14] - 2026-08-15
 
 ### 🎯 Kanban DB Resolution Priority & Zero-Byte Bypass

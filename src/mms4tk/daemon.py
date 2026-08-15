@@ -6,8 +6,9 @@ from typing import Dict, Any, Optional, List
 
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.okx_executor import OKXExecutor
-from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle
+from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator
 from mms4tk.logger_db import LoggerDB
+from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 
 logger = logging.getLogger("mms4tk.daemon")
 
@@ -58,6 +59,9 @@ class MMS4Daemon:
         self.last_cycle_timestamp: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
         self._addon_executed_symbols: set = set()
+        self.last_signal: Optional[SignalResult] = None
+        self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager()
+        self._last_candle_ts: Dict[str, int] = {}  # per-symbol: timestamp of last known closed candle
 
     @property
     def is_running(self) -> bool:
@@ -199,6 +203,155 @@ class MMS4Daemon:
         if matching_pos is None:
             # Clear addon lock for this direction if no matching position exists
             self._addon_executed_symbols.discard(target_symbol)
+
+        # ────────────────────────────────────────────────────────────────
+        # STALE POSITION MANAGEMENT (MMS4 Inactivity Manager)
+        # Runs every cycle: tracks active positions, detects stagnation,
+        # and executes protective Split/Close actions autonomously.
+        # ────────────────────────────────────────────────────────────────
+        try:
+            # Compute current ATR from closed candles
+            current_atr = 0.0
+            if len(candles) >= 20:
+                tma_df = TMAIndicator.calculate(candles)
+                if not tma_df.empty and "atr" in tma_df.columns:
+                    last_valid_atr = tma_df["atr"].dropna()
+                    if len(last_valid_atr) > 0:
+                        current_atr = float(last_valid_atr.iloc[-1])
+
+            # Load per-symbol inactivity config from symbols store
+            try:
+                from mms4tk.api import configured_symbols_store
+                sym_inact_cfg = configured_symbols_store.get(target_symbol, {})
+                if isinstance(sym_inact_cfg, dict):
+                    inact_overrides = {}
+                    if "stale_candles_threshold" in sym_inact_cfg:
+                        inact_overrides["stale_candles_threshold"] = int(sym_inact_cfg["stale_candles_threshold"])
+                    if "stale_atr_threshold" in sym_inact_cfg:
+                        inact_overrides["stale_atr_threshold"] = float(sym_inact_cfg["stale_atr_threshold"])
+                    if "impulse_negation_enabled" in sym_inact_cfg:
+                        inact_overrides["impulse_negation_enabled"] = bool(sym_inact_cfg["impulse_negation_enabled"])
+                    if inact_overrides:
+                        self.inactivity_manager.set_symbol_config(target_symbol, inact_overrides)
+            except Exception:
+                pass
+
+            # Determine which position (if any) is active for this symbol
+            active_pos = matching_pos or opposite_pos
+            active_side = ""
+            active_entry_price = 0.0
+            if active_pos is not None:
+                active_contracts = float(active_pos.get("contracts", 0) or active_pos.get("info", {}).get("pos", 0) or 0)
+                if active_contracts > 0:
+                    active_side = str(active_pos.get("side") or active_pos.get("info", {}).get("posSide") or "").lower()
+                    active_entry_price = float(
+                        active_pos.get("entryPrice") or
+                        active_pos.get("info", {}).get("avgPx") or
+                        active_pos.get("info", {}).get("openAvgPx") or 0.0
+                    )
+
+                    # Start tracking if not yet tracked
+                    if not self.inactivity_manager.is_tracking(target_symbol) and active_entry_price > 0:
+                        import time as _time
+                        self.inactivity_manager.track_position(
+                            inst_id=target_symbol,
+                            entry_price=active_entry_price,
+                            entry_time=_time.time(),
+                            side=active_side,
+                            atr=current_atr,
+                        )
+            else:
+                # No position open — stop tracking if was tracked
+                if self.inactivity_manager.is_tracking(target_symbol):
+                    self.inactivity_manager.stop_tracking(target_symbol)
+
+            # Evaluate inactivity rules (only if tracking)
+            if self.inactivity_manager.is_tracking(target_symbol):
+                # Detect actual new candle close via timestamp comparison
+                new_candle = False
+                if len(candles) >= 2:
+                    # candles[-1] is the active (unclosed) candle, candles[-2] is last closed
+                    last_closed_ts = int(candles[-2].timestamp) if hasattr(candles[-2].timestamp, '__int__') else int(candles[-2].timestamp)
+                    prev_ts = self._last_candle_ts.get(target_symbol, 0)
+                    if last_closed_ts > prev_ts:
+                        new_candle = True
+                        self._last_candle_ts[target_symbol] = last_closed_ts
+                stale_action = self.inactivity_manager.update_and_check(
+                    inst_id=target_symbol,
+                    current_price=signal.price,
+                    current_atr=current_atr,
+                    new_candle_closed=new_candle,
+                )
+
+                if stale_action != StaleAction.HOLD:
+                    tracker = self.inactivity_manager.get_tracker(target_symbol)
+                    t_side = tracker.side if tracker else active_side
+                    t_entry = tracker.entry_price if tracker else active_entry_price
+                    t_candles = tracker.candle_count if tracker else 0
+                    t_is_split = tracker.is_split if tracker else False
+
+                    # Execute protective action
+                    if stale_action == StaleAction.SPLIT_50:
+                        reduce_result = await self.executor.reduce_position(
+                            symbol=target_symbol, side=t_side,
+                            reduction_pct=0.50, reason="STALE_SPLIT_50"
+                        )
+                        outcome = "STALE_SPLIT_50"
+                        details = (
+                            f"Inactivity Manager: Split 50% of {t_side.upper()} position for {target_symbol} "
+                            f"after {t_candles} candles stagnation. ATR=${current_atr:,.2f}"
+                        )
+                    elif stale_action in (StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE, StaleAction.FORCE_CLOSE):
+                        reduce_result = await self.executor.reduce_position(
+                            symbol=target_symbol, side=t_side,
+                            reduction_pct=1.0, reason=stale_action.value
+                        )
+                        self.inactivity_manager.stop_tracking(target_symbol)
+                        outcome = stale_action.value
+                        details = (
+                            f"Inactivity Manager: {stale_action.value} for {target_symbol} {t_side.upper()} "
+                            f"after {t_candles} candles. Entry=${t_entry:,.2f} Current=${signal.price:,.2f}"
+                        )
+
+                    # Emit Hermes webhook + Telegram
+                    try:
+                        from mms4tk.hermes_webhook import HermesWebhookClient
+                        wh_client = HermesWebhookClient()
+                        wh_client.emit_stale_position_event(
+                            symbol=target_symbol,
+                            action=stale_action.value,
+                            candle_count=t_candles,
+                            entry_price=t_entry,
+                            current_price=signal.price,
+                            atr=current_atr,
+                            side=t_side,
+                            is_split=t_is_split,
+                        )
+                    except Exception as whe:
+                        logger.warning(f"Failed to emit stale position webhook: {whe}")
+
+                    # Log cycle and return early — stale action takes priority
+                    self.logger_db.log_cycle(
+                        symbol=target_symbol,
+                        signal_type=f"STALE_{stale_action.value}",
+                        state=sym_state.value,
+                        leverage=sym_leverage,
+                        price=signal.price,
+                        outcome=outcome,
+                        details=details,
+                    )
+                    return {
+                        "symbol": target_symbol,
+                        "timestamp": now_iso,
+                        "signal_type": f"STALE_{stale_action.value}",
+                        "outcome": outcome,
+                        "state": sym_state.value,
+                        "leverage": sym_leverage,
+                        "order": None,
+                    }
+        except Exception as inact_err:
+            logger.error(f"Inactivity Manager error for {target_symbol}: {inact_err}")
+
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             if matching_pos is not None and existing_contracts > 0:
@@ -387,6 +540,7 @@ class MMS4Daemon:
             "addon_trade_usd": self.addon_trade_usd,
             "trade_amount_usd": self.trade_amount_usd,
             "last_cycle_timestamp": self.last_cycle_timestamp,
-            "processed_cycles": self.processed_cycles
+            "processed_cycles": self.processed_cycles,
+            "inactivity_manager": self.inactivity_manager.get_status(),
         }
 

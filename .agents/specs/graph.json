@@ -31,6 +31,12 @@
       "label": "Okx Europe Eea X Perps",
       "type": "Expert Knowledge",
       "description": "Knowledge base note synchronized from NotebookLM: OKX Europe (EEA) X-Perps API Guide"
+    },
+    {
+      "id": ".agents/specs/knowledge/mms4-stale-positions-report.md",
+      "label": "Mms4 Stale Positions Report",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Mms4 Stale Positions Report"
     }
   ],
   "edges": [
@@ -53,10 +59,15 @@
       "source": ".agents/specs/AGENTS-OS.md",
       "target": ".agents/specs/knowledge/okx_europe_eea_x_perps.md",
       "relation": "governs_knowledge"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/mms4-stale-positions-report.md",
+      "relation": "governs_knowledge"
     }
   ],
   "metadata": {
-    "last_distillation": "2026-08-12",
+    "last_distillation": "2026-08-15",
     "source": "Inception Engine"
   }
 }

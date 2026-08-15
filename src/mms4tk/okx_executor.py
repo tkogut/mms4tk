@@ -574,3 +574,108 @@ class OKXExecutor:
         except Exception as e:
             logger.error(f"Error executing cancel_all_orders: {type(e).__name__}: {str(e)}")
             raise
+
+    async def reduce_position(
+        self,
+        symbol: str,
+        side: str,
+        reduction_pct: float = 0.50,
+        reason: str = "STALE_SPLIT"
+    ) -> Dict[str, Any]:
+        """
+        Reduce an open position by a percentage via counter-direction market order.
+
+        In OKX hedge mode (long_short_mode), closing a LONG means selling
+        on posSide='long', and closing a SHORT means buying on posSide='short'.
+
+        Args:
+            symbol: Trading pair (e.g. 'BTC/USDC')
+            side: Position side to reduce ('long' or 'short')
+            reduction_pct: Fraction to close (0.50 = 50%, 1.0 = 100%)
+            reason: Audit label for logging
+
+        Returns:
+            Order result dict or mock result.
+        """
+        side_lower = side.lower()
+        close_side = "sell" if side_lower == "long" else "buy"
+
+        # Resolve EEA X-Perp instrument
+        target_symbol = symbol
+        if "XPERP" not in symbol and ":" not in symbol:
+            eea_xperp = await self.discover_eea_xperp_symbol(symbol)
+            if eea_xperp:
+                target_symbol = eea_xperp
+
+        # Fetch current position contracts
+        positions = await self.fetch_positions()
+        clean_target = target_symbol.split(":")[0].split("-3")[0].replace(
+            "-USD_UM_XPERP", ""
+        ).replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+
+        matching_contracts = 0.0
+        for p in positions:
+            p_sym = p.get("symbol", "")
+            p_clean = p_sym.split(":")[0].split("-3")[0].replace(
+                "-USD_UM_XPERP", ""
+            ).replace("_XPERP", "").replace("/USDC", "").replace("/USD", "")
+            p_side = str(
+                p.get("side") or p.get("info", {}).get("posSide") or ""
+            ).lower()
+            contracts = float(
+                p.get("contracts", 0) or p.get("info", {}).get("pos", 0) or 0
+            )
+            if p_clean == clean_target and p_side == side_lower and contracts > 0:
+                matching_contracts = contracts
+                break
+
+        if matching_contracts <= 0:
+            logger.warning(
+                f"reduce_position: No matching {side_lower} position for {symbol}"
+            )
+            return {"status": "no_position", "symbol": symbol, "side": side_lower}
+
+        reduce_amount = max(1.0, math.floor(matching_contracts * reduction_pct))
+        if reduce_amount > matching_contracts:
+            reduce_amount = matching_contracts
+
+        logger.info(
+            f"▼ reduce_position: {symbol} {side_lower} "
+            f"{reduce_amount}/{matching_contracts} contracts "
+            f"({reduction_pct*100:.0f}%) reason={reason}"
+        )
+
+        if not self.has_credentials or self.exchange is None:
+            return {
+                "id": f"mock_reduce_{int(time.time()*1000)}",
+                "symbol": target_symbol,
+                "side": close_side,
+                "amount": reduce_amount,
+                "reason": reason,
+                "status": "executed",
+                "mock": True,
+            }
+
+        try:
+            params = {
+                "tdMode": "cross",
+                "posSide": side_lower,  # close on the same posSide in hedge mode
+            }
+            order = await self.exchange.create_order(
+                symbol=target_symbol,
+                type="market",
+                side=close_side,
+                amount=reduce_amount,
+                params=params,
+            )
+            logger.info(
+                f"✓ reduce_position executed: {order.get('id')} "
+                f"closed {reduce_amount} contracts of {target_symbol} ({reason})"
+            )
+            return order
+        except Exception as e:
+            logger.error(
+                f"Error in reduce_position for {target_symbol}: "
+                f"{type(e).__name__}: {str(e)}"
+            )
+            raise
