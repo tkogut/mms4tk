@@ -154,12 +154,14 @@ class DaemonStatusResponse(BaseModel):
     is_running: bool
     interval_seconds: float
     symbol: Optional[str] = "BTC/USDC"
+    active_symbols: Optional[List[str]] = None
     max_margin_usd: Optional[float] = 10.0
     base_trade_usd: Optional[float] = 7.0
     addon_trade_usd: Optional[float] = 3.0
     trade_amount_usd: Optional[float] = 10.0
     last_cycle_timestamp: Optional[str] = None
     processed_cycles: int
+    inactivity_manager: Optional[Dict[str, Any]] = None
 
 
 class CalculateRequest(BaseModel):
