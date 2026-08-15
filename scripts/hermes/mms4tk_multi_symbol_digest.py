@@ -81,27 +81,8 @@ def create_kanban_digest_card(title: str, description: str):
     except Exception as e:
         print(f"⚠️ Webhook API post notice: {e}", file=sys.stderr)
 
-    # 2. Attempt CLI call if hermes binary is present
-    hermes_cli = "/home/tkogut/.nvm/versions/node/v20.19.0/bin/hermes"
-    if not os.path.exists(hermes_cli):
-        hermes_cli = "hermes"
-
-    cmd = [
-        hermes_cli, "kanban", "card", "create",
-        "--title", title,
-        "--description", description,
-        "--priority", "5",
-        "--created-by", "mms4tk-multi-symbol-cron",
-        "--initial-status", "ready",
-        "--json",
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        if result.returncode == 0:
-            print(f"📋 Hermes CLI Kanban card created: {result.stdout.strip()[:80]}")
-    except Exception:
-        pass
+    # 2. Informational digest is delivered to Telegram and Dashboard (no task card created on Kanban)
+    pass
 
     # 3. Deliver via Hermes notification engine to Telegram
     try:
