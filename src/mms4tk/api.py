@@ -610,7 +610,7 @@ async def get_kanban_cards() -> Dict[str, Any]:
             
     if hermes_db:
         try:
-            with sqlite3.connect(f"file://{hermes_db}?immutable=1", uri=True) as conn:
+            with sqlite3.connect(hermes_db, timeout=5) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     "SELECT id, status, title, body, created_at FROM tasks WHERE status NOT IN ('done', 'archived', 'closed') ORDER BY created_at DESC"

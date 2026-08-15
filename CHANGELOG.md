@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.13] - 2026-08-15
+
+### 🚀 Live WAL + SHM Shared Volume for Real-Time Kanban Sync
+- 🔄 **Live WAL Sync**: Mounted `/docker/hermes-agent/data:/app/hermes_data` to allow SQLite write-ahead-log tracking across containers.
+- 🎯 **Sub-Second Kanban Reflection**: Immediate synchronization when tasks are created or archived in Hermes CLI.
+
+---
+
 ## 🚀 [0.23.12] - 2026-08-15
 
 ### ⚡ Direct Root Execution & Immutable SQLite Sync
