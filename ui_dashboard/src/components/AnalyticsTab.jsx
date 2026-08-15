@@ -97,20 +97,28 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     fetchHtf();
   }, [timeframe, selectedSymbol]);
 
-  // Dynamic PnL / Equity Curve scaled to current timeframe
-  const pnlCurve = tradesHistory && tradesHistory.length > 0
+  // Dynamic Cumulative Realized PnL / Equity Curve scaled to actual trades
+  let cumulativePnl = 0;
+  const hasRealTrades = tradesHistory && Array.isArray(tradesHistory) && tradesHistory.length > 0;
+  const pnlCurve = hasRealTrades
     ? tradesHistory.map((t) => {
+        cumulativePnl += Number(t.pnl_usd || 0);
         const ts = t.timestamp ? new Date(t.timestamp).getTime() : Date.now();
         const dateObj = new Date(ts);
         return {
-          date: dateObj.toLocaleDateString([], { month: '2-digit', day: '2-digit' }),
-          balance: t.pnl_usd || 0
+          date: dateObj.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          balance: Number(cumulativePnl.toFixed(2))
         };
       })
-    : candles.map((c, i) => ({
-        date: c.time,
-        balance: Number((Math.sin(i / 5) * 2 + (i / candles.length) * Number(statsData?.realized_pnl || 0)).toFixed(2))
-      }));
+    : (candles.length > 0
+        ? candles.map((c) => ({
+            date: c.time,
+            balance: Number((statsData?.realized_pnl || 0).toFixed(2))
+          }))
+        : [
+            { date: 'Start', balance: 0.00 },
+            { date: 'Teraz', balance: 0.00 }
+          ]);
 
   // Closed Trades Table Pagination Variables
   const totalTrades = tradesHistory && Array.isArray(tradesHistory) ? tradesHistory.length : 0;
@@ -248,9 +256,16 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
               <TrendingUp className="w-5 h-5 text-blue-400" />
               <h3 className="font-semibold text-gray-200">Krzywa Salda Portfela ({currentTfObj.label})</h3>
             </div>
-            <span className="text-xs text-emerald-400 font-bold bg-emerald-950/60 px-2.5 py-1 rounded border border-emerald-500/30 font-mono">
-              PnL: ${Number(statsData?.realized_pnl || 0).toFixed(2)}
-            </span>
+            <div className="flex items-center gap-2">
+              {!hasRealTrades && (
+                <span className="text-[10px] text-slate-400 font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  Czysta Baza
+                </span>
+              )}
+              <span className="text-xs text-emerald-400 font-bold bg-emerald-950/60 px-2.5 py-1 rounded border border-emerald-500/30 font-mono">
+                PnL: ${Number(statsData?.realized_pnl || 0).toFixed(2)}
+              </span>
+            </div>
           </div>
 
           <div className="h-64 w-full">
@@ -264,9 +279,15 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis dataKey="date" stroke="#64748b" fontSize={10} angle={-15} textAnchor="end" height={40} />
-                <YAxis domain={['auto', 'auto']} stroke="#64748b" fontSize={11} />
+                <YAxis 
+                  domain={[ (min) => Math.min(-0.5, isNaN(min) ? -0.5 : min), (max) => Math.max(0.5, isNaN(max) ? 0.5 : max) ]} 
+                  stroke="#64748b" 
+                  fontSize={11} 
+                  tickFormatter={(v) => `$${Number(v).toFixed(2)}`}
+                />
                 <Tooltip 
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#fff' }}
+                  formatter={(value) => [`$${Number(value).toFixed(2)}`, 'Skumulowany PnL']}
                 />
                 <Area type="monotone" dataKey="balance" stroke="#3b82f6" fillOpacity={1} fill="url(#pnlGrad)" strokeWidth={2.5} name="PnL USD" />
               </AreaChart>

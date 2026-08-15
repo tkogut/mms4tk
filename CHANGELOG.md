@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.24.4] - 2026-08-15
+
+### 📈 Equity Curve Real Cumulative PnL Fix
+- 🚫 **Removed Fake Sine Wave Mock**: Removed artificial `Math.sin(i / 5) * 2` fallback from `AnalyticsTab.jsx`.
+- 📊 **Real Cumulative Progression**: Implemented authentic cumulative realized PnL calculation and clean `$0.00` zero-state baseline with formatted YAxis domain.
+
+---
+
 ## 🚀 [0.24.3] - 2026-08-15
 
 ### 🐛 Inactivity Manager TMAIndicator Params Fix
