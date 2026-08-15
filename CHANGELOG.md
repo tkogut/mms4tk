@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.24.3] - 2026-08-15
+
+### 🐛 Inactivity Manager TMAIndicator Params Fix
+- 🛠️ **`TMAIndicator.calculate`**: Made `params` argument optional with fallback to `IndicatorParams()`.
+- ⚡ **`daemon.py`**: Explicitly passed `IndicatorParams()` in ATR calculation loop for Inactivity Manager.
+
+---
+
 ## 🚀 [0.24.2] - 2026-08-15
 
 ### ⚡ Daemon Status Telemetry Serialization

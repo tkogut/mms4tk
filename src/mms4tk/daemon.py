@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List
 
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.okx_executor import OKXExecutor
-from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator
+from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 
@@ -213,7 +213,7 @@ class MMS4Daemon:
             # Compute current ATR from closed candles
             current_atr = 0.0
             if len(candles) >= 20:
-                tma_df = TMAIndicator.calculate(candles)
+                tma_df = TMAIndicator.calculate(candles, IndicatorParams())
                 if not tma_df.empty and "atr" in tma_df.columns:
                     last_valid_atr = tma_df["atr"].dropna()
                     if len(last_valid_atr) > 0:

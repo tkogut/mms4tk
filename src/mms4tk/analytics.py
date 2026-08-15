@@ -48,7 +48,7 @@ class TMAIndicator:
     """
 
     @staticmethod
-    def calculate(candles: List[Candle], params: IndicatorParams) -> pd.DataFrame:
+    def calculate(candles: List[Candle], params: Optional[IndicatorParams] = None) -> pd.DataFrame:
         """
         Calculates TMA, ATR, Upper Band, and Lower Band for a list of candles.
         
@@ -57,6 +57,9 @@ class TMAIndicator:
         Upper Band: TMA + atr_mult * ATR
         Lower Band: TMA - atr_mult * ATR
         """
+        if params is None:
+            params = IndicatorParams()
+
         if not candles:
             return pd.DataFrame(columns=["tma", "atr", "upper_band", "lower_band"])
 
