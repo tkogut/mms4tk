@@ -6,4 +6,5 @@ __pycache__/
 .DS_Store
 node_modules/
 .env
-
+symbols.json
+.agents/swarm/symbols.json

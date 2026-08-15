@@ -93,6 +93,17 @@ class LoggerDB:
                     leverage REAL NOT NULL DEFAULT 1.0
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS symbol_configurations (
+                    symbol TEXT PRIMARY KEY,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    allocation_usd REAL NOT NULL DEFAULT 10.0,
+                    base_ratio INTEGER NOT NULL DEFAULT 70,
+                    add_ratio INTEGER NOT NULL DEFAULT 30,
+                    timeframe TEXT NOT NULL DEFAULT '15m',
+                    updated_at TEXT NOT NULL
+                )
+            """)
             conn.commit()
 
     def upsert_closed_trade(
@@ -323,4 +334,58 @@ class LoggerDB:
                 d["scout_override"] = bool(d["scout_override"])
                 return d
             return None
+
+    def save_symbol_config(
+        self,
+        symbol: str,
+        is_active: bool,
+        allocation_usd: float,
+        base_ratio: int,
+        add_ratio: int,
+        timeframe: str
+    ) -> None:
+        """Upsert per-symbol configuration into SQLite symbol_configurations table."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO symbol_configurations (symbol, is_active, allocation_usd, base_ratio, add_ratio, timeframe, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    is_active = excluded.is_active,
+                    allocation_usd = excluded.allocation_usd,
+                    base_ratio = excluded.base_ratio,
+                    add_ratio = excluded.add_ratio,
+                    timeframe = excluded.timeframe,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    symbol,
+                    1 if is_active else 0,
+                    float(allocation_usd),
+                    int(base_ratio),
+                    int(add_ratio),
+                    str(timeframe),
+                    timestamp
+                )
+            )
+            conn.commit()
+
+    def get_all_symbol_configs(self) -> Dict[str, Dict[str, Any]]:
+        """Retrieve all per-symbol configurations from SQLite symbol_configurations table."""
+        result = {}
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM symbol_configurations ORDER BY symbol ASC")
+            for row in cursor.fetchall():
+                d = dict(row)
+                result[d["symbol"]] = {
+                    "is_active": bool(d["is_active"]),
+                    "allocation_usd": float(d["allocation_usd"]),
+                    "base_ratio": int(d["base_ratio"]),
+                    "add_ratio": int(d["add_ratio"]),
+                    "timeframe": str(d["timeframe"])
+                }
+        return result
 

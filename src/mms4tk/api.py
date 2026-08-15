@@ -693,18 +693,28 @@ SYMBOLS_CONFIG_FILE = get_symbols_file_path()
 
 
 def load_symbols_config() -> Dict[str, Dict[str, Any]]:
-    """Load per-symbol configuration from persistent volume symbols.json with defaults."""
+    """Load per-symbol configuration from SQLite database, with fallback to symbols.json and defaults."""
     defaults = {
         "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
         "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
         "SOL/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
     }
+    # 1. First priority: Load from SQLite database (persistent volume, untouched by git updates)
+    try:
+        db_configs = logger_db.get_all_symbol_configs()
+        if db_configs and len(db_configs) > 0:
+            logger.info(f"Loaded {len(db_configs)} symbol configurations from persistent SQLite database.")
+            return db_configs
+    except Exception as dbe:
+        logger.warning(f"Failed to query SQLite symbol_configurations: {dbe}")
+
+    # 2. Second priority: Fallback to symbols.json file
     cfg_file = get_symbols_file_path()
     if os.path.exists(cfg_file):
         try:
             with open(cfg_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
+                if isinstance(data, dict) and len(data) > 0:
                     normalized = {}
                     for sym, val in data.items():
                         if isinstance(val, bool):
@@ -717,14 +727,57 @@ def load_symbols_config() -> Dict[str, Dict[str, Any]]:
                                 "add_ratio": int(val.get("add_ratio", 30)),
                                 "timeframe": str(val.get("timeframe", "15m"))
                             }
+                    # Seed into SQLite
+                    try:
+                        for s_name, s_cfg in normalized.items():
+                            logger_db.save_symbol_config(
+                                symbol=s_name,
+                                is_active=s_cfg["is_active"],
+                                allocation_usd=s_cfg["allocation_usd"],
+                                base_ratio=s_cfg["base_ratio"],
+                                add_ratio=s_cfg["add_ratio"],
+                                timeframe=s_cfg["timeframe"]
+                            )
+                    except Exception:
+                        pass
                     return normalized
         except Exception as e:
             logger.warning(f"Failed to load {cfg_file}: {e}")
+
+    # 3. Default fallback and initial seed into SQLite
+    try:
+        for s_name, s_cfg in defaults.items():
+            logger_db.save_symbol_config(
+                symbol=s_name,
+                is_active=s_cfg["is_active"],
+                allocation_usd=s_cfg["allocation_usd"],
+                base_ratio=s_cfg["base_ratio"],
+                add_ratio=s_cfg["add_ratio"],
+                timeframe=s_cfg["timeframe"]
+            )
+    except Exception:
+        pass
     return defaults
 
 
 def save_symbols_config(cfg: Dict[str, Dict[str, Any]]) -> None:
-    """Save per-symbol configuration to persistent volume symbols.json."""
+    """Save per-symbol configuration to persistent SQLite database AND symbols.json."""
+    # 1. Save to SQLite database
+    try:
+        for s_name, s_cfg in cfg.items():
+            if isinstance(s_cfg, dict):
+                logger_db.save_symbol_config(
+                    symbol=s_name,
+                    is_active=bool(s_cfg.get("is_active", True)),
+                    allocation_usd=float(s_cfg.get("allocation_usd", 10.0)),
+                    base_ratio=int(s_cfg.get("base_ratio", 70)),
+                    add_ratio=int(s_cfg.get("add_ratio", 30)),
+                    timeframe=str(s_cfg.get("timeframe", "15m"))
+                )
+    except Exception as dbe:
+        logger.warning(f"Failed to save symbol configs to SQLite: {dbe}")
+
+    # 2. Save to symbols.json backup file
     cfg_file = get_symbols_file_path()
     try:
         with open(cfg_file, "w", encoding="utf-8") as f:

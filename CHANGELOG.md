@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.23.3] - 2026-08-15
+
+### 💾 Persistent SQLite Symbol & Interval Configuration
+- 🗄️ **Database Persistence**: Added `symbol_configurations` table to SQLite `logger_db.py` (`logs.db`). Per-symbol allocations, base/add ratios, active states, and custom timeframes are stored in SQLite database.
+- 🚫 **Immune to Git Overwrites**: Removed `symbols.json` from git tracking and added to `.gitignore`. Git updates/pulls/rebuilds will never overwrite or reset user-configured symbol timeframes.
+
+---
+
 ## 🚀 [0.23.2] - 2026-08-15
 
 ### 🧭 Strict Directional Side Alignment & Anti-Opposite Hedging Guard
