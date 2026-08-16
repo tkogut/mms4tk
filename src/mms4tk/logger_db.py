@@ -1,12 +1,28 @@
 import os
 import sqlite3
+import time
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("mms4tk.logger_db")
 
-DEFAULT_DB_PATH = ".agents/swarm/logs.db"
+def _default_db_path() -> str:
+    """
+    Resolve the logs.db location.
+
+    Explicit MMS4_DB_PATH wins. Otherwise anchor on the package installation root
+    rather than the process CWD, so the daemon and the API always open the same file
+    no matter where they were started from (audit finding P2-32).
+    """
+    env_path = os.getenv("MMS4_DB_PATH")
+    if env_path:
+        return env_path
+    pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(pkg_root, ".agents", "swarm", "logs.db")
+
+
+DEFAULT_DB_PATH = _default_db_path()
 
 
 class LoggerDB:
@@ -17,6 +33,8 @@ class LoggerDB:
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
         self.db_path = db_path
+        self._last_state_metrics: Optional[tuple] = None
+        self._last_state_metrics_ts: float = 0.0
         self._ensure_dir()
         self._init_db()
 
@@ -94,6 +112,30 @@ class LoggerDB:
                 )
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS position_addons (
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    addon_count INTEGER NOT NULL DEFAULT 0,
+                    position_key TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (symbol, side)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS position_snapshots (
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    contracts REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    last_price REAL NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (symbol, side)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_state_logs_ts ON state_logs(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cycle_logs_ts ON cycle_logs(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_closed_trades_ts ON closed_trades(timestamp)")
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS symbol_configurations (
                     symbol TEXT PRIMARY KEY,
                     is_active INTEGER NOT NULL DEFAULT 1,
@@ -137,18 +179,43 @@ class LoggerDB:
             )
             conn.commit()
 
-    def get_closed_trades(self, limit: int = 500) -> List[Dict[str, Any]]:
-        """Fetch historical closed trades sorted by timestamp."""
+    def get_closed_trades(self, limit: Optional[int] = 500) -> List[Dict[str, Any]]:
+        """
+        Fetch historical closed trades sorted by timestamp.
+
+        limit=None returns the full history. A positive limit returns the MOST RECENT
+        `limit` trades (still in chronological order) — the previous implementation
+        combined `ORDER BY timestamp ASC` with a LIMIT, which silently froze callers on
+        the OLDEST rows once the table outgrew the cap (audit finding P2-30).
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            if limit is None:
+                cursor.execute("SELECT * FROM closed_trades ORDER BY timestamp ASC")
+                return [dict(row) for row in cursor.fetchall()]
             cursor.execute(
-                "SELECT * FROM closed_trades ORDER BY timestamp ASC LIMIT ?", (limit,)
+                "SELECT * FROM (SELECT * FROM closed_trades ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC",
+                (limit,)
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_kpi_summary(self) -> Dict[str, Any]:
-        """Compute KPI summary (Win Rate, Profit Factor, MDD %, Average R:R) from closed_trades."""
-        trades = self.get_closed_trades(limit=1000)
+    def get_kpi_summary(self, initial_equity: float = 0.0) -> Dict[str, Any]:
+        """
+        Compute KPI summary (Win Rate, Profit Factor, MDD %, Average R:R) from closed_trades.
+
+        Runs over the FULL history — no silent truncation.
+
+        Drawdown is reported in two explicit fields because the old single `max_drawdown`
+        was documented as a percentage while actually holding USD:
+          * `max_drawdown` / `max_drawdown_usd` — absolute peak-to-trough loss in USD.
+          * `max_drawdown_pct` — the same loss as a share of the equity peak. Requires
+            `initial_equity` > 0; without a starting balance the equity curve begins at
+            zero and a percentage of it is meaningless, so it is reported as 0.0.
+
+        All ratios use the same population: trades that actually realized PnL (entry fills
+        carry pnl == 0 and are not round-trip results).
+        """
+        trades = self.get_closed_trades(limit=None)
         if not trades:
             return {
                 "total_trades": 0,
@@ -157,6 +224,8 @@ class LoggerDB:
                 "win_rate_short": 0.0,
                 "profit_factor": 0.0,
                 "max_drawdown": 0.0,
+                "max_drawdown_pct": 0.0,
+                "max_drawdown_usd": 0.0,
                 "average_rr": 0.0,
                 "total_pnl_usd": 0.0,
             }
@@ -187,17 +256,27 @@ class LoggerDB:
         avg_loss = gross_loss / len(losses) if losses else 0.0
         average_rr = round(avg_win / avg_loss, 2) if avg_loss > 0 else (99.0 if avg_win > 0 else 0.0)
 
-        # Calculate Max Drawdown % (Peak-to-Trough)
-        cumulative_pnl = 0.0
-        peak = 0.0
-        max_dd = 0.0
-        for t in trades:
-            cumulative_pnl += t["pnl_usd"]
-            if cumulative_pnl > peak:
-                peak = cumulative_pnl
-            dd = peak - cumulative_pnl
-            if dd > max_dd:
-                max_dd = dd
+        # Max Drawdown, peak-to-trough on the equity curve.
+        # The curve starts at initial_equity (not at an artificial 0), so the drawdown
+        # is expressed against real capital and can be normalized to a percentage.
+        equity = float(initial_equity)
+        peak = equity
+        max_dd_usd = 0.0
+        max_dd_pct = 0.0
+        for t in closed_pnl_trades:
+            equity += t["pnl_usd"]
+            if equity > peak:
+                peak = equity
+            dd = peak - equity
+            if dd > max_dd_usd:
+                max_dd_usd = dd
+            # Only meaningful when the curve started from a real balance.
+            if initial_equity > 0 and peak > 0:
+                pct = (dd / peak) * 100.0
+                if pct > max_dd_pct:
+                    max_dd_pct = pct
+
+        total_pnl_usd = sum(t["pnl_usd"] for t in closed_pnl_trades)
 
         return {
             "total_trades": total_pnl_count,
@@ -205,9 +284,13 @@ class LoggerDB:
             "win_rate_long": round(win_rate_long * 100, 1),
             "win_rate_short": round(win_rate_short * 100, 1),
             "profit_factor": profit_factor,
-            "max_drawdown": round(max_dd, 2),
+            # Absolute USD, as this field has always actually been. Percentage is exposed
+            # separately rather than silently redefining an existing key.
+            "max_drawdown": round(max_dd_usd, 2),
+            "max_drawdown_pct": round(max_dd_pct, 2),
+            "max_drawdown_usd": round(max_dd_usd, 2),
             "average_rr": average_rr,
-            "total_pnl_usd": round(sum(t["pnl_usd"] for t in trades), 2),
+            "total_pnl_usd": round(total_pnl_usd, 2),
         }
 
     def log_cycle(
@@ -240,9 +323,36 @@ class LoggerDB:
         leverage: float,
         equity: float,
         realized_pnl: float,
-        trade_count: int
+        trade_count: int,
+        force: bool = False
     ) -> int:
-        """Log state machine equity & leverage metrics."""
+        """
+        Log state machine equity & leverage metrics.
+
+        Deduplicated: an identical snapshot is only re-written once per
+        MMS4_STATE_METRICS_MIN_INTERVAL seconds (default 60). The daemon calls this on
+        every cycle for every symbol, which previously produced tens of thousands of
+        byte-identical rows (audit finding P1-12). Returns 0 when the write is skipped.
+        """
+        # Coerce at the DB boundary — sqlite3 rejects anything that is not a plain scalar,
+        # and callers hand us values straight off a state-manager summary.
+        state = str(state)
+        leverage, equity = float(leverage), float(equity)
+        realized_pnl, trade_count = float(realized_pnl), int(trade_count)
+
+        snapshot = (state, round(leverage, 6), round(equity, 8),
+                    round(realized_pnl, 8), trade_count)
+        now = time.time()
+        min_interval = float(os.getenv("MMS4_STATE_METRICS_MIN_INTERVAL", "60"))
+        if (
+            not force
+            and snapshot == self._last_state_metrics
+            and (now - self._last_state_metrics_ts) < min_interval
+        ):
+            return 0
+        self._last_state_metrics = snapshot
+        self._last_state_metrics_ts = now
+
         timestamp = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -372,6 +482,105 @@ class LoggerDB:
                     str(timeframe),
                     timestamp
                 )
+            )
+            conn.commit()
+
+    # ── Addon ledger (survives daemon restarts) ─────────────────────────
+
+    def get_addon_count(self, symbol: str, side: str, position_key: str) -> int:
+        """
+        Return how many High-Risk Adds were already executed on THIS position instance.
+
+        position_key identifies the position (entry price + side). A different key means
+        the previous position was closed and a new one opened, so the ledger resets to 0
+        instead of leaking the old lock onto the new position.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT addon_count, position_key FROM position_addons WHERE symbol = ? AND side = ?",
+                (symbol, side.lower())
+            ).fetchone()
+        if not row or row["position_key"] != position_key:
+            return 0
+        return int(row["addon_count"])
+
+    def record_addon(self, symbol: str, side: str, position_key: str) -> int:
+        """Increment and persist the addon counter for a position. Returns the new count."""
+        current = self.get_addon_count(symbol, side, position_key)
+        new_count = current + 1
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO position_addons (symbol, side, addon_count, position_key, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, side) DO UPDATE SET
+                    addon_count = excluded.addon_count,
+                    position_key = excluded.position_key,
+                    updated_at = excluded.updated_at
+                """,
+                (symbol, side.lower(), new_count, position_key, timestamp)
+            )
+            conn.commit()
+        return new_count
+
+    def clear_addon_state(self, symbol: str, side: Optional[str] = None) -> None:
+        """Drop the addon ledger for a symbol (both sides) or for one side only."""
+        with self._get_connection() as conn:
+            if side is None:
+                conn.execute("DELETE FROM position_addons WHERE symbol = ?", (symbol,))
+            else:
+                conn.execute(
+                    "DELETE FROM position_addons WHERE symbol = ? AND side = ?", (symbol, side.lower())
+                )
+            conn.commit()
+
+    def get_all_addon_state(self) -> List[Dict[str, Any]]:
+        """Return the full addon ledger (dashboard/API introspection)."""
+        with self._get_connection() as conn:
+            return [dict(r) for r in conn.execute("SELECT * FROM position_addons ORDER BY symbol, side")]
+
+    # ── Position snapshots (stop-loss reconciliation) ───────────────────
+
+    def save_position_snapshot(
+        self,
+        symbol: str,
+        side: str,
+        contracts: float,
+        entry_price: float,
+        last_price: float
+    ) -> None:
+        """Persist the last seen exchange position so a disappearance can be reconciled after a restart."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO position_snapshots (symbol, side, contracts, entry_price, last_price, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, side) DO UPDATE SET
+                    contracts = excluded.contracts,
+                    entry_price = excluded.entry_price,
+                    last_price = excluded.last_price,
+                    updated_at = excluded.updated_at
+                """,
+                (symbol, side.lower(), float(contracts), float(entry_price), float(last_price), timestamp)
+            )
+            conn.commit()
+
+    def get_position_snapshots(self, symbol: str) -> List[Dict[str, Any]]:
+        """Return persisted snapshots for a symbol (one row per side)."""
+        with self._get_connection() as conn:
+            return [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM position_snapshots WHERE symbol = ?", (symbol,)
+                )
+            ]
+
+    def delete_position_snapshot(self, symbol: str, side: str) -> None:
+        """Remove a snapshot once its disappearance has been reconciled."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM position_snapshots WHERE symbol = ? AND side = ?", (symbol, side.lower())
             )
             conn.commit()
 

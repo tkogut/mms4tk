@@ -7,15 +7,18 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.analytics import SignalResult
+from mms4tk.logger_db import LoggerDB
 
 
-def test_daemon_70_30_capital_split_calculation():
+def test_daemon_70_30_capital_split_calculation(tmp_path):
     """Verify base order takes 70% ($7.00) and high risk add takes 30% ($3.00) of $10.00 cap."""
     executor = MagicMock()
     executor.initialize = AsyncMock()
     executor.close = AsyncMock()
     executor.fetch_candles = AsyncMock(return_value=[])
     executor.execute_order = AsyncMock(return_value={"id": "order-70-30"})
+    # No open position for the base leg.
+    executor.fetch_positions = AsyncMock(return_value=[])
 
     state_manager = MagicMock()
     state_manager.leverage = 1.0
@@ -33,7 +36,9 @@ def test_daemon_70_30_capital_split_calculation():
         reason="Base LONG signal"
     )
 
-    logger_db = MagicMock()
+    # A real LoggerDB: the addon guard reads a persisted counter, and a MagicMock's
+    # __int__ defaults to 1, which would look like "an addon was already executed".
+    logger_db = LoggerDB(db_path=str(tmp_path / "margin_logs.db"))
 
     # Create daemon with $10 USD max margin cap
     daemon = MMS4Daemon(
@@ -61,8 +66,17 @@ def test_daemon_70_30_capital_split_calculation():
         price=50000.0
     )
 
-    # 2. Test High Risk Add Order (30% = $3.00 USD)
+    # 2. Test High Risk Add Order (30% = $3.00 USD).
+    # The addon requires an existing base position on the same side, so surface one.
     executor.execute_order.reset_mock()
+    executor.fetch_positions = AsyncMock(return_value=[{
+        "symbol": "BTC/USDC",
+        "side": "long",
+        "contracts": 1.0,
+        "entryPrice": 50000.0,
+        "notional": 7.0,
+        "info": {"posSide": "long", "avgPx": "50000.0"},
+    }])
     signal_engine.evaluate_signals.return_value = SignalResult(
         signal_type="HIGH_RISK_ADD_LONG",
         price=50000.0,

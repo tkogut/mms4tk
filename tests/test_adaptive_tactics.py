@@ -31,6 +31,13 @@ def test_higher_timeframe_analytics():
     # SWEEP_WICK candle: long wick relative to body
     candles_h4_sweep[-1] = Candle(timestamp=20 * 14400, open=100.0, high=110.0, low=95.0, close=100.0, volume=500.0)
 
+    # calculate_higher_tf drops the still-forming last candle (no repainting), so append
+    # a live bar and let the candle under test be the newest CLOSED one.
+    live_h4 = Candle(timestamp=21 * 14400, open=100.0, high=100.5, low=99.5, close=100.0, volume=10.0)
+    live_d1 = Candle(timestamp=21 * 86400, open=110.0, high=111.0, low=109.0, close=110.0, volume=10.0)
+    candles_d1 = candles_d1 + [live_d1]
+    candles_h4_sweep = candles_h4_sweep + [live_h4]
+
     res_sweep = HigherTimeframeAnalytics.calculate_higher_tf(candles_h4_sweep, candles_d1)
     assert res_sweep["atr_d1"] > 0
     assert res_sweep["atr_d1_expansion_ratio"] > 0
@@ -38,7 +45,7 @@ def test_higher_timeframe_analytics():
 
     # MARUBOZU_BREAKOUT candle: large body relative to range
     candles_h4_marubozu = list(candles_h4_sweep)
-    candles_h4_marubozu[-1] = Candle(timestamp=20 * 14400, open=100.0, high=110.0, low=99.0, close=109.0, volume=500.0)
+    candles_h4_marubozu[-2] = Candle(timestamp=20 * 14400, open=100.0, high=110.0, low=99.0, close=109.0, volume=500.0)
     res_marubozu = HigherTimeframeAnalytics.calculate_higher_tf(candles_h4_marubozu, candles_d1)
     assert res_marubozu["h4_candle_formation"] == "MARUBOZU_BREAKOUT"
 

@@ -1,4 +1,5 @@
 import math
+import os
 from datetime import datetime
 from typing import List, Optional, Union, Dict, Any
 import numpy as np
@@ -23,10 +24,20 @@ class Candle(BaseModel):
 class IndicatorParams(BaseModel):
     """
     Parameters for TMA and ATR calculation.
+
+    atr_method: "sma" (historical mms4tk behaviour) or "wilder" (RMA, what TradingView's
+    ATR and the classic Wilder definition use). Defaults to the env var
+    MMS4_ATR_METHOD so the smoothing can be switched without touching call sites;
+    "sma" remains the default because changing it shifts every band and therefore
+    every signal.
     """
     tma_length: int = 20
     atr_period: int = 14
     atr_mult: float = 2.0
+    atr_method: str = Field(default_factory=lambda: os.getenv("MMS4_ATR_METHOD", "sma"))
+
+    # Higher-timeframe volatility expansion threshold from MMS v4 (zones > 2.5x ATR).
+    htf_expansion_threshold: float = 2.5
 
 
 class SignalResult(BaseModel):
@@ -95,8 +106,13 @@ class TMAIndicator:
         tr3 = (df["low"] - close_prev).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-        # 3. ATR calculation
-        atr = tr.rolling(window=params.atr_period, min_periods=params.atr_period).mean()
+        # 3. ATR calculation — simple mean of TR, or Wilder's RMA when requested.
+        if str(params.atr_method).lower() == "wilder":
+            # Seed with the SMA of the first `atr_period` TRs, then smooth — matches
+            # the classic Wilder definition used by TradingView.
+            atr = tr.ewm(alpha=1.0 / params.atr_period, adjust=False, min_periods=params.atr_period).mean()
+        else:
+            atr = tr.rolling(window=params.atr_period, min_periods=params.atr_period).mean()
 
         # 4. Upper and Lower Bands
         upper_band = tma + (params.atr_mult * atr)
@@ -119,34 +135,42 @@ class MMS4SignalEngine:
         self,
         candles: List[Candle],
         state_manager: MMS4StateManager,
-        params: Optional[IndicatorParams] = None
+        params: Optional[IndicatorParams] = None,
+        symbol: Optional[str] = None
     ) -> SignalResult:
         """
         Evaluates candles and current strategy state to trigger trading signals.
+
+        `symbol` selects which per-symbol state and leverage gate the signal. Without it
+        the primary symbol's state is used, which silently mis-gates every other symbol
+        in a multi-symbol daemon — always pass it from the daemon.
         """
         if params is None:
             params = IndicatorParams()
 
-        if len(candles) < 2:
+        if symbol is not None:
+            active_state = state_manager.get_symbol_state(symbol)
+            active_leverage = state_manager.get_symbol_leverage(symbol)
+        else:
+            active_state = state_manager.current_state
+            active_leverage = state_manager.leverage
+
+        # A price of 0.0 is not a market price. Downstream consumers (inactivity tracker)
+        # treat SignalResult.price as the live price, and a zero permanently poisons the
+        # impulse-negation maths, so fall back to the last known close instead.
+        fallback_price = float(candles[-1].close) if candles else 0.0
+
+        if len(candles) < 3:
             return SignalResult(
                 signal_type="NONE",
-                price=0.0,
+                price=fallback_price,
                 stop_loss=0.0,
-                leverage=state_manager.leverage,
+                leverage=active_leverage,
                 is_allowed=True,
                 reason="Insufficient candles for closed candle analysis"
             )
 
         closed_candles = candles[:-1]
-        if len(closed_candles) < 2:
-            return SignalResult(
-                signal_type="NONE",
-                price=0.0,
-                stop_loss=0.0,
-                leverage=state_manager.leverage,
-                is_allowed=True,
-                reason="Insufficient candles for closed candle analysis"
-            )
 
         df = TMAIndicator.calculate(closed_candles, params)
 
@@ -163,9 +187,22 @@ class MMS4SignalEngine:
                 signal_type="NONE",
                 price=curr_c.close,
                 stop_loss=0.0,
-                leverage=state_manager.leverage,
+                leverage=active_leverage,
                 is_allowed=True,
                 reason="Indicators resulting in NaN (need more candle history)"
+            )
+
+        # Degenerate volatility: with ATR == 0 the bands collapse onto the TMA and every
+        # candle satisfies `close >= upper_band` identically, firing an entry on each bar.
+        latest_atr = df["atr"].iloc[-1]
+        if pd.isna(latest_atr) or float(latest_atr) <= 0.0:
+            return SignalResult(
+                signal_type="NONE",
+                price=curr_c.close,
+                stop_loss=0.0,
+                leverage=active_leverage,
+                is_allowed=True,
+                reason="ATR is zero (flat market or missing data) — bands collapsed onto TMA"
             )
 
         prev_upper = df["upper_band"].iloc[-2]
@@ -183,7 +220,7 @@ class MMS4SignalEngine:
                     signal_type="NONE",
                     price=curr_c.close,
                     stop_loss=0.0,
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="Signal blocked by directional_bias=FLAT"
                 )
@@ -192,7 +229,7 @@ class MMS4SignalEngine:
                     signal_type="NONE",
                     price=curr_c.close,
                     stop_loss=0.0,
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="Signal blocked by directional_bias=LONG_ONLY"
                 )
@@ -201,7 +238,7 @@ class MMS4SignalEngine:
                     signal_type="NONE",
                     price=curr_c.close,
                     stop_loss=0.0,
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="Signal blocked by directional_bias=SHORT_ONLY"
                 )
@@ -223,17 +260,17 @@ class MMS4SignalEngine:
                     signal_type="NONE",
                     price=curr_c.close,
                     stop_loss=0.0,
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="HIGH_RISK_ADD blocked by risk_profile=CONSERVATIVE"
                 )
 
-            if state_manager.current_state == MMS4State.SCOUT_MODE or not state_manager.is_high_risk_add_allowed():
+            if active_state != MMS4State.BASE_MODE:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_SHORT",
                     price=curr_c.close,
                     stop_loss=round(curr_c.close * 1.01, 6),
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)"
                 )
@@ -258,17 +295,17 @@ class MMS4SignalEngine:
                     signal_type="NONE",
                     price=curr_c.close,
                     stop_loss=0.0,
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="HIGH_RISK_ADD blocked by risk_profile=CONSERVATIVE"
                 )
 
-            if state_manager.current_state == MMS4State.SCOUT_MODE or not state_manager.is_high_risk_add_allowed():
+            if active_state != MMS4State.BASE_MODE:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_LONG",
                     price=curr_c.close,
                     stop_loss=round(curr_c.close * 0.99, 6),
-                    leverage=state_manager.leverage,
+                    leverage=active_leverage,
                     is_allowed=False,
                     reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)"
                 )
@@ -282,9 +319,28 @@ class MMS4SignalEngine:
                     reason="HIGH_RISK_ADD LONG signal: follow-up candle confirmed up trend"
                 )
 
-        # 3. Evaluate Base Entries on current candle (Outer TMA Band penetration)
-        curr_is_base_short = (curr_c.high >= latest_upper or curr_c.close >= latest_upper)
-        curr_is_base_long = (curr_c.low <= latest_lower or curr_c.close <= latest_lower)
+        # 3. Evaluate Base Entries on current candle (Outer TMA Band penetration).
+        #
+        # A base entry is a mean-reversion trade: the candle must both touch the outer
+        # band AND close against the penetration. Without the direction check a candle
+        # closing strongly UP through the upper band produced a SHORT — an entry against
+        # a live breakout. Matches the prev_was_base_* conditions above.
+        touched_upper = (curr_c.high >= latest_upper or curr_c.close >= latest_upper)
+        touched_lower = (curr_c.low <= latest_lower or curr_c.close <= latest_lower)
+        curr_is_base_short = touched_upper and (curr_c.close < curr_c.open)
+        curr_is_base_long = touched_lower and (curr_c.close > curr_c.open)
+
+        # Outside bar: one candle pierced BOTH bands. Direction is genuinely ambiguous,
+        # so take no position rather than defaulting to whichever branch is tested first.
+        if touched_upper and touched_lower:
+            return SignalResult(
+                signal_type="NONE",
+                price=curr_c.close,
+                stop_loss=0.0,
+                leverage=active_leverage,
+                is_allowed=False,
+                reason="Outside bar pierced both TMA bands — direction ambiguous, no entry"
+            )
 
         if curr_is_base_short:
             blocked = filter_bias("BASE_SHORT")
@@ -292,11 +348,11 @@ class MMS4SignalEngine:
                 return blocked
 
             if risk_prof == "CONSERVATIVE":
-                lev = min(state_manager.leverage, 0.5)
+                lev = min(active_leverage, 0.5)
             elif risk_prof == "AGGRESSIVE":
-                lev = 2.0 if state_manager.current_state == MMS4State.BASE_MODE else state_manager.leverage
+                lev = 2.0 if active_state == MMS4State.BASE_MODE else active_leverage
             else:
-                lev = state_manager.leverage
+                lev = active_leverage
 
             return SignalResult(
                 signal_type="BASE_SHORT",
@@ -313,11 +369,11 @@ class MMS4SignalEngine:
                 return blocked
 
             if risk_prof == "CONSERVATIVE":
-                lev = min(state_manager.leverage, 0.5)
+                lev = min(active_leverage, 0.5)
             elif risk_prof == "AGGRESSIVE":
-                lev = 2.0 if state_manager.current_state == MMS4State.BASE_MODE else state_manager.leverage
+                lev = 2.0 if active_state == MMS4State.BASE_MODE else active_leverage
             else:
-                lev = state_manager.leverage
+                lev = active_leverage
 
             return SignalResult(
                 signal_type="BASE_LONG",
@@ -332,7 +388,7 @@ class MMS4SignalEngine:
             signal_type="NONE",
             price=curr_c.close,
             stop_loss=0.0,
-            leverage=state_manager.leverage,
+            leverage=active_leverage,
             is_allowed=True,
             reason="No signal condition met"
         )
@@ -348,10 +404,22 @@ class HigherTimeframeAnalytics:
     def calculate_higher_tf(
         candles_h4: List[Candle],
         candles_d1: List[Candle],
-        params: Optional[IndicatorParams] = None
+        params: Optional[IndicatorParams] = None,
+        use_closed_candles: bool = True
     ) -> Dict[str, Any]:
+        """
+        Evaluate H4/D1 market context.
+
+        By default the still-forming last candle is dropped so the context cannot repaint
+        mid-candle — consistent with MMS4SignalEngine.evaluate_signals. Pass
+        use_closed_candles=False to inspect the live bar explicitly.
+        """
         if params is None:
             params = IndicatorParams()
+
+        if use_closed_candles:
+            candles_h4 = candles_h4[:-1] if len(candles_h4) > 1 else candles_h4
+            candles_d1 = candles_d1[:-1] if len(candles_d1) > 1 else candles_d1
 
         # D1 ATR & Expansion Ratio
         d1_atr = 0.0
@@ -409,9 +477,25 @@ class HigherTimeframeAnalytics:
                 else:
                     h4_candle_formation = "NEUTRAL"
 
+        # MMS v4 volatility zone classification: a daily range beyond
+        # htf_expansion_threshold x ATR marks an expansion regime where mean-reversion
+        # entries are unreliable. Previously the raw ratio was returned unclassified.
+        threshold = float(params.htf_expansion_threshold)
+        if atr_d1_expansion_ratio <= 0:
+            volatility_zone = "UNKNOWN"
+        elif atr_d1_expansion_ratio >= threshold:
+            volatility_zone = "EXPANSION"
+        elif atr_d1_expansion_ratio >= 1.0:
+            volatility_zone = "NORMAL"
+        else:
+            volatility_zone = "COMPRESSION"
+
         return {
             "atr_d1": d1_atr,
             "atr_d1_expansion_ratio": atr_d1_expansion_ratio,
+            "atr_d1_expansion_threshold": threshold,
+            "volatility_zone": volatility_zone,
+            "is_volatility_expansion": volatility_zone == "EXPANSION",
             "h4_tma_position": h4_tma_position,
             "h4_candle_formation": h4_candle_formation,
             "h4_tma": h4_tma_val,

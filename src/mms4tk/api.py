@@ -114,7 +114,7 @@ class PnLResponse(BaseModel):
     total_trades: int = Field(default=0, description="Total number of trades executed")
     win_rate: float = Field(default=0.0, description="Win rate percentage (0.0 to 100.0)")
     profit_factor: float = Field(default=0.0, description="Profit factor ratio")
-    max_drawdown: float = Field(default=0.0, description="Max Drawdown USD or %")
+    max_drawdown: float = Field(default=0.0, description="Max Drawdown in USD (see max_drawdown_pct for the ratio)")
     average_rr: float = Field(default=0.0, description="Average Risk to Reward ratio")
     free_balance: float = Field(default=0.0, description="Free available USDC balance")
     btc_balance: float = Field(default=0.0, description="BTC asset balance")
@@ -298,7 +298,9 @@ async def get_pnl() -> Dict[str, Any]:
         "total_trades": kpi.get("total_trades", summary.get("total_trades", 0)),
         "win_rate": kpi.get("win_rate", 0.0),
         "profit_factor": kpi.get("profit_factor", 0.0),
-        "max_drawdown": kpi.get("max_drawdown", 0.0),
+        "max_drawdown": kpi.get("max_drawdown_usd", kpi.get("max_drawdown", 0.0)),
+        "max_drawdown_pct": kpi.get("max_drawdown_pct", 0.0),
+        "max_drawdown_usd": kpi.get("max_drawdown_usd", 0.0),
         "average_rr": kpi.get("average_rr", 0.0),
         "free_balance": free_usdc,
         "btc_balance": btc_bal
@@ -660,12 +662,9 @@ class SettingsUpdateRequest(BaseModel):
 async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
     """Update runtime strategy parameters, leverage (up to 10x), SL %, and risk profile."""
     if req.leverage is not None:
-        state_manager.leverage = max(1.0, min(10.0, req.leverage))
+        state_manager.leverage = req.leverage  # setter clamps to [1.0, 10.0]
     if req.scout_mode is not None:
-        if req.scout_mode:
-            state_manager.current_state = MMS4State.SCOUT_MODE
-        else:
-            state_manager.relax_scout_mode()
+        state_manager.scout_mode = bool(req.scout_mode)
 
     state_manager.save_state(reason="Settings update via Web Dashboard")
     return {

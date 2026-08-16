@@ -51,9 +51,14 @@ def test_logger_db_closed_trades_and_kpi(tmp_path):
     assert kpi["total_pnl_usd"] == -1.0
 
 
-def test_trade_sync_worker(tmp_path):
+def test_trade_sync_worker(tmp_path, monkeypatch):
     import asyncio
-    
+
+    # The production default cutoff (MMS4_TRADE_SYNC_START_ISO) post-dates this fixture's
+    # fills, which would filter them all out. Pin an early cutoff so the test exercises
+    # the sync logic rather than the baseline filter.
+    monkeypatch.setenv("MMS4_TRADE_SYNC_START_ISO", "2020-01-01T00:00:00+00:00")
+
     async def _async_test():
         db_file = os.path.join(tmp_path, "test_logs.db")
         db = LoggerDB(db_path=db_file)

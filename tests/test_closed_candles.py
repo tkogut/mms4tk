@@ -14,11 +14,13 @@ def test_insufficient_candles():
     assert res0.price == 0.0
     assert res0.reason == "Insufficient candles for closed candle analysis"
 
-    # 1 candle
+    # 1 candle — price must fall back to the last known close, never 0.0.
+    # A zero here propagates into the inactivity tracker as a real market price and
+    # permanently corrupts its impulse-negation maths (audit finding P1-3).
     c1 = Candle(timestamp=100, open=100.0, high=101.0, low=99.0, close=100.0)
     res1 = engine.evaluate_signals([c1], sm)
     assert res1.signal_type == "NONE"
-    assert res1.price == 0.0
+    assert res1.price == 100.0
     assert res1.reason == "Insufficient candles for closed candle analysis"
 
 
