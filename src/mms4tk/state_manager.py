@@ -12,11 +12,26 @@ logger = logging.getLogger("mms4tk.state_manager")
 class MMS4State(str, Enum):
     """
     Operating modes for MMS4 strategy.
-    BASE_MODE: Full leverage (1.0x) active when system is performing as expected.
-    SCOUT_MODE: Reduced leverage (0.1x) activated after hard SL (>= 2%).
+    BASE_MODE: Full leverage active when system is performing as expected.
+    SCOUT_MODE: Reduced leverage (SCOUT_LEVERAGE, default 0.1x) after a hard SL (>= 2%).
     """
     BASE_MODE = "BASE_MODE"
     SCOUT_MODE = "SCOUT_MODE"
+
+
+# Leverage per risk profile in BASE_MODE.
+#
+# The original MMS v4 spec describes a flat 1.0x base. The Two-Tier Adaptive system
+# (Hermes-controlled risk profiles) supersedes that with per-profile leverage, so the
+# values below are the source of truth and are overridable from the environment.
+# Set MMS4_LEVERAGE_MODERATE=1.0 to run the strict, spec-literal configuration.
+BASE_LEVERAGE_BY_PROFILE: Dict[str, float] = {
+    "CONSERVATIVE": float(os.getenv("MMS4_LEVERAGE_CONSERVATIVE", "1.0")),
+    "MODERATE": float(os.getenv("MMS4_LEVERAGE_MODERATE", "3.0")),
+    "AGGRESSIVE": float(os.getenv("MMS4_LEVERAGE_AGGRESSIVE", "10.0")),
+}
+SCOUT_LEVERAGE: float = float(os.getenv("MMS4_LEVERAGE_SCOUT", "0.1"))
+DEFAULT_BASE_LEVERAGE: float = 1.0
 
 
 class TradeRecord(BaseModel):
@@ -74,6 +89,7 @@ class MMS4StateManager:
         self._realized_pnl: float = 0.0
         self._trade_history: List[TradeRecord] = []
         self._strategy_profile: StrategyProfile = StrategyProfile()
+        self._leverage_override: Optional[float] = None
         self.logger_db: Optional[Any] = logger_db
         self.hermes_webhook: Optional[Any] = hermes_webhook
 
@@ -90,8 +106,15 @@ class MMS4StateManager:
             self._load_strategy_profile_from_db()
 
     def get_symbol_state(self, symbol: str) -> MMS4State:
-        """Return operating state for specific trading symbol (defaults to BASE_MODE)."""
-        return self._symbol_states.get(symbol, self._current_state)
+        """
+        Return the operating state for a specific trading symbol.
+
+        An unknown symbol defaults to BASE_MODE, as documented. It previously fell back to
+        the PRIMARY symbol's state, so a stop-out on BTC silently forced every other
+        symbol into SCOUT_MODE — the opposite of the per-symbol isolation this map exists
+        to provide.
+        """
+        return self._symbol_states.get(symbol, MMS4State.BASE_MODE)
 
     def set_symbol_state(self, symbol: str, state: MMS4State, reason: str = "") -> None:
         """Update operating state for a specific symbol without altering other symbols."""
@@ -108,16 +131,16 @@ class MMS4StateManager:
     def get_symbol_leverage(self, symbol: str) -> float:
         """Return active leverage for specific trading symbol."""
         sym_state = self.get_symbol_state(symbol)
-        if sym_state == MMS4State.SCOUT_MODE:
-            return 0.1
+        return self._resolve_leverage(sym_state)
+
+    def _resolve_leverage(self, state: MMS4State) -> float:
+        """Single source of truth for leverage: state first, then risk profile, then override."""
+        if state == MMS4State.SCOUT_MODE:
+            return SCOUT_LEVERAGE
+        if self._leverage_override is not None:
+            return self._leverage_override
         risk_prof = self._strategy_profile.risk_profile.upper()
-        if risk_prof == "CONSERVATIVE":
-            return 1.0
-        elif risk_prof == "AGGRESSIVE":
-            return 10.0
-        elif risk_prof == "MODERATE":
-            return 3.0
-        return 1.0
+        return BASE_LEVERAGE_BY_PROFILE.get(risk_prof, DEFAULT_BASE_LEVERAGE)
 
     def set_logger_db(self, logger_db: Any) -> None:
         """Attach LoggerDB instance and restore latest persisted state if present."""
@@ -176,27 +199,51 @@ class MMS4StateManager:
         """Return current operating state."""
         return self._current_state
 
+    @current_state.setter
+    def current_state(self, state: MMS4State) -> None:
+        """Set the operating state of the primary symbol (keeps per-symbol map in sync)."""
+        self.set_symbol_state(self.trading_symbol, MMS4State(state), reason="State set directly")
+
     @property
     def leverage(self) -> float:
         """
-        Return active leverage corresponding to current state and active StrategyProfile risk_profile:
-        SCOUT_MODE -> 0.1x (reduced defense mode)
-        BASE_MODE:
-          CONSERVATIVE -> 1.0x
-          MODERATE -> 3.0x
-          AGGRESSIVE -> 10.0x
-        """
-        if self._current_state == MMS4State.SCOUT_MODE:
-            return 0.1
+        Active leverage for the current state and StrategyProfile.
 
-        risk_prof = self._strategy_profile.risk_profile.upper()
-        if risk_prof == "CONSERVATIVE":
-            return 1.0
-        elif risk_prof == "AGGRESSIVE":
-            return 10.0
-        elif risk_prof == "MODERATE":
-            return 3.0
-        return 1.0
+        SCOUT_MODE always wins and returns SCOUT_LEVERAGE (0.1x by default) — a manual
+        override never re-arms risk while the system is in its defensive mode.
+        In BASE_MODE: an explicit override, else BASE_LEVERAGE_BY_PROFILE.
+        """
+        return self._resolve_leverage(self._current_state)
+
+    @leverage.setter
+    def leverage(self, value: float) -> None:
+        """
+        Manually pin BASE_MODE leverage (dashboard / API). Clamped to [1.0, 10.0].
+        Pass None to fall back to the risk-profile value.
+        """
+        if value is None:
+            self._leverage_override = None
+            return
+        self._leverage_override = max(1.0, min(10.0, float(value)))
+        logger.info(f"Leverage override set to x{self._leverage_override}")
+
+    @property
+    def scout_mode(self) -> bool:
+        """True when the primary symbol is in SCOUT_MODE (reduced-risk defense)."""
+        return self._current_state == MMS4State.SCOUT_MODE
+
+    @scout_mode.setter
+    def scout_mode(self, enabled: bool) -> None:
+        """Force SCOUT_MODE on/off for the primary symbol."""
+        if enabled:
+            self.set_symbol_state(self.trading_symbol, MMS4State.SCOUT_MODE, reason="SCOUT_MODE forced manually")
+        else:
+            self.relax_scout_mode()
+
+    def save_state(self, reason: str = "") -> None:
+        """Persist the current state snapshot to logger_db (no-op without a DB attached)."""
+        if self.logger_db is not None:
+            self.logger_db.save_state(state=self._current_state.value, leverage=self.leverage, reason=reason)
 
     def is_high_risk_add_allowed(self) -> bool:
         """
@@ -280,6 +327,9 @@ class MMS4StateManager:
     ) -> TradeRecord:
         """
         Record completed trade, update PnL, and evaluate state transitions.
+
+        State transitions are applied to the trade's OWN symbol — previously the symbol
+        was dropped here and the primary symbol was transitioned instead.
         """
         record = TradeRecord(
             trade_id=trade_id,
@@ -300,9 +350,22 @@ class MMS4StateManager:
         self._current_equity += pnl
 
         if is_stop_loss:
-            self.on_stop_loss_hit(sl_percent)
+            self.on_stop_loss_hit(sl_percent, sl_price=exit_price, symbol=symbol)
         elif is_take_profit:
-            self.on_take_profit_hit()
+            self.on_take_profit_hit(symbol=symbol)
+
+        if self.logger_db is not None:
+            try:
+                self.logger_db.log_state_metrics(
+                    state=self._current_state.value,
+                    leverage=self.leverage,
+                    equity=self._current_equity,
+                    realized_pnl=self._realized_pnl,
+                    trade_count=len(self._trade_history),
+                    force=True,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist state metrics after trade {trade_id}: {e}")
 
         return record
 

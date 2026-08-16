@@ -20,6 +20,37 @@ from mms4tk.analytics import Candle
 
 logger = logging.getLogger("mms4tk.okx_executor")
 
+# Smallest order value OKX will accept. Used as a *gate* (skip the entry when the target
+# is below it), never as a floor that silently inflates the intended size.
+MIN_NOTIONAL_USD = float(os.getenv("MMS4_MIN_NOTIONAL_USD", "7.0"))
+
+# How far a rounded contract count may exceed the target allocation before it is rejected.
+SIZING_TOLERANCE = float(os.getenv("MMS4_SIZING_TOLERANCE", "0.10"))
+
+
+def normalize_symbol(symbol: str) -> str:
+    """
+    Reduce any OKX/CCXT symbol spelling to its bare base asset.
+
+    'BTC/USD:USD-310404', 'BTC-USD_UM_XPERP-310404', 'BTC-USDC-SWAP' and 'BTC/USDC' all
+    collapse to 'BTC'. Single definition shared by the executor and the daemon — the two
+    previously carried duplicate ten-step replace() chains that could drift apart.
+    """
+    if not symbol:
+        return ""
+    s = str(symbol).split(":")[0]
+    s = s.split("_UM_XPERP")[0].split("_XPERP")[0]
+    for suffix in ("-SWAP", "-PERP", "-FUTURES"):
+        s = s.replace(suffix, "")
+    # Strip any expiry/date tail such as '-310404'
+    parts = [p for p in s.replace("/", "-").split("-") if p]
+    if parts and parts[-1].isdigit():
+        parts = parts[:-1]
+    if not parts:
+        return ""
+    base = parts[0]
+    return base.strip().upper()
+
 
 def _generate_mock_candles(count: int = 100, base_price: float = 50000.0) -> List[Candle]:
     """Generate deterministic mock OHLCV candles when OKX API keys are not provided."""
@@ -259,10 +290,18 @@ class OKXExecutor:
     def calculate_order_amount(self, symbol: str, target_usd: float, price: float) -> float:
         """
         Calculate precise order amount (contracts or coins) for target USD allocation.
-        Universally accounts for CCXT contractSize, market type, min order limits, and OKX contract integer precision across all current and future pairs.
+
+        Accounts for CCXT contractSize, market type, min order limits and OKX integer
+        contract precision. Contract counts are rounded to the NEAREST whole contract and
+        rejected (0.0) when even the smallest tradeable size would overshoot the target by
+        more than SIZING_TOLERANCE — the previous unconditional math.ceil() pushed the
+        realized margin past max_margin_usd on every instrument measured.
+
+        Returns 0.0 when no size satisfies the budget; callers must treat that as
+        "skip this entry", not as "send a minimum order".
         """
         if price <= 0 or target_usd <= 0:
-            return 1.0
+            return 0.0
 
         is_contract_symbol = (
             ":" in symbol or 
@@ -290,11 +329,11 @@ class OKXExecutor:
                         contract_size = 1.0
                     raw_contracts = target_usd / (price * contract_size)
                     min_amt = float(market.get("limits", {}).get("amount", {}).get("min") or 1.0)
-                    
-                    # OKX contract amounts must be integers >= 1.0
-                    contracts = math.ceil(raw_contracts) if raw_contracts > 0 else 1
-                    contracts = max(contracts, int(math.ceil(min_amt)), 1)
-                    
+                    contracts = self._fit_contracts(
+                        raw_contracts, min_amt, target_usd, price, contract_size, symbol
+                    )
+                    if contracts <= 0:
+                        return 0.0
                     try:
                         formatted = self.exchange.amount_to_precision(symbol, float(contracts))
                         val = float(formatted)
@@ -311,10 +350,45 @@ class OKXExecutor:
         # Universal fallback for any contract instrument (BTC, ETH, SOL, ICP, AVAX, etc.)
         if is_contract_symbol or "/" not in symbol:
             ct_val = 0.0001 if "BTC" in symbol else 1.0
-            raw_contracts = math.ceil(target_usd / (price * ct_val))
-            return float(max(1, raw_contracts))
+            raw_contracts = target_usd / (price * ct_val)
+            return float(self._fit_contracts(raw_contracts, 1.0, target_usd, price, ct_val, symbol))
 
         return round(target_usd / price, 6)
+
+    def _fit_contracts(
+        self,
+        raw_contracts: float,
+        min_amount: float,
+        target_usd: float,
+        price: float,
+        contract_size: float,
+        symbol: str
+    ) -> int:
+        """
+        Round a fractional contract count to a whole number that respects the budget.
+
+        Rounds to nearest, falls back to floor when that overshoots, and returns 0 when
+        even one minimum-size contract costs more than target_usd * (1 + tolerance).
+        """
+        if raw_contracts <= 0:
+            return 0
+        floor_amt = max(int(math.floor(min_amount)), 1)
+        budget = target_usd * (1.0 + SIZING_TOLERANCE)
+
+        candidates = [int(round(raw_contracts)), int(math.floor(raw_contracts))]
+        for contracts in candidates:
+            if contracts < floor_amt:
+                continue
+            if contracts * price * contract_size <= budget:
+                return contracts
+
+        smallest_cost = floor_amt * price * contract_size
+        logger.warning(
+            f"Sizing rejected for {symbol}: smallest tradeable size ({floor_amt} contract(s) "
+            f"= ${smallest_cost:,.2f}) exceeds target ${target_usd:,.2f} "
+            f"+{SIZING_TOLERANCE*100:.0f}% tolerance. Skipping entry."
+        )
+        return 0
 
 
     async def execute_order(
@@ -357,11 +431,34 @@ class OKXExecutor:
                     ref_price = float(ticker.get("last") or ticker.get("close") or 0.0)
                 except Exception:
                     ref_price = 0.0
-            
-            est_usd = (amount * ref_price) if (ref_price > 0 and amount > 0) else 7.0
-            est_usd = max(est_usd, 7.0)
+
+            if ref_price <= 0 or amount <= 0:
+                raise ValueError(
+                    f"Cannot size contract order for {target_symbol}: "
+                    f"amount={amount}, reference price={ref_price}"
+                )
+
+            # The coin amount was computed for a spot market; its USD value is the true
+            # target. Do NOT raise it to the exchange minimum here — that used to turn a
+            # deliberately small SCOUT_MODE position ($0.70) into a $12.61 one.
+            est_usd = amount * ref_price
+            if est_usd < MIN_NOTIONAL_USD:
+                raise ValueError(
+                    f"Order for {target_symbol} skipped: target ${est_usd:,.2f} is below the "
+                    f"exchange minimum ${MIN_NOTIONAL_USD:,.2f}. Reduce risk by not trading, "
+                    f"never by trading larger than intended."
+                )
+
             final_amount = self.calculate_order_amount(target_symbol, est_usd, ref_price)
-            logger.info(f"Recalculated contract amount for {target_symbol}: original_amount={amount} -> contract_amount={final_amount} (${est_usd:.2f} USD)")
+            if final_amount <= 0:
+                raise ValueError(
+                    f"Order for {target_symbol} skipped: no whole contract size fits the "
+                    f"${est_usd:,.2f} allocation."
+                )
+            logger.info(
+                f"Recalculated contract amount for {target_symbol}: "
+                f"original_amount={amount} -> contract_amount={final_amount} (${est_usd:.2f} USD)"
+            )
 
         if not self.has_credentials or self.exchange is None:
             logger.info(f"Mock Order Execution: symbol={target_symbol}, side={side}, amount={final_amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")
@@ -542,12 +639,25 @@ class OKXExecutor:
             raise
 
     async def set_leverage(self, leverage: float, symbol: str) -> Dict[str, Any]:
-        """Set leverage for specific market symbol."""
+        """
+        Set leverage for a specific market symbol.
+
+        OKX only accepts integers >= 1, so sub-1x leverage cannot be expressed on the
+        exchange. SCOUT_MODE's 0.1x therefore has to be realized through position SIZE,
+        not through the leverage field — this is logged explicitly rather than silently
+        rounded, because a caller assuming 0.1x reached the exchange would be wrong.
+        """
         if not self.has_credentials or self.exchange is None:
             return {"symbol": symbol, "leverage": leverage, "mock": True}
         try:
-            lev_int = int(leverage) if leverage >= 1.0 else 1
-            logger.info(f"Setting leverage {leverage}x for symbol {symbol}")
+            lev_int = max(1, int(leverage))
+            if leverage < 1.0:
+                logger.info(
+                    f"Exchange leverage for {symbol} set to {lev_int}x (requested {leverage}x is "
+                    f"below the OKX minimum). Risk reduction is applied via position size."
+                )
+            else:
+                logger.info(f"Setting leverage {lev_int}x for symbol {symbol}")
             return await self.exchange.set_leverage(lev_int, symbol)
         except Exception as e:
             logger.error(f"Error setting leverage: {type(e).__name__}: {str(e)}")
@@ -574,6 +684,27 @@ class OKXExecutor:
         except Exception as e:
             logger.error(f"Error executing cancel_all_orders: {type(e).__name__}: {str(e)}")
             raise
+
+    @staticmethod
+    def reduction_amount(contracts: float, reduction_pct: float) -> Optional[float]:
+        """
+        Whole contracts to close for a `reduction_pct` reduction of `contracts`.
+
+        Returns None when a partial reduction cannot be expressed without closing the
+        entire position — the caller must then hold. The old rule,
+        `max(1, floor(contracts * pct))`, silently turned a 1-contract SPLIT_50 into a
+        100% liquidation; combined with a repeating trigger that drained whole positions.
+
+        Contract counts are integers, so a partial is accurate to +/- one contract.
+        """
+        if contracts <= 0:
+            return None
+        if reduction_pct >= 1.0:
+            return float(contracts)
+        amount = float(round(contracts * reduction_pct))
+        if amount < 1.0 or amount >= contracts:
+            return None
+        return amount
 
     async def reduce_position(
         self,
@@ -609,38 +740,12 @@ class OKXExecutor:
 
         # Fetch current position contracts
         positions = await self.fetch_positions()
-        clean_target = (
-            target_symbol.split(":")[0]
-            .split("-3")[0]
-            .replace("-USD_UM_XPERP", "")
-            .replace("_XPERP", "")
-            .replace("-USDC-SWAP", "")
-            .replace("-USDT-SWAP", "")
-            .replace("-USDC", "")
-            .replace("-USDT", "")
-            .replace("/USDC", "")
-            .replace("/USDT", "")
-            .replace("/USD", "")
-            .strip()
-        )
+        clean_target = normalize_symbol(target_symbol) or normalize_symbol(symbol)
 
         matching_contracts = 0.0
         for p in positions:
             p_sym = p.get("symbol", "")
-            p_clean = (
-                p_sym.split(":")[0]
-                .split("-3")[0]
-                .replace("-USD_UM_XPERP", "")
-                .replace("_XPERP", "")
-                .replace("-USDC-SWAP", "")
-                .replace("-USDT-SWAP", "")
-                .replace("-USDC", "")
-                .replace("-USDT", "")
-                .replace("/USDC", "")
-                .replace("/USDT", "")
-                .replace("/USD", "")
-                .strip()
-            )
+            p_clean = normalize_symbol(p_sym)
             p_side = str(
                 p.get("side") or p.get("info", {}).get("posSide") or ""
             ).lower()
@@ -657,9 +762,20 @@ class OKXExecutor:
             )
             return {"status": "no_position", "symbol": symbol, "side": side_lower}
 
-        reduce_amount = max(1.0, math.floor(matching_contracts * reduction_pct))
-        if reduce_amount > matching_contracts:
-            reduce_amount = matching_contracts
+        reduce_amount = self.reduction_amount(matching_contracts, reduction_pct)
+        if reduce_amount is None:
+            logger.info(
+                f"reduce_position: {symbol} {side_lower} has {matching_contracts} contract(s); "
+                f"a {reduction_pct*100:.0f}% partial reduction is not representable "
+                f"without closing the whole position. Holding instead."
+            )
+            return {
+                "status": "not_divisible",
+                "symbol": symbol,
+                "side": side_lower,
+                "contracts": matching_contracts,
+                "reason": reason,
+            }
 
         logger.info(
             f"▼ reduce_position: {symbol} {side_lower} "
@@ -682,6 +798,9 @@ class OKXExecutor:
             params = {
                 "tdMode": "cross",
                 "posSide": side_lower,  # close on the same posSide in hedge mode
+                # Hard guarantee that this order can only shrink the position — if the
+                # size drifts between the fetch and the fill, it will not open a new one.
+                "reduceOnly": True,
             }
             order = await self.exchange.create_order(
                 symbol=target_symbol,

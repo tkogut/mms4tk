@@ -12,6 +12,7 @@ Tags: #NotebookLM #ExpertKnowledge
 """
 
 import logging
+import os
 import time
 from enum import Enum
 from typing import Dict, Any, Optional
@@ -43,6 +44,13 @@ class PositionTracker:
     is_split: bool = False
     split_at_candle: int = 0
     stale_detected: bool = False
+    # Candle index of the last emitted protective action; guards against re-issuing the
+    # same reduction on every cycle while the triggering condition persists.
+    last_action_candle: int = -1
+    last_action: str = ""
+    # Set once a full-close action has been emitted. The daemon stops tracking after
+    # executing it; this flag is the belt-and-braces guard in case that call is missed.
+    closing: bool = False
 
     def __post_init__(self):
         if self.side == "long":
@@ -76,6 +84,19 @@ class MMS4InactivityManager:
     DEFAULT_GRACE_CANDLES: int = 5
     DEFAULT_IMPULSE_NEGATION_ENABLED: bool = True
     DEFAULT_BE_ESCAPE_THRESHOLD: float = 0.001  # 0.1% of entry price
+    # Round-trip cost allowance (taker fee on both legs + funding). A "break-even" exit
+    # inside the raw price band still realizes a small loss once fees are paid; set this
+    # to e.g. 0.0012 (OKX taker 0.05% x2 + funding) to require BE_ESCAPE to be net
+    # non-negative. Default 0.0 preserves the documented behaviour — raising it makes the
+    # rule stricter and shifts those exits onto the two-stage ladder instead.
+    DEFAULT_ROUND_TRIP_COST_PCT: float = float(os.getenv("MMS4_BE_COST_PCT", "0.0"))
+    # Minimum candles between two protective actions on the same position.
+    DEFAULT_ACTION_COOLDOWN_CANDLES: int = 1
+    # Impulse size (in ATR) that must be made before a 50% retracement counts as a
+    # negation. At 0.3 this is tight: on a low-ATR instrument the trigger can sit within
+    # market noise (SOL/USDC showed a $0.01 threshold in the audit). Raise per symbol via
+    # the `impulse_min_atr` config key when an instrument whipsaws out of positions.
+    DEFAULT_IMPULSE_MIN_ATR: float = float(os.getenv("MMS4_IMPULSE_MIN_ATR", "0.3"))
 
     def __init__(self):
         self._trackers: Dict[str, PositionTracker] = {}
@@ -157,6 +178,16 @@ class MMS4InactivityManager:
         if tracker is None:
             return StaleAction.HOLD
 
+        # ── Reject non-prices ──
+        # A degenerate cycle (empty candle response) yields price 0.0. Folding that into
+        # the observed extremes permanently poisons the impulse maths: for a short,
+        # min_observed becomes 0 and every real price then reads as a >50% retracement.
+        if current_price is None or current_price <= 0 or current_price != current_price:
+            logger.warning(
+                f"Ignoring invalid price {current_price!r} for {inst_id} — tracker left untouched"
+            )
+            return StaleAction.HOLD
+
         # ── Update price extremes ──
         if tracker.side == "long":
             tracker.max_observed_price = max(tracker.max_observed_price, current_price)
@@ -183,36 +214,61 @@ class MMS4InactivityManager:
         be_threshold = self._get_cfg(
             inst_id, "be_escape_threshold", self.DEFAULT_BE_ESCAPE_THRESHOLD
         )
+        cost_pct = self._get_cfg(
+            inst_id, "round_trip_cost_pct", self.DEFAULT_ROUND_TRIP_COST_PCT
+        )
+        cooldown = self._get_cfg(
+            inst_id, "action_cooldown_candles", self.DEFAULT_ACTION_COOLDOWN_CANDLES
+        )
 
         # Use current ATR if available, else entry ATR as baseline
         atr = current_atr if current_atr > 0 else tracker.atr_at_entry
         if atr <= 0:
             return StaleAction.HOLD
 
+        # A full close is already in flight — never queue a second one.
+        if tracker.closing:
+            return StaleAction.HOLD
+
+        # A protective action was just issued; give the exchange a candle to settle
+        # before evaluating again, otherwise a persistent condition re-fires every cycle.
+        in_cooldown = (
+            tracker.last_action_candle >= 0
+            and (tracker.candle_count - tracker.last_action_candle) < cooldown
+        )
+        if in_cooldown:
+            return StaleAction.HOLD
+
+        # Price left the stagnation zone — the position is alive again, so the stale flag
+        # must clear. Without this reset any later drift back toward entry re-triggers
+        # BE_ESCAPE, even after a multi-ATR breakout.
+        if tracker.stale_detected:
+            if abs(current_price - tracker.entry_price) >= atr * vol_threshold:
+                logger.info(
+                    f"↻ {inst_id} left the stagnation zone "
+                    f"(deviation=${abs(current_price - tracker.entry_price):,.2f}) — stale flag cleared"
+                )
+                tracker.stale_detected = False
+                tracker.is_split = False
+                tracker.split_at_candle = 0
+
         # ──────────────────────────────────────────────────────────
         # RULE I: 50% Impulse Negation
         # ──────────────────────────────────────────────────────────
         if impulse_enabled:
-            action = self._check_impulse_negation(tracker, current_price, atr)
+            action = self._check_impulse_negation(
+                tracker, current_price, atr,
+                min_impulse_atr=self._get_cfg(inst_id, "impulse_min_atr", self.DEFAULT_IMPULSE_MIN_ATR),
+            )
             if action != StaleAction.HOLD:
-                return action
-
-        # ──────────────────────────────────────────────────────────
-        # RULE II: Break-Even Escape (after stagnation detected)
-        # ──────────────────────────────────────────────────────────
-        if tracker.stale_detected:
-            price_from_entry = abs(current_price - tracker.entry_price)
-            be_zone = tracker.entry_price * be_threshold
-            if price_from_entry <= be_zone:
-                logger.warning(
-                    f"🏃 BE Escape triggered for {inst_id} | "
-                    f"price=${current_price:,.2f} ≈ entry=${tracker.entry_price:,.2f}"
-                )
-                return StaleAction.BE_ESCAPE
+                return self._arm(tracker, action)
 
         # ──────────────────────────────────────────────────────────
         # RULE III + IV: Time-Based Stagnation (Two-Stage Ladder)
         # ──────────────────────────────────────────────────────────
+        # Evaluated BEFORE Rule II: the break-even band (0.1% of price) sits inside the
+        # stagnation band (0.5x ATR) for any instrument with ATR above ~0.2%, so checking
+        # BE first made the second ladder rung unreachable in practice.
         if tracker.candle_count >= max_stale:
             price_deviation = abs(current_price - tracker.entry_price)
             max_allowed = atr * vol_threshold
@@ -220,27 +276,61 @@ class MMS4InactivityManager:
             if price_deviation < max_allowed:
                 tracker.stale_detected = True
 
-                # Stage 1: First split
-                if not tracker.is_split:
+                # Stage 2 first: grace period after a split expired → full close.
+                if tracker.is_split:
+                    candles_since_split = tracker.candle_count - tracker.split_at_candle
+                    if candles_since_split >= grace:
+                        logger.warning(
+                            f"🚨 Grace period expired for {inst_id} | "
+                            f"{candles_since_split} candles post-split without recovery"
+                        )
+                        return self._arm(tracker, StaleAction.FORCE_CLOSE_BE)
+                else:
+                    # Stage 1: first split
                     logger.warning(
                         f"⏰ Stagnation detected for {inst_id} | "
                         f"{tracker.candle_count} candles, deviation=${price_deviation:,.2f} "
-                        f"< threshold=${max_allowed:,.2f} (0.5×ATR)"
+                        f"< threshold=${max_allowed:,.2f} ({vol_threshold}×ATR)"
                     )
                     tracker.is_split = True
                     tracker.split_at_candle = tracker.candle_count
-                    return StaleAction.SPLIT_50
+                    return self._arm(tracker, StaleAction.SPLIT_50)
 
-                # Stage 2: Grace period expired → full close
-                candles_since_split = tracker.candle_count - tracker.split_at_candle
-                if candles_since_split >= grace:
+        # ──────────────────────────────────────────────────────────
+        # RULE II: Break-Even Escape (after stagnation detected)
+        # ──────────────────────────────────────────────────────────
+        # Only escape once price has cleared the round-trip cost, otherwise "break even"
+        # is a guaranteed small loss.
+        if tracker.stale_detected:
+            if tracker.side == "long":
+                pnl_pct = (current_price - tracker.entry_price) / tracker.entry_price
+            else:
+                pnl_pct = (tracker.entry_price - current_price) / tracker.entry_price
+
+            within_band = abs(current_price - tracker.entry_price) <= tracker.entry_price * be_threshold
+            if within_band:
+                if pnl_pct >= cost_pct:
                     logger.warning(
-                        f"🚨 Grace period expired for {inst_id} | "
-                        f"{candles_since_split} candles post-split without recovery"
+                        f"🏃 BE Escape triggered for {inst_id} | "
+                        f"price=${current_price:,.2f} ≈ entry=${tracker.entry_price:,.2f} "
+                        f"(PnL {pnl_pct*100:.3f}%, cost allowance {cost_pct*100:.3f}%)"
                     )
-                    return StaleAction.FORCE_CLOSE_BE
+                    return self._arm(tracker, StaleAction.BE_ESCAPE)
+                logger.info(
+                    f"BE Escape for {inst_id} deferred: PnL {pnl_pct*100:.3f}% "
+                    f"below round-trip cost {cost_pct*100:.3f}% — the two-stage ladder "
+                    f"remains the exit path"
+                )
 
         return StaleAction.HOLD
+
+    def _arm(self, tracker: PositionTracker, action: StaleAction) -> StaleAction:
+        """Record an emitted action so the cooldown can suppress immediate repeats."""
+        tracker.last_action_candle = tracker.candle_count
+        tracker.last_action = action.value
+        if action in (StaleAction.FORCE_CLOSE, StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE):
+            tracker.closing = True
+        return action
 
     # ── Private Helpers ─────────────────────────────────────────────
 
@@ -248,38 +338,48 @@ class MMS4InactivityManager:
         self,
         tracker: PositionTracker,
         current_price: float,
-        atr: float
+        atr: float,
+        min_impulse_atr: Optional[float] = None
     ) -> StaleAction:
         """
         Rule I: If price made a meaningful impulse (> 0.3 * ATR in profitable
         direction) then retraced > 50% of that impulse, the move has lost momentum.
+
+        The first negation halves the position and LATCHES `is_split`. Without that latch
+        the rule re-emitted SPLIT_50 on every cycle while price sat below the negation
+        level, and — because reduce_position rounds a 1-contract halving up to 1 — drained
+        the whole position within a few cycles in separate taker orders.
         """
-        min_impulse = 0.3 * atr
+        if min_impulse_atr is None:
+            min_impulse_atr = self.DEFAULT_IMPULSE_MIN_ATR
+        min_impulse = min_impulse_atr * atr
 
         if tracker.side == "long":
             local_impulse = tracker.max_observed_price - tracker.entry_price
-            if local_impulse > min_impulse:
-                negation_level = tracker.max_observed_price - (local_impulse * 0.5)
-                if current_price < negation_level:
-                    logger.warning(
-                        f"⚡ Impulse negation (LONG) for {tracker.inst_id} | "
-                        f"peak=${tracker.max_observed_price:,.2f} "
-                        f"50%=${negation_level:,.2f} current=${current_price:,.2f}"
-                    )
-                    return StaleAction.SPLIT_50 if not tracker.is_split else StaleAction.FORCE_CLOSE
+            negation_level = tracker.max_observed_price - (local_impulse * 0.5)
+            negated = local_impulse > min_impulse and current_price < negation_level
+            peak_label, peak_value = "peak", tracker.max_observed_price
         else:
             local_impulse = tracker.entry_price - tracker.min_observed_price
-            if local_impulse > min_impulse:
-                negation_level = tracker.min_observed_price + (local_impulse * 0.5)
-                if current_price > negation_level:
-                    logger.warning(
-                        f"⚡ Impulse negation (SHORT) for {tracker.inst_id} | "
-                        f"trough=${tracker.min_observed_price:,.2f} "
-                        f"50%=${negation_level:,.2f} current=${current_price:,.2f}"
-                    )
-                    return StaleAction.SPLIT_50 if not tracker.is_split else StaleAction.FORCE_CLOSE
+            negation_level = tracker.min_observed_price + (local_impulse * 0.5)
+            negated = local_impulse > min_impulse and current_price > negation_level
+            peak_label, peak_value = "trough", tracker.min_observed_price
 
-        return StaleAction.HOLD
+        if not negated:
+            return StaleAction.HOLD
+
+        logger.warning(
+            f"⚡ Impulse negation ({tracker.side.upper()}) for {tracker.inst_id} | "
+            f"{peak_label}=${peak_value:,.2f} 50%=${negation_level:,.2f} "
+            f"current=${current_price:,.2f}"
+        )
+
+        if tracker.is_split:
+            return StaleAction.FORCE_CLOSE
+
+        tracker.is_split = True
+        tracker.split_at_candle = tracker.candle_count
+        return StaleAction.SPLIT_50
 
     # ── Status / Telemetry ──────────────────────────────────────────
 

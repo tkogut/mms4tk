@@ -1,16 +1,65 @@
 import os
+import time
 import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from mms4tk.state_manager import MMS4StateManager, MMS4State
-from mms4tk.okx_executor import OKXExecutor
+from mms4tk.okx_executor import OKXExecutor, normalize_symbol
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 
 logger = logging.getLogger("mms4tk.daemon")
+
+
+def _pos_contracts(p: Dict[str, Any]) -> float:
+    """Contract count of a CCXT/OKX position dict, 0.0 when absent."""
+    try:
+        return float(p.get("contracts", 0.0) or p.get("info", {}).get("pos", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pos_side(p: Dict[str, Any]) -> str:
+    """'long' / 'short' for a position dict, '' when undeterminable."""
+    return str(p.get("side") or p.get("info", {}).get("posSide") or "").lower()
+
+
+def _pos_entry_price(p: Dict[str, Any]) -> float:
+    """Average entry price of a position dict, 0.0 when absent."""
+    try:
+        return float(
+            p.get("entryPrice")
+            or p.get("info", {}).get("avgPx")
+            or p.get("info", {}).get("openAvgPx")
+            or 0.0
+        )
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pos_notional(p: Dict[str, Any], price: float, symbol: str) -> float:
+    """Notional USD of a position, falling back to contracts x ctVal x price."""
+    try:
+        raw = float(
+            p.get("notional")
+            or p.get("notional_usd")
+            or p.get("info", {}).get("notionalUsd")
+            or 0.0
+        )
+    except (TypeError, ValueError):
+        raw = 0.0
+    if raw > 0 or price <= 0:
+        return raw
+    try:
+        ct_size = float(p.get("contractSize", 0.0) or p.get("info", {}).get("ctVal", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        ct_size = 0.0
+    if ct_size <= 0:
+        ct_size = 0.0001 if "BTC" in symbol.upper() else 1.0
+    return _pos_contracts(p) * ct_size * price
 
 
 class MMS4Daemon:
@@ -58,10 +107,59 @@ class MMS4Daemon:
         self.processed_cycles: int = 0
         self.last_cycle_timestamp: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
-        self._addon_executed_symbols: set = set()
         self.last_signal: Optional[SignalResult] = None
         self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager()
         self._last_candle_ts: Dict[str, int] = {}  # per-symbol: timestamp of last known closed candle
+
+        # Stop-loss percentages used when opening; reconciliation compares the exit price
+        # against these to decide whether a vanished position was a stop-out.
+        self.base_sl_pct: float = float(os.getenv("MMS4_BASE_SL_PCT", "0.02"))
+        self.addon_sl_pct: float = float(os.getenv("MMS4_ADDON_SL_PCT", "0.0125"))
+
+    # ── Addon ledger ────────────────────────────────────────────────────
+    # Persisted in SQLite so a daemon restart cannot forget that an addon was already
+    # filled and book a second one on the same position.
+
+    @staticmethod
+    def _position_key(entry_price: float) -> str:
+        """Identity of a position instance. A new entry price means a new position."""
+        return f"{float(entry_price):.8f}"
+
+    def _addon_count(self, symbol: str, side: str, entry_price: float) -> int:
+        try:
+            # int() also guards against a logger_db double returning a non-numeric value,
+            # which would otherwise blow up the comparison at the call site.
+            return int(self.logger_db.get_addon_count(symbol, side, self._position_key(entry_price)))
+        except Exception as e:
+            logger.warning(f"Addon ledger read failed for {symbol}/{side}: {e}")
+            return 0
+
+    def _record_addon(self, symbol: str, side: str, entry_price: float) -> int:
+        try:
+            return self.logger_db.record_addon(symbol, side, self._position_key(entry_price))
+        except Exception as e:
+            logger.warning(f"Addon ledger write failed for {symbol}/{side}: {e}")
+            return 1
+
+    def _clear_addons(self, symbol: str, side: Optional[str] = None) -> None:
+        try:
+            self.logger_db.clear_addon_state(symbol, side)
+        except Exception as e:
+            logger.warning(f"Addon ledger clear failed for {symbol}: {e}")
+
+    @property
+    def _addon_executed_symbols(self) -> set:
+        """
+        Backwards-compatible view of the persisted addon ledger.
+
+        Kept so existing callers/tests that inspect this attribute keep working; the
+        authoritative store is the position_addons table.
+        """
+        try:
+            return {row["symbol"] for row in self.logger_db.get_all_addon_state()
+                    if int(row.get("addon_count", 0)) > 0}
+        except Exception:
+            return set()
 
     @property
     def is_running(self) -> bool:
@@ -97,6 +195,142 @@ class MMS4Daemon:
         await self.executor.close()
         logger.info("MMS4Daemon stopped successfully.")
 
+    # ── Stop-loss reconciliation ────────────────────────────────────────
+
+    def reconcile_positions(
+        self,
+        target_symbol: str,
+        live_positions: List[Dict[str, Any]],
+        current_price: float
+    ) -> List[Dict[str, Any]]:
+        """
+        Compare the exchange's open positions against the snapshot from the previous cycle.
+
+        A position present last cycle but absent now was closed by the exchange — almost
+        always an exchange-side stop-loss trigger, since every intentional close the daemon
+        performs (take-profit flip, stale evacuation) clears its own snapshot first. When
+        the move against the entry reached the SL distance, the state machine is notified
+        immediately instead of waiting for the 15-minute trade_sync worker.
+
+        Snapshots live in SQLite, so this also works across a daemon restart.
+
+        Returns a list of reconciliation events (empty when nothing changed).
+        """
+        events: List[Dict[str, Any]] = []
+
+        live_by_side: Dict[str, Dict[str, Any]] = {}
+        for p in live_positions:
+            if normalize_symbol(p.get("symbol", "")) != normalize_symbol(target_symbol):
+                continue
+            contracts = _pos_contracts(p)
+            if contracts <= 0:
+                continue
+            side = _pos_side(p)
+            if side:
+                live_by_side[side] = p
+
+        try:
+            snapshots = self.logger_db.get_position_snapshots(target_symbol)
+        except Exception as e:
+            logger.warning(f"Could not read position snapshots for {target_symbol}: {e}")
+            return events
+
+        # 1. Positions that disappeared since the previous cycle
+        for snap in snapshots:
+            side = str(snap["side"]).lower()
+            if side in live_by_side:
+                continue
+
+            entry_price = float(snap["entry_price"] or 0.0)
+            exit_price = float(current_price or snap["last_price"] or 0.0)
+            if entry_price <= 0 or exit_price <= 0:
+                self.logger_db.delete_position_snapshot(target_symbol, side)
+                continue
+
+            if side == "long":
+                pnl_pct = (exit_price - entry_price) / entry_price
+            else:
+                pnl_pct = (entry_price - exit_price) / entry_price
+
+            loss_pct = -pnl_pct  # positive when the position lost money
+            # Tolerance: the stop fills at market, so allow a little slippage either way.
+            sl_threshold = self.base_sl_pct * 0.75
+            is_stop_out = loss_pct >= sl_threshold
+
+            contracts = float(snap["contracts"] or 0.0)
+            pnl_usd = pnl_pct * entry_price * contracts
+
+            logger.warning(
+                f"⟲ Reconciliation: {target_symbol} {side.upper()} disappeared from OKX "
+                f"(entry=${entry_price:,.4f} exit=${exit_price:,.4f} PnL={pnl_pct*100:+.2f}%) "
+                f"→ {'STOP-LOSS' if is_stop_out else 'closed without SL trigger'}"
+            )
+
+            try:
+                self.state_manager.record_trade(
+                    trade_id=f"recon_{target_symbol}_{side}_{int(time.time()*1000)}",
+                    symbol=target_symbol,
+                    side=side,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    amount=contracts,
+                    pnl=pnl_usd,
+                    pnl_percent=pnl_pct,
+                    is_stop_loss=is_stop_out,
+                    is_take_profit=False,
+                    sl_percent=max(loss_pct, 0.0),
+                )
+            except Exception as e:
+                logger.error(f"Failed to record reconciled trade for {target_symbol}: {e}")
+
+            self.logger_db.delete_position_snapshot(target_symbol, side)
+            self._clear_addons(target_symbol, side)
+            if self.inactivity_manager.is_tracking(target_symbol):
+                self.inactivity_manager.stop_tracking(target_symbol)
+
+            events.append({
+                "symbol": target_symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": pnl_pct,
+                "is_stop_loss": is_stop_out,
+                "new_state": self.state_manager.get_symbol_state(target_symbol).value,
+            })
+
+            if is_stop_out:
+                try:
+                    from mms4tk.hermes_webhook import HermesWebhookClient
+                    HermesWebhookClient.send_telegram(
+                        title=f"🛑 STOP-LOSS: {target_symbol} {side.upper()}",
+                        body=(
+                            f"Pozycja zamknięta przez giełdę.\n"
+                            f"- Wejście: `${entry_price:,.4f}`\n"
+                            f"- Wyjście: `${exit_price:,.4f}`\n"
+                            f"- Wynik: `{pnl_pct*100:+.2f}%`\n"
+                            f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
+                        ),
+                        priority=2,
+                        dedupe_key=f"SL_{target_symbol}_{side}_{int(entry_price)}",
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send stop-loss notification: {e}", exc_info=True)
+
+        # 2. Refresh snapshots for positions that are still open
+        for side, p in live_by_side.items():
+            try:
+                self.logger_db.save_position_snapshot(
+                    symbol=target_symbol,
+                    side=side,
+                    contracts=_pos_contracts(p),
+                    entry_price=_pos_entry_price(p),
+                    last_price=float(current_price or 0.0),
+                )
+            except Exception as e:
+                logger.warning(f"Could not persist position snapshot for {target_symbol}/{side}: {e}")
+
+        return events
+
     async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
         """
         Executes a single market evaluation cycle for a specific trading symbol.
@@ -129,7 +363,10 @@ class MMS4Daemon:
             if not isinstance(sym_state, MMS4State):
                 sym_state = MMS4State.BASE_MODE
 
-        signal: SignalResult = self.signal_engine.evaluate_signals(candles, self.state_manager)
+        # Pass the symbol so gating uses THIS symbol's state, not the primary symbol's.
+        signal: SignalResult = self.signal_engine.evaluate_signals(
+            candles, self.state_manager, symbol=target_symbol
+        )
         if target_symbol == self.symbol:
             self.last_signal = signal
 
@@ -137,6 +374,10 @@ class MMS4Daemon:
         outcome = "NO_ACTION"
         details = signal.reason or ""
         order_info: Optional[Dict[str, Any]] = None
+        # Set by whichever execution branch actually places an order; read by the
+        # notification block below. Previously the flip branch named it `new_side`, so the
+        # notification raised NameError and every TP&FLIP alert was silently swallowed.
+        order_side: str = ""
 
         # Calculate notional position value so that real cash margin spent matches exact 70/30 allocation
         notional_base_usd = self.base_trade_usd * sym_leverage
@@ -144,11 +385,11 @@ class MMS4Daemon:
 
         base_order_amount = self.executor.calculate_order_amount(target_symbol, notional_base_usd, signal.price)
         if not isinstance(base_order_amount, (int, float)):
-            base_order_amount = round(notional_base_usd / signal.price, 6) if signal.price > 0 else 0.0001
+            base_order_amount = round(notional_base_usd / signal.price, 6) if signal.price > 0 else 0.0
 
         addon_order_amount = self.executor.calculate_order_amount(target_symbol, notional_addon_usd, signal.price)
         if not isinstance(addon_order_amount, (int, float)):
-            addon_order_amount = round(notional_addon_usd / signal.price, 6) if signal.price > 0 else 0.0001
+            addon_order_amount = round(notional_addon_usd / signal.price, 6) if signal.price > 0 else 0.0
 
         # Fetch live open positions from OKX to enforce Single Position & Direction Lock Guard
         live_positions = []
@@ -157,78 +398,69 @@ class MMS4Daemon:
         except Exception as pe:
             logger.warning(f"Failed to fetch live positions for position guard check: {pe}")
 
-        target_pos_side = "short" if "SHORT" in signal.signal_type else "long"
-        matching_pos = None
-        opposite_pos = None
+        # ── Stop-loss reconciliation, before any trading decision ──
+        # Detects exchange-side closes (SL fills) and transitions the state machine now,
+        # so this cycle already trades under the corrected risk state.
+        reconciliation_events: List[Dict[str, Any]] = []
+        try:
+            reconciliation_events = self.reconcile_positions(target_symbol, live_positions, signal.price)
+        except Exception as rec_err:
+            logger.error(f"Reconciliation failed for {target_symbol}: {rec_err}", exc_info=True)
 
+        if reconciliation_events:
+            # Risk state may have just changed (BASE -> SCOUT); re-read it.
+            sym_state = self.state_manager.get_symbol_state(target_symbol)
+            sym_leverage = self.state_manager.get_symbol_leverage(target_symbol)
+            notional_base_usd = self.base_trade_usd * sym_leverage
+            notional_addon_usd = self.addon_trade_usd * sym_leverage
+            base_order_amount = self.executor.calculate_order_amount(
+                target_symbol, notional_base_usd, signal.price
+            )
+            addon_order_amount = self.executor.calculate_order_amount(
+                target_symbol, notional_addon_usd, signal.price
+            )
+
+        # Classify open positions for THIS symbol by their real side. The intended side is
+        # only known for directional signals — deriving it from signal_type alone made a
+        # NONE cycle look like a "long" intent, so an open short counted as no match and
+        # the addon guard was cleared on nearly every cycle.
+        own_positions: Dict[str, Dict[str, Any]] = {}
         for p in live_positions:
-            p_sym = p.get("symbol", "")
-            p_clean = (
-                p_sym.split(":")[0]
-                .split("-3")[0]
-                .replace("-USD_UM_XPERP", "")
-                .replace("_XPERP", "")
-                .replace("-USDC-SWAP", "")
-                .replace("-USDT-SWAP", "")
-                .replace("-USDC", "")
-                .replace("-USDT", "")
-                .replace("/USDC", "")
-                .replace("/USDT", "")
-                .replace("/USD", "")
-                .strip()
-            )
-            t_clean = (
-                target_symbol.split(":")[0]
-                .split("-3")[0]
-                .replace("-USD_UM_XPERP", "")
-                .replace("_XPERP", "")
-                .replace("-USDC-SWAP", "")
-                .replace("-USDT-SWAP", "")
-                .replace("-USDC", "")
-                .replace("-USDT", "")
-                .replace("/USDC", "")
-                .replace("/USDT", "")
-                .replace("/USD", "")
-                .strip()
-            )
-            if p_clean == t_clean:
-                contracts = float(p.get("contracts", 0.0) or p.get("info", {}).get("pos", 0.0) or 0.0)
-                if contracts > 0:
-                    p_side = str(p.get("side") or p.get("info", {}).get("posSide") or "").lower()
-                    if p_side == target_pos_side:
-                        matching_pos = p
-                    else:
-                        opposite_pos = p
+            if normalize_symbol(p.get("symbol", "")) != normalize_symbol(target_symbol):
+                continue
+            if _pos_contracts(p) <= 0:
+                continue
+            side = _pos_side(p)
+            if side:
+                own_positions[side] = p
 
-        existing_pos = matching_pos or opposite_pos
+        if "SHORT" in signal.signal_type:
+            target_pos_side = "short"
+        elif "LONG" in signal.signal_type:
+            target_pos_side = "long"
+        else:
+            target_pos_side = ""  # no directional intent this cycle
+
+        matching_pos = own_positions.get(target_pos_side) if target_pos_side else None
+        opposite_pos = None
+        if target_pos_side:
+            opposite_pos = own_positions.get("short" if target_pos_side == "long" else "long")
+
         existing_contracts = 0.0
         existing_notional = 0.0
         existing_side = ""
 
-        if matching_pos is not None:
-            existing_contracts = float(matching_pos.get("contracts", 0.0) or matching_pos.get("info", {}).get("pos", 0.0) or 0.0)
-            existing_side = target_pos_side
-            raw_notional = float(matching_pos.get("notional") or matching_pos.get("notional_usd") or matching_pos.get("info", {}).get("notionalUsd") or 0.0)
-            if raw_notional <= 0 and signal.price > 0:
-                ct_size = float(matching_pos.get("contractSize", 0.0) or matching_pos.get("info", {}).get("ctVal", 0.0) or 0.0)
-                if ct_size <= 0:
-                    ct_size = 0.0001 if "BTC" in target_symbol else 1.0
-                raw_notional = existing_contracts * ct_size * signal.price
-            existing_notional = raw_notional
-        elif opposite_pos is not None:
-            existing_contracts = float(opposite_pos.get("contracts", 0.0) or opposite_pos.get("info", {}).get("pos", 0.0) or 0.0)
-            existing_side = "short" if target_pos_side == "long" else "long"
-            raw_notional = float(opposite_pos.get("notional") or opposite_pos.get("notional_usd") or opposite_pos.get("info", {}).get("notionalUsd") or 0.0)
-            if raw_notional <= 0 and signal.price > 0:
-                ct_size = float(opposite_pos.get("contractSize", 0.0) or opposite_pos.get("info", {}).get("ctVal", 0.0) or 0.0)
-                if ct_size <= 0:
-                    ct_size = 0.0001 if "BTC" in target_symbol else 1.0
-                raw_notional = existing_contracts * ct_size * signal.price
-            existing_notional = raw_notional
+        ref_pos = matching_pos or opposite_pos
+        if ref_pos is not None:
+            existing_contracts = _pos_contracts(ref_pos)
+            existing_side = _pos_side(ref_pos)
+            existing_notional = _pos_notional(ref_pos, signal.price, target_symbol)
 
-        if matching_pos is None:
-            # Clear addon lock for this direction if no matching position exists
-            self._addon_executed_symbols.discard(target_symbol)
+        # Addon ledger housekeeping: only drop the ledger when the symbol genuinely has no
+        # open position on that side. Reconciliation already clears it on a stop-out.
+        for ledger_side in ("long", "short"):
+            if ledger_side not in own_positions:
+                self._clear_addons(target_symbol, ledger_side)
 
         # ────────────────────────────────────────────────────────────────
         # STALE POSITION MANAGEMENT (MMS4 Inactivity Manager)
@@ -236,10 +468,12 @@ class MMS4Daemon:
         # and executes protective Split/Close actions autonomously.
         # ────────────────────────────────────────────────────────────────
         try:
-            # Compute current ATR from closed candles
+            # Compute current ATR from CLOSED candles only — candles[-1] is still forming,
+            # so including it makes the stagnation threshold repaint within the candle.
             current_atr = 0.0
-            if len(candles) >= 20:
-                tma_df = TMAIndicator.calculate(candles, IndicatorParams())
+            closed_candles = candles[:-1] if len(candles) > 1 else candles
+            if len(closed_candles) >= 20:
+                tma_df = TMAIndicator.calculate(closed_candles, IndicatorParams())
                 if not tma_df.empty and "atr" in tma_df.columns:
                     last_valid_atr = tma_df["atr"].dropna()
                     if len(last_valid_atr) > 0:
@@ -262,27 +496,23 @@ class MMS4Daemon:
             except Exception:
                 pass
 
-            # Determine which position (if any) is active for this symbol
-            active_pos = matching_pos or opposite_pos
+            # Determine which position (if any) is active for this symbol.
+            # Independent of the signal direction: a position must be supervised even on
+            # cycles where the engine produced no signal at all.
+            active_pos = matching_pos or opposite_pos or next(iter(own_positions.values()), None)
             active_side = ""
             active_entry_price = 0.0
             if active_pos is not None:
-                active_contracts = float(active_pos.get("contracts", 0) or active_pos.get("info", {}).get("pos", 0) or 0)
-                if active_contracts > 0:
-                    active_side = str(active_pos.get("side") or active_pos.get("info", {}).get("posSide") or "").lower()
-                    active_entry_price = float(
-                        active_pos.get("entryPrice") or
-                        active_pos.get("info", {}).get("avgPx") or
-                        active_pos.get("info", {}).get("openAvgPx") or 0.0
-                    )
+                if _pos_contracts(active_pos) > 0:
+                    active_side = _pos_side(active_pos)
+                    active_entry_price = _pos_entry_price(active_pos)
 
                     # Start tracking if not yet tracked
                     if not self.inactivity_manager.is_tracking(target_symbol) and active_entry_price > 0:
-                        import time as _time
                         self.inactivity_manager.track_position(
                             inst_id=target_symbol,
                             entry_price=active_entry_price,
-                            entry_time=_time.time(),
+                            entry_time=time.time(),
                             side=active_side,
                             atr=current_atr,
                         )
@@ -322,17 +552,41 @@ class MMS4Daemon:
                             symbol=target_symbol, side=t_side,
                             reduction_pct=0.50, reason="STALE_SPLIT_50"
                         )
-                        outcome = "STALE_SPLIT_50"
-                        details = (
-                            f"Inactivity Manager: Split 50% of {t_side.upper()} position for {target_symbol} "
-                            f"after {t_candles} candles stagnation. ATR=${current_atr:,.2f}"
-                        )
+                        status = (reduce_result or {}).get("status", "")
+                        if status == "no_position":
+                            # Nothing left on the exchange — stop supervising instead of
+                            # re-issuing the same reduction every cycle.
+                            self.inactivity_manager.stop_tracking(target_symbol)
+                            outcome = "STALE_SPLIT_50_NOOP"
+                            details = (
+                                f"Inactivity Manager: no {t_side.upper()} position left on OKX for "
+                                f"{target_symbol}; tracking stopped."
+                            )
+                        elif status == "not_divisible":
+                            outcome = "STALE_SPLIT_50_HELD"
+                            details = (
+                                f"Inactivity Manager: {target_symbol} {t_side.upper()} cannot be halved "
+                                f"({reduce_result.get('contracts')} contract(s)) — position held intact."
+                            )
+                        else:
+                            outcome = "STALE_SPLIT_50"
+                            details = (
+                                f"Inactivity Manager: Split 50% of {t_side.upper()} position for {target_symbol} "
+                                f"after {t_candles} candles stagnation. ATR=${current_atr:,.2f}"
+                            )
                     elif stale_action in (StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE, StaleAction.FORCE_CLOSE):
                         reduce_result = await self.executor.reduce_position(
                             symbol=target_symbol, side=t_side,
                             reduction_pct=1.0, reason=stale_action.value
                         )
                         self.inactivity_manager.stop_tracking(target_symbol)
+                        # The position is intentionally gone: drop its snapshot so the next
+                        # cycle's reconciliation does not mistake this for a stop-out.
+                        try:
+                            self.logger_db.delete_position_snapshot(target_symbol, t_side)
+                        except Exception:
+                            pass
+                        self._clear_addons(target_symbol, t_side)
                         outcome = stale_action.value
                         details = (
                             f"Inactivity Manager: {stale_action.value} for {target_symbol} {t_side.upper()} "
@@ -374,10 +628,41 @@ class MMS4Daemon:
                         "state": sym_state.value,
                         "leverage": sym_leverage,
                         "order": None,
+                        "reconciliation": reconciliation_events,
                     }
         except Exception as inact_err:
             logger.error(f"Inactivity Manager error for {target_symbol}: {inact_err}")
 
+
+        # ────────────────────────────────────────────────────────────────
+        # HARD SIGNAL GATE
+        # analytics.py may return a fully-formed signal_type while marking it
+        # is_allowed=False (directional_bias, risk_profile, SCOUT_MODE, ambiguous bar).
+        # Dispatching on signal_type alone ignored that veto entirely.
+        # ────────────────────────────────────────────────────────────────
+        if signal.signal_type != "NONE" and not signal.is_allowed:
+            outcome = f"BLOCKED_{signal.signal_type}"
+            details = f"Signal vetoed by analytics (is_allowed=False): {signal.reason}"
+            logger.info(f"🚫 {target_symbol}: {details}")
+            self.logger_db.log_cycle(
+                symbol=target_symbol,
+                signal_type=signal.signal_type,
+                state=sym_state.value,
+                leverage=sym_leverage,
+                price=signal.price,
+                outcome=outcome,
+                details=details,
+            )
+            return {
+                "symbol": target_symbol,
+                "timestamp": now_iso,
+                "signal_type": signal.signal_type,
+                "outcome": outcome,
+                "state": sym_state.value,
+                "leverage": sym_leverage,
+                "order": None,
+                "reconciliation": reconciliation_events,
+            }
 
         if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             if matching_pos is not None and existing_contracts > 0:
@@ -401,19 +686,52 @@ class MMS4Daemon:
                 )
 
                 try:
-                    # 1. Close existing opposite position
-                    await self.executor.reduce_position(
+                    # 1. Close existing opposite position and VERIFY it actually closed.
+                    close_result = await self.executor.reduce_position(
                         symbol=target_symbol,
                         side=side_to_close,
                         reduction_pct=1.0,
                         reason=f"TAKE_PROFIT_{signal.signal_type}"
                     )
-                    self.inactivity_manager.stop_tracking(target_symbol)
-                    if target_symbol in self._addon_executed_symbols:
-                        self._addon_executed_symbols.discard(target_symbol)
+                    if not self._close_succeeded(close_result):
+                        close_status = (close_result or {}).get("status", "unknown")
+                        # The close is not confirmed. Re-query the exchange before deciding —
+                        # opening the opposite leg on top of a live position would leave two
+                        # hedged positions instead of a flip.
+                        if await self._position_still_open(target_symbol, side_to_close):
+                            raise RuntimeError(
+                                f"Take-Profit close reported '{close_status}' and {target_symbol} "
+                                f"{side_to_close.upper()} is still open on OKX — flip aborted to "
+                                f"avoid stacking an opposing leg."
+                            )
+                        logger.info(
+                            f"Take-Profit close for {target_symbol} returned '{close_status}' but the "
+                            f"position is gone on OKX; proceeding with the flip."
+                        )
 
-                    # 2. Transition state manager on TP hit (resets SCOUT_MODE to BASE_MODE)
-                    self.state_manager.on_take_profit_hit(target_symbol)
+                    self.inactivity_manager.stop_tracking(target_symbol)
+                    self._clear_addons(target_symbol, side_to_close)
+                    try:
+                        self.logger_db.delete_position_snapshot(target_symbol, side_to_close)
+                    except Exception:
+                        pass
+
+                    # 2. Book the realized take-profit and transition state (SCOUT -> BASE)
+                    try:
+                        self.state_manager.record_trade(
+                            trade_id=f"tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}",
+                            symbol=target_symbol,
+                            side=side_to_close,
+                            entry_price=active_entry_price,
+                            exit_price=signal.price,
+                            amount=existing_contracts,
+                            pnl=pnl_pct * active_entry_price * existing_contracts,
+                            pnl_percent=pnl_pct,
+                            is_take_profit=True,
+                        )
+                    except Exception as rec_err:
+                        logger.error(f"Failed to record take-profit trade for {target_symbol}: {rec_err}")
+                        self.state_manager.on_take_profit_hit(target_symbol)
 
                     # 3. Emit Take Profit webhook event & Telegram
                     try:
@@ -432,78 +750,129 @@ class MMS4Daemon:
                         logger.warning(f"Failed to emit take profit event for {target_symbol}: {whe}")
 
                     # 4. Open new position in the flipped direction
-                    new_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
-                    order_info = await self.executor.execute_order(
-                        symbol=target_symbol,
-                        side=new_side,
-                        amount=base_order_amount,
-                        stop_loss_pct=0.02,
-                        leverage=sym_leverage,
-                        price=signal.price
-                    )
-                    outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"
-                    details = (
-                        f"Take Profit on opposite TMA Band for {target_symbol}: Closed {side_to_close.upper()} "
-                        f"({existing_contracts} contracts, Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL: {pnl_str}). "
-                        f"Flipped to new {signal.signal_type} base position (${self.base_trade_usd:.2f} USD margin, SL=2%)."
-                    )
+                    if base_order_amount <= 0:
+                        outcome = f"TAKE_PROFIT_NO_FLIP_{signal.signal_type}"
+                        details = (
+                            f"Take Profit on opposite TMA Band for {target_symbol}: Closed "
+                            f"{side_to_close.upper()} (PnL: {pnl_str}). New {signal.signal_type} entry "
+                            f"skipped — ${notional_base_usd:.2f} notional does not fit a whole contract "
+                            f"within budget."
+                        )
+                    else:
+                        order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                        order_info = await self.executor.execute_order(
+                            symbol=target_symbol,
+                            side=order_side,
+                            amount=base_order_amount,
+                            stop_loss_pct=self.base_sl_pct,
+                            leverage=sym_leverage,
+                            price=signal.price
+                        )
+                        outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"
+                        details = (
+                            f"Take Profit on opposite TMA Band for {target_symbol}: Closed {side_to_close.upper()} "
+                            f"({existing_contracts} contracts, Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL: {pnl_str}). "
+                            f"Flipped to new {signal.signal_type} base position "
+                            f"(${self.base_trade_usd:.2f} USD margin, SL={self.base_sl_pct*100:.2f}%)."
+                        )
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute TP & Flip for {target_symbol}: {str(e)}"
+                    logger.error(details, exc_info=True)
+            elif base_order_amount <= 0:
+                outcome = f"SKIPPED_{signal.signal_type}"
+                details = (
+                    f"{signal.signal_type} for {target_symbol} skipped: ${notional_base_usd:.2f} notional "
+                    f"(margin ${self.base_trade_usd:.2f} x{sym_leverage}) does not fit a whole contract "
+                    f"within the allocation budget. Risk is reduced by NOT trading, never by oversizing."
+                )
+                logger.info(f"⊘ {details}")
             else:
-                side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
                 try:
                     order_info = await self.executor.execute_order(
                         symbol=target_symbol,
-                        side=side,
+                        side=order_side,
                         amount=base_order_amount,
-                        stop_loss_pct=0.02,
+                        stop_loss_pct=self.base_sl_pct,
                         leverage=sym_leverage,
                         price=signal.price
                     )
                     outcome = f"EXECUTED_{signal.signal_type}"
-                    details = f"Executed {signal.signal_type} base order for {target_symbol} (${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) with SL=2% (leverage x{sym_leverage})"
+                    details = (
+                        f"Executed {signal.signal_type} base order for {target_symbol} "
+                        f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
+                        f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                    )
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute order for {target_symbol}: {str(e)}"
+                    logger.error(details, exc_info=True)
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
-            # Addon is considered already executed if:
-            # 1. Memory lock flag is set
-            # 2. OR existing contracts exceed base order amount by >= 25% (e.g. 4 base -> 5+ contracts)
-            # 3. OR existing notional USD exceeds 80% of total allocation notional (e.g. >= $25 USD)
-            is_addon_done = (
-                target_symbol in self._addon_executed_symbols or
-                existing_contracts >= (base_order_amount + max(1.0, 0.5 * addon_order_amount)) or
-                existing_notional >= (notional_base_usd + 0.3 * notional_addon_usd)
+            # Single Addon Guard: an explicit, persisted per-position counter.
+            # The previous heuristic ("contracts exceed base by >= 1") classified any
+            # position slightly larger than one base unit as already-added and blocked
+            # legitimate first addons, while the in-memory lock was lost on restart.
+            match_entry = _pos_entry_price(matching_pos) if matching_pos is not None else 0.0
+            addons_done = (
+                self._addon_count(target_symbol, target_pos_side, match_entry)
+                if matching_pos is not None else 0
             )
+            # Hard cap on total committed margin, independent of the counter.
+            margin_cap_usd = self.max_margin_usd * sym_leverage
+            would_exceed_cap = (existing_notional + notional_addon_usd) > margin_cap_usd * (1.0 + 0.10)
 
             if sym_state != MMS4State.BASE_MODE:
                 outcome = f"BLOCKED_{signal.signal_type}"
                 details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
             elif matching_pos is None or existing_contracts <= 0:
                 outcome = f"BLOCKED_{signal.signal_type}"
-                details = f"High Risk Add {signal.signal_type} blocked for {target_symbol} because no matching {target_pos_side.upper()} base position exists (Active: {existing_side.upper() if existing_side else 'NONE'})."
-            elif is_addon_done:
+                details = (
+                    f"High Risk Add {signal.signal_type} blocked for {target_symbol} because no matching "
+                    f"{target_pos_side.upper()} base position exists "
+                    f"(Active: {existing_side.upper() if existing_side else 'NONE'})."
+                )
+            elif addons_done >= 1:
                 outcome = f"SKIPPED_{signal.signal_type}"
-                details = f"High Risk Add already executed for {target_symbol} (Current: {existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Addon Guard active."
+                details = (
+                    f"High Risk Add already executed {addons_done}x on this {target_pos_side.upper()} "
+                    f"position for {target_symbol} (entry=${match_entry:,.4f}). Single Addon Guard active."
+                )
+            elif would_exceed_cap:
+                outcome = f"SKIPPED_{signal.signal_type}"
+                details = (
+                    f"High Risk Add for {target_symbol} skipped: existing ${existing_notional:.2f} + "
+                    f"addon ${notional_addon_usd:.2f} would exceed the ${margin_cap_usd:.2f} notional cap."
+                )
+            elif addon_order_amount <= 0:
+                outcome = f"SKIPPED_{signal.signal_type}"
+                details = (
+                    f"High Risk Add for {target_symbol} skipped: ${notional_addon_usd:.2f} notional does "
+                    f"not fit a whole contract within budget."
+                )
             else:
-                side = "SELL" if "SHORT" in signal.signal_type else "BUY"
+                order_side = "SELL" if "SHORT" in signal.signal_type else "BUY"
                 try:
                     order_info = await self.executor.execute_order(
                         symbol=target_symbol,
-                        side=side,
+                        side=order_side,
                         amount=addon_order_amount,
-                        stop_loss_pct=0.0125,
+                        stop_loss_pct=self.addon_sl_pct,
                         leverage=sym_leverage,
                         price=signal.price
                     )
-                    self._addon_executed_symbols.add(target_symbol)
+                    self._record_addon(target_symbol, target_pos_side, match_entry)
                     outcome = f"EXECUTED_{signal.signal_type}"
-                    details = f"Executed High Risk Add order for {target_symbol} (${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) with composite SL=1.25% (leverage x{sym_leverage})"
+                    details = (
+                        f"Executed High Risk Add order for {target_symbol} "
+                        f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
+                        f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                    )
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
+                    logger.error(details, exc_info=True)
 
         # 4. Log cycle outcome for specific symbol
         self.logger_db.log_cycle(
@@ -526,10 +895,11 @@ class MMS4Daemon:
                 body = (
                     f"Otwarto nową pozycję na OKX dla pary **{clean_sym}**!\n"
                     f"- Sygnał: `{signal.signal_type}`\n"
-                    f"- Strona: `{side}`\n"
+                    f"- Strona: `{order_side}`\n"
                     f"- Cena wejścia: `${signal.price:,.2f}`\n"
-                    f"- Dźwignia: `{sym_leverage:.0f}x`\n"
-                    f"- Stop-Loss: `{2.0 if 'BASE' in signal.signal_type else 1.25}%`\n"
+                    f"- Dźwignia: `{sym_leverage}x`\n"
+                    f"- Stop-Loss: "
+                    f"`{(self.base_sl_pct if 'BASE' in signal.signal_type else self.addon_sl_pct)*100:.2f}%`\n"
                     f"- Stan strategii: `{sym_state.value}`"
                 )
                 wh_client.emit_event(HermesWebhookEvent(
@@ -547,7 +917,9 @@ class MMS4Daemon:
                 )
                 logger.info(f"Emitted Telegram webhook notification for position opening: {target_symbol}")
             except Exception as whe:
-                logger.warning(f"Failed to emit position opening webhook notification: {whe}")
+                logger.warning(
+                    f"Failed to emit position opening webhook notification: {whe}", exc_info=True
+                )
 
         summary = self.state_manager.get_summary()
         self.logger_db.log_state_metrics(
@@ -565,8 +937,41 @@ class MMS4Daemon:
             "outcome": outcome,
             "state": sym_state.value,
             "leverage": sym_leverage,
-            "order": order_info
+            "order": order_info,
+            "reconciliation": reconciliation_events,
         }
+
+    @staticmethod
+    def _close_succeeded(result: Optional[Dict[str, Any]]) -> bool:
+        """
+        Did reduce_position actually place a closing order?
+
+        An accepted market order carries an exchange id (or a terminal status). The
+        sentinel statuses mean nothing was sent — 'no_position' in particular used to be
+        ignored, letting the flip open an opposing leg while the original stayed open.
+        """
+        if not result:
+            return False
+        status = str(result.get("status", "")).lower()
+        if status in ("no_position", "not_divisible", "error", "rejected"):
+            return False
+        return bool(result.get("id")) or status in ("executed", "closed", "filled", "live")
+
+    async def _position_still_open(self, symbol: str, side: str) -> bool:
+        """Re-query OKX to confirm a position really closed before acting on that assumption."""
+        try:
+            positions = await self.executor.fetch_positions()
+        except Exception as e:
+            # Unknown state — treat as "still open" so the caller aborts rather than
+            # stacking an opposing position on top of one that may still exist.
+            logger.warning(f"Could not verify position closure for {symbol}/{side}: {e}")
+            return True
+        for p in positions:
+            if normalize_symbol(p.get("symbol", "")) != normalize_symbol(symbol):
+                continue
+            if _pos_side(p) == side.lower() and _pos_contracts(p) > 0:
+                return True
+        return False
 
     async def execute_cycle(self) -> Dict[str, Any]:
         """Executes a single market evaluation cycle for primary symbol."""
@@ -632,5 +1037,15 @@ class MMS4Daemon:
             "last_cycle_timestamp": self.last_cycle_timestamp,
             "processed_cycles": self.processed_cycles,
             "inactivity_manager": self.inactivity_manager.get_status(),
+            "addon_ledger": self._safe_addon_ledger(),
+            "base_sl_pct": self.base_sl_pct,
+            "addon_sl_pct": self.addon_sl_pct,
         }
+
+    def _safe_addon_ledger(self) -> List[Dict[str, Any]]:
+        """Persisted addon counters, for dashboard introspection."""
+        try:
+            return self.logger_db.get_all_addon_state()
+        except Exception:
+            return []
 
