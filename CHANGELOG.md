@@ -27,9 +27,15 @@ Full remediation of the 2026-08-16 quantitative audit (`docs/AUDIT_MMS4_2026-08-
 - 📐 Symbol tiles gained a **Rozmiar (%)** field next to leverage — leverage alone no longer describes risk posture — plus the resolved base notional and an **ADD ✓** badge when the 30% add is already used.
 - 📉 Max Drawdown labelled in USD, with the percentage shown when a starting balance makes it meaningful.
 
+### 🐛 Fixes Found Post-Deploy
+- 🔑 **Addon ledger keying** (`74d0e2b`): the counter was keyed on entry price, but filling an addon *moves* the position's average entry — the key stopped matching and the guard would have permitted a second addon. Caught on the live account 10 minutes after deploy. Now keyed on `(symbol, side)`, cleared only when the side goes flat.
+- 📐 **Partial reduction rounding** (`8eed8ac`): `round()` closed 2 of 3 contracts (67%) for a "50%" split — worse, and irreversible, versus the 33% the audit flagged. Reverted to `floor()`; the real defect was `max(1, …)` turning a partial into a full close.
+- 🧱 **Build** (`ddf7d6c`): a stray `node_modules` symlink reached the repo and broke the image build — `.gitignore` used `node_modules/`, which matches directories but not symlinks.
+
 ### 🧪 Testing
 - `tests/test_audit_remediation.py` — 57 regression tests, one per audit finding.
 - `tests/audit/` — 5 executable audit scripts, **61/61 assertions PASS** (25/61 before remediation), runnable inside the production container.
+- 📄 Full write-up: [`docs/REFACTORING_REPORT_2026-08-16.md`](docs/REFACTORING_REPORT_2026-08-16.md).
 
 ---
 
