@@ -4,6 +4,35 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.26.0] - 2026-08-16
+
+### 🛡️ Audit Remediation — Risk Engine (P0/P1/P2)
+Full remediation of the 2026-08-16 quantitative audit (`docs/AUDIT_MMS4_2026-08-16.md`).
+
+- 🔴 **P0-1 — Stop-Loss Reconciliation**: `SCOUT_MODE` was unreachable — `on_stop_loss_hit()` had no production caller, so a stop-out never reduced risk. `daemon.reconcile_positions()` now diffs live OKX positions against a SQLite snapshot (`position_snapshots`) every cycle and books the trade the moment a position disappears beyond the SL distance. Survives daemon restarts.
+- 🔴 **P0-2 — Impulse Negation Loop**: `_check_impulse_negation` never latched `is_split`, re-issuing `SPLIT_50` every 15s and draining a position in ~3 cycles. The rule now latches, with an action cooldown and a `closing` flag.
+- 🟠 **P1** — zero-price tracker poisoning; base entries now require `close < open`; addon guard keyed on the position (persisted, restart-safe); per-symbol signal state; `is_allowed` enforced; budget-respecting sizing; atomic TP flip; `/api/v1/settings/update` fixed; equity curve & round-trip trade pairing.
+- 🟡 **P2** — non-repainting HTF/ATR, 2.5×ATR volatility zones, reachable `FORCE_CLOSE_BE`, stale-flag reset, MDD in USD **and** %, no KPI truncation, shared `normalize_symbol()`, `reduceOnly` on reductions.
+
+### 📐 Scalable SCOUT_MODE Sizing (Variant A)
+- 🎯 **Risk cut by SIZE, not leverage**: OKX rejects leverage below 1x, so the old `0.1x` was clamped to `1x` on the exchange while the notional it implied fell under the venue minimum — the entry was skipped and the symbol could never leave SCOUT_MODE.
+- ⚙️ **New parameters**: `MMS4_SCOUT_LEVERAGE` (1.0), `MMS4_SCOUT_SIZE_MULT` (0.3), `MMS4_BASE_ALLOCATION` / `MMS4_ADDON_ALLOCATION`. Legacy `MMS4_LEVERAGE_SCOUT` still honored.
+- 📊 **`daemon.plan_allocation()`** is the single sizing authority: `margin = max_margin_usd × allocation × size_mult`, `notional = margin × leverage`. Reduction versus BASE is `base_leverage / (SCOUT_LEVERAGE × SCOUT_SIZE_MULT)` — **10× at any capital level**, verified from $10 to $12,345.67.
+- 🏦 **Dynamic exchange minimums**: `min_notional_for()` reads `limits.cost.min` (or the smallest lot × price) from CCXT instead of a hardcoded $7. Measured live: BTC $6.30, ETH $1.88, SOL $0.75, ICP $2.28.
+- ⊘ **Below-minimum is a SKIP, not an ERROR**: new `BelowMinimumNotional` exception, so standing down never reads as a malfunction in the cycle log.
+
+### 📊 Dashboard v0.26.0
+- 🔌 Now consumes `GET /api/v1/daemon/status` — per-symbol sizing is read from the engine instead of a hardcoded fallback list.
+- 🛡️ **SCOUT_MODE banner** listing affected pairs with their reduced notional and reduction factor; a pair only leaves this state on a take-profit or a manual release, so it is surfaced prominently.
+- 📐 Symbol tiles gained a **Rozmiar (%)** field next to leverage — leverage alone no longer describes risk posture — plus the resolved base notional and an **ADD ✓** badge when the 30% add is already used.
+- 📉 Max Drawdown labelled in USD, with the percentage shown when a starting balance makes it meaningful.
+
+### 🧪 Testing
+- `tests/test_audit_remediation.py` — 57 regression tests, one per audit finding.
+- `tests/audit/` — 5 executable audit scripts, **61/61 assertions PASS** (25/61 before remediation), runnable inside the production container.
+
+---
+
 ## 🚀 [0.25.0] - 2026-08-15
 
 ### 💰 MMS4 Opposite TMA Band Take Profit & Position Flip

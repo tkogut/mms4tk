@@ -15,8 +15,9 @@ export default function App() {
   const [tradesHistory, setTradesHistory] = useState([]);
   const [kanbanCards, setKanbanCards] = useState([]);
   const [openPositions, setOpenPositions] = useState([]);
+  const [daemonData, setDaemonData] = useState(null);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.25.0');
+  const [appVersion, setAppVersion] = useState('0.26.0');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
@@ -59,7 +60,13 @@ export default function App() {
         setOpenPositions(data.positions || []);
       }
 
-      // 5. Fetch kanban
+      // 5. Fetch daemon status — per-symbol sizing plan, risk state and addon ledger
+      const daemonRes = await fetch('/api/v1/daemon/status');
+      if (daemonRes.ok) {
+        setDaemonData(await daemonRes.json());
+      }
+
+      // 6. Fetch kanban
       const kanbanRes = await fetch('/api/v1/hermes/kanban');
       if (kanbanRes.ok) {
         const data = await kanbanRes.json();
@@ -126,6 +133,7 @@ export default function App() {
             statsData={statsData} 
             kanbanCards={kanbanCards} 
             openPositions={openPositions}
+            daemonData={daemonData}
             onRefresh={fetchDashboardData} 
           />
         )}
