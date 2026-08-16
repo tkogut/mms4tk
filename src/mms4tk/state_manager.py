@@ -49,7 +49,10 @@ DEFAULT_BASE_LEVERAGE: float = 1.0
 # Against BASE (max_margin * BASE_ALLOCATION * base_leverage) the notional ratio is
 # SCOUT_SIZE_MULT * SCOUT_LEVERAGE / base_leverage — independent of account size.
 # At the defaults (0.3 * 1.0 / 3.0) that is a 10x reduction at ANY capital level.
-SCOUT_LEVERAGE: float = float(os.getenv("MMS4_SCOUT_LEVERAGE", "1.0"))
+# MMS4_LEVERAGE_SCOUT is the pre-rename name; honored so an existing .env keeps working.
+SCOUT_LEVERAGE: float = float(
+    os.getenv("MMS4_SCOUT_LEVERAGE", os.getenv("MMS4_LEVERAGE_SCOUT", "1.0"))
+)
 SCOUT_SIZE_MULT: float = float(os.getenv("MMS4_SCOUT_SIZE_MULT", "0.3"))
 
 # Split of the per-symbol margin cap between the base entry and the high-risk add.

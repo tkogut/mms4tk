@@ -727,3 +727,63 @@ def test_no_hardcoded_dollar_limits_in_sizing_path():
     src = inspect.getsource(oe.OKXExecutor.calculate_order_amount)
     src += inspect.getsource(oe.OKXExecutor._fit_contracts)
     assert "7.0" not in src and "7.00" not in src, "sizing must not embed a cash minimum"
+
+
+def test_below_minimum_is_a_skip_not_an_error(db):
+    """
+    Standing down because the size is under the venue minimum is a correct decision.
+
+    It must be logged as SKIPPED_, not ERROR_: in SCOUT_MODE at a small cap this path is
+    hit on every 15s cycle, and an ERROR_ outcome reads as a malfunction to both an
+    operator and any alerting built on the cycle log.
+    """
+    from mms4tk.analytics import SignalResult
+    from mms4tk.okx_executor import BelowMinimumNotional
+
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[])
+    ex.calculate_order_amount = MagicMock(return_value=0.00003)  # within budget
+    ex.execute_order = AsyncMock(side_effect=BelowMinimumNotional("target below minimum"))
+
+    d, _ = make_daemon(db, ex, SignalResult(signal_type="BASE_LONG", price=63_000.0,
+                                            stop_loss=61_740.0, leverage=1.0),
+                       state=MMS4State.SCOUT_MODE)
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+    assert res["outcome"] == "SKIPPED_BASE_LONG"
+    assert not res["outcome"].startswith("ERROR_")
+
+
+def test_exchange_minimum_gates_every_sizing_path():
+    """
+    The minimum check lives in calculate_order_amount, so it applies to the whole-contract
+    branch too — not only to execute_order's fractional recalculation path.
+    """
+    ex = OKXExecutor.__new__(OKXExecutor)
+
+    class FakeExchange:
+        markets = {"Z/USD:USD": {"limits": {"cost": {"min": 50.0}, "amount": {"min": 1.0}},
+                                 "contractSize": 1.0, "swap": True, "type": "swap"}}
+        def market(self, s):
+            return self.markets[s]
+        def amount_to_precision(self, s, a):
+            return str(a)
+
+    ex.exchange = FakeExchange()
+    # Contract branch, target under the venue floor -> refuse to size.
+    assert ex.calculate_order_amount("Z/USD:USD", 10.0, 100.0) == 0.0
+    # Comfortably above it -> normal sizing.
+    assert ex.calculate_order_amount("Z/USD:USD", 100.0, 100.0) > 0
+
+
+def test_legacy_scout_leverage_env_name_still_honored(monkeypatch):
+    """A .env still using the pre-rename MMS4_LEVERAGE_SCOUT must keep working."""
+    import importlib
+    monkeypatch.delenv("MMS4_SCOUT_LEVERAGE", raising=False)
+    monkeypatch.setenv("MMS4_LEVERAGE_SCOUT", "2.5")
+    import mms4tk.state_manager as sm_mod
+    importlib.reload(sm_mod)
+    try:
+        assert sm_mod.SCOUT_LEVERAGE == 2.5
+    finally:
+        monkeypatch.delenv("MMS4_LEVERAGE_SCOUT", raising=False)
+        importlib.reload(sm_mod)

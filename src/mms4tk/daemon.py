@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 from mms4tk.state_manager import (
     MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION,
 )
-from mms4tk.okx_executor import OKXExecutor, normalize_symbol
+from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
@@ -872,6 +872,12 @@ class MMS4Daemon:
                         f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
                         f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
                     )
+                except BelowMinimumNotional as e:
+                    # Not a failure: the intended size is under the venue's minimum, so
+                    # the correct action is to stand down rather than trade bigger.
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
+                    logger.info(f"⊘ {details}")
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute order for {target_symbol}: {str(e)}"
@@ -937,6 +943,10 @@ class MMS4Daemon:
                         f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
                         f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
                     )
+                except BelowMinimumNotional as e:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"High Risk Add for {target_symbol} skipped — {e}"
+                    logger.info(f"⊘ {details}")
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"

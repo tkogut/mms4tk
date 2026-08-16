@@ -20,6 +20,16 @@ from mms4tk.analytics import Candle
 
 logger = logging.getLogger("mms4tk.okx_executor")
 
+
+class BelowMinimumNotional(ValueError):
+    """
+    The intended order value is under the venue's minimum for that instrument.
+
+    Deliberately its own type: this is a correct decision not to trade (risk was reduced
+    below what the exchange will accept), not a malfunction. Callers classify it as a
+    skip so it never shows up as an ERROR_ outcome once per cycle.
+    """
+
 # Last-resort floor used only when the exchange exposes no limits for an instrument.
 # The real minimum is read per-symbol from CCXT market metadata — see min_notional_for().
 # Set MMS4_MIN_NOTIONAL_USD to override the fallback; leave unset to rely on the exchange.
@@ -337,6 +347,17 @@ class OKXExecutor:
         if price <= 0 or target_usd <= 0:
             return 0.0
 
+        # Exchange minimum applies to every sizing path, including the whole-contract
+        # branch. Checking it only inside execute_order's recalculation block left
+        # contract-symbol configurations ungated.
+        min_notional = self.min_notional_for(symbol, price)
+        if target_usd < min_notional:
+            logger.info(
+                f"Sizing skipped for {symbol}: target ${target_usd:,.2f} is below the "
+                f"exchange minimum ${min_notional:,.2f} for this instrument."
+            )
+            return 0.0
+
         is_contract_symbol = (
             ":" in symbol or 
             "-" in symbol or 
@@ -478,7 +499,7 @@ class OKXExecutor:
             est_usd = amount * ref_price
             min_notional = self.min_notional_for(target_symbol, ref_price)
             if est_usd < min_notional:
-                raise ValueError(
+                raise BelowMinimumNotional(
                     f"Order for {target_symbol} skipped: target ${est_usd:,.2f} is below the "
                     f"exchange minimum ${min_notional:,.2f}. Reduce risk by not trading, "
                     f"never by trading larger than intended."
