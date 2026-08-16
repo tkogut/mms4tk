@@ -162,6 +162,10 @@ class DaemonStatusResponse(BaseModel):
     last_cycle_timestamp: Optional[str] = None
     processed_cycles: int
     inactivity_manager: Optional[Dict[str, Any]] = None
+    # Persisted High-Risk-Add counters, one row per open (symbol, side).
+    addon_ledger: Optional[List[Dict[str, Any]]] = None
+    base_sl_pct: Optional[float] = None
+    addon_sl_pct: Optional[float] = None
 
 
 class CalculateRequest(BaseModel):

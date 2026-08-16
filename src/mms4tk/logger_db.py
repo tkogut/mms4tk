@@ -487,24 +487,28 @@ class LoggerDB:
 
     # ── Addon ledger (survives daemon restarts) ─────────────────────────
 
-    def get_addon_count(self, symbol: str, side: str, position_key: str) -> int:
+    def get_addon_count(self, symbol: str, side: str, position_key: str = "") -> int:
         """
-        Return how many High-Risk Adds were already executed on THIS position instance.
+        Return how many High-Risk Adds were already executed on the open position.
 
-        position_key identifies the position (entry price + side). A different key means
-        the previous position was closed and a new one opened, so the ledger resets to 0
-        instead of leaking the old lock onto the new position.
+        The counter is keyed on (symbol, side) and lives exactly as long as the position:
+        it is cleared when the side goes flat, on a reconciled stop-out, and after a
+        take-profit flip.
+
+        `position_key` is recorded for diagnostics only and deliberately NOT used to
+        invalidate the counter. Keying on the entry price looked safer but was actively
+        harmful: filling an addon moves the position's average entry, so the key stopped
+        matching, the counter read 0, and the guard permitted another addon on the very
+        position it was meant to protect.
         """
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT addon_count, position_key FROM position_addons WHERE symbol = ? AND side = ?",
+                "SELECT addon_count FROM position_addons WHERE symbol = ? AND side = ?",
                 (symbol, side.lower())
             ).fetchone()
-        if not row or row["position_key"] != position_key:
-            return 0
-        return int(row["addon_count"])
+        return int(row["addon_count"]) if row else 0
 
-    def record_addon(self, symbol: str, side: str, position_key: str) -> int:
+    def record_addon(self, symbol: str, side: str, position_key: str = "") -> int:
         """Increment and persist the addon counter for a position. Returns the new count."""
         current = self.get_addon_count(symbol, side, position_key)
         new_count = current + 1

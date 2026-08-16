@@ -312,12 +312,41 @@ def test_addon_ledger_survives_restart(db):
     assert ex2.execute_order.await_count == 0
 
 
-def test_addon_ledger_resets_for_new_position(db):
-    """A different entry price is a different position and gets its own addon budget."""
-    key_old, key_new = "100.00000000", "120.00000000"
-    db.record_addon("ETH/USDC", "short", key_old)
-    assert db.get_addon_count("ETH/USDC", "short", key_old) == 1
-    assert db.get_addon_count("ETH/USDC", "short", key_new) == 0
+def test_addon_ledger_survives_average_entry_move(db):
+    """
+    Filling an addon moves the position's average entry price.
+
+    The counter must NOT be keyed on that price: doing so made the ledger miss after the
+    very first addon, so the guard permitted a second one on the same position. Observed
+    live on SOL/USDC (ledger key 75.45 vs actual average entry 75.375).
+    """
+    db.record_addon("ETH/USDC", "short", "100.00000000")
+    assert db.get_addon_count("ETH/USDC", "short", "100.00000000") == 1
+    # Average entry drifted after the fill — the guard must still hold.
+    assert db.get_addon_count("ETH/USDC", "short", "99.12345678") == 1
+    assert db.get_addon_count("ETH/USDC", "short") == 1
+
+    # Only going flat clears it.
+    db.clear_addon_state("ETH/USDC", "short")
+    assert db.get_addon_count("ETH/USDC", "short") == 0
+
+
+def test_second_addon_blocked_after_entry_price_drift(db):
+    """End-to-end: the daemon refuses a 2nd addon even after the average entry moved."""
+    from mms4tk.analytics import SignalResult
+
+    sig = SignalResult(signal_type="HIGH_RISK_ADD_SHORT", price=100.0, stop_loss=101.0, leverage=3.0)
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "short", entry=100.0, notional=7.0)])
+    d, _ = make_daemon(db, ex, sig)
+    assert asyncio.run(d.execute_symbol_cycle("ETH/USDC"))["outcome"] == "EXECUTED_HIGH_RISK_ADD_SHORT"
+
+    # The fill shifts the average entry, as it does on a real exchange.
+    ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "short", contracts=6.0,
+                                                          entry=99.4, notional=12.0)])
+    res2 = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+    assert res2["outcome"] == "SKIPPED_HIGH_RISK_ADD_SHORT"
+    assert ex.execute_order.await_count == 1
 
 
 # ── P1-6 / user request 3: is_allowed is honored, state is per-symbol ───
