@@ -8,3 +8,6 @@ node_modules/
 .env
 symbols.json
 .agents/swarm/symbols.json
+
+# Node dependencies (never commit; Docker installs them at build time)
+node_modules/
