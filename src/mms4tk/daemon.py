@@ -5,8 +5,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
-from mms4tk.state_manager import MMS4StateManager, MMS4State
-from mms4tk.okx_executor import OKXExecutor, normalize_symbol
+from mms4tk.state_manager import (
+    MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION,
+)
+from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
@@ -99,8 +101,12 @@ class MMS4Daemon:
         else:
             self.max_margin_usd = float(os.getenv("MMS4_MAX_MARGIN_USD", os.getenv("MMS4_TRADE_AMOUNT_USD", "10.0")))
         
-        self.base_trade_usd = round(self.max_margin_usd * 0.70, 2)
-        self.addon_trade_usd = round(self.max_margin_usd * 0.30, 2)
+        # Allocation split is relational, so every figure below scales with the cap —
+        # $10 of forward-testing and $1000 of live capital run identical arithmetic.
+        self.base_allocation = BASE_ALLOCATION
+        self.addon_allocation = ADDON_ALLOCATION
+        self.base_trade_usd = round(self.max_margin_usd * self.base_allocation, 2)
+        self.addon_trade_usd = round(self.max_margin_usd * self.addon_allocation, 2)
         self.trade_amount_usd = self.max_margin_usd
 
         self._is_running: bool = False
@@ -118,6 +124,43 @@ class MMS4Daemon:
         # DELETE on every cycle for the side that has no position.
         self._addons_known_clear: set = set()
         self.addon_sl_pct: float = float(os.getenv("MMS4_ADDON_SL_PCT", "0.0125"))
+
+    # ── Position sizing ─────────────────────────────────────────────────
+
+    def plan_allocation(self, symbol: str) -> Dict[str, Any]:
+        """
+        Resolve how much capital this symbol may commit right now.
+
+        Everything is expressed as a relation to `max_margin_usd`, so the same code paths
+        serve a $10 forward test and a $1000 live allocation:
+
+            margin_base  = max_margin_usd * BASE_ALLOCATION  * size_multiplier
+            margin_addon = max_margin_usd * ADDON_ALLOCATION * size_multiplier
+            notional     = margin * leverage
+
+        `size_multiplier` is 1.0 in BASE_MODE and SCOUT_SIZE_MULT in SCOUT_MODE, which is
+        what actually reduces defensive exposure — leverage stays at an exchange-legal
+        value (>= 1x) because OKX rejects anything smaller.
+        """
+        snap = self.state_manager.get_risk_profile_snapshot(symbol)
+        leverage = float(snap["leverage"])
+        size_mult = float(snap["size_multiplier"])
+
+        margin_base = self.max_margin_usd * self.base_allocation * size_mult
+        margin_addon = self.max_margin_usd * self.addon_allocation * size_mult
+
+        return {
+            "state": snap["state"],
+            "leverage": leverage,
+            "size_multiplier": size_mult,
+            "margin_base_usd": round(margin_base, 8),
+            "margin_addon_usd": round(margin_addon, 8),
+            "notional_base_usd": round(margin_base * leverage, 8),
+            "notional_addon_usd": round(margin_addon * leverage, 8),
+            "margin_cap_usd": round(self.max_margin_usd * size_mult, 8),
+            "notional_cap_usd": round(self.max_margin_usd * size_mult * leverage, 8),
+            "notional_reduction_factor": snap["notional_reduction_factor"],
+        }
 
     # ── Addon ledger ────────────────────────────────────────────────────
     # Persisted in SQLite so a daemon restart cannot forget that an addon was already
@@ -394,9 +437,18 @@ class MMS4Daemon:
         # notification raised NameError and every TP&FLIP alert was silently swallowed.
         order_side: str = ""
 
-        # Calculate notional position value so that real cash margin spent matches exact 70/30 allocation
-        notional_base_usd = self.base_trade_usd * sym_leverage
-        notional_addon_usd = self.addon_trade_usd * sym_leverage
+        # Resolve the allocation for this symbol's CURRENT risk state. In SCOUT_MODE the
+        # size multiplier shrinks both legs while leverage stays exchange-legal.
+        alloc = self.plan_allocation(target_symbol)
+        notional_base_usd = alloc["notional_base_usd"]
+        notional_addon_usd = alloc["notional_addon_usd"]
+        if alloc["size_multiplier"] != 1.0:
+            logger.info(
+                f"⚠ {target_symbol} in {alloc['state']}: sizing at "
+                f"{alloc['size_multiplier']*100:.0f}% of allocation, leverage x{alloc['leverage']} "
+                f"→ base notional ${notional_base_usd:,.2f} "
+                f"({alloc['notional_reduction_factor']:.1f}x smaller than BASE_MODE)"
+            )
 
         base_order_amount = self.executor.calculate_order_amount(target_symbol, notional_base_usd, signal.price)
         if not isinstance(base_order_amount, (int, float)):
@@ -426,8 +478,9 @@ class MMS4Daemon:
             # Risk state may have just changed (BASE -> SCOUT); re-read it.
             sym_state = self.state_manager.get_symbol_state(target_symbol)
             sym_leverage = self.state_manager.get_symbol_leverage(target_symbol)
-            notional_base_usd = self.base_trade_usd * sym_leverage
-            notional_addon_usd = self.addon_trade_usd * sym_leverage
+            alloc = self.plan_allocation(target_symbol)
+            notional_base_usd = alloc["notional_base_usd"]
+            notional_addon_usd = alloc["notional_addon_usd"]
             base_order_amount = self.executor.calculate_order_amount(
                 target_symbol, notional_base_usd, signal.price
             )
@@ -819,6 +872,12 @@ class MMS4Daemon:
                         f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
                         f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
                     )
+                except BelowMinimumNotional as e:
+                    # Not a failure: the intended size is under the venue's minimum, so
+                    # the correct action is to stand down rather than trade bigger.
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
+                    logger.info(f"⊘ {details}")
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute order for {target_symbol}: {str(e)}"
@@ -835,7 +894,7 @@ class MMS4Daemon:
                 if matching_pos is not None else 0
             )
             # Hard cap on total committed margin, independent of the counter.
-            margin_cap_usd = self.max_margin_usd * sym_leverage
+            margin_cap_usd = alloc["notional_cap_usd"]
             would_exceed_cap = (existing_notional + notional_addon_usd) > margin_cap_usd * (1.0 + 0.10)
 
             if sym_state != MMS4State.BASE_MODE:
@@ -884,6 +943,10 @@ class MMS4Daemon:
                         f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
                         f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
                     )
+                except BelowMinimumNotional as e:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"High Risk Add for {target_symbol} skipped — {e}"
+                    logger.info(f"⊘ {details}")
                 except Exception as e:
                     outcome = f"ERROR_{signal.signal_type}"
                     details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
@@ -1053,6 +1116,9 @@ class MMS4Daemon:
             "processed_cycles": self.processed_cycles,
             "inactivity_manager": self.inactivity_manager.get_status(),
             "addon_ledger": self._safe_addon_ledger(),
+            "base_allocation": self.base_allocation,
+            "addon_allocation": self.addon_allocation,
+            "allocation_plan": {sym: self.plan_allocation(sym) for sym in active_syms},
             "base_sl_pct": self.base_sl_pct,
             "addon_sl_pct": self.addon_sl_pct,
         }

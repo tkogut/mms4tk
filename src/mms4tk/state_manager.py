@@ -12,8 +12,8 @@ logger = logging.getLogger("mms4tk.state_manager")
 class MMS4State(str, Enum):
     """
     Operating modes for MMS4 strategy.
-    BASE_MODE: Full leverage active when system is performing as expected.
-    SCOUT_MODE: Reduced leverage (SCOUT_LEVERAGE, default 0.1x) after a hard SL (>= 2%).
+    BASE_MODE: full allocation at the risk profile's leverage.
+    SCOUT_MODE: reduced POSITION SIZE at an exchange-legal leverage, after a hard SL (>= 2%).
     """
     BASE_MODE = "BASE_MODE"
     SCOUT_MODE = "SCOUT_MODE"
@@ -30,8 +30,34 @@ BASE_LEVERAGE_BY_PROFILE: Dict[str, float] = {
     "MODERATE": float(os.getenv("MMS4_LEVERAGE_MODERATE", "3.0")),
     "AGGRESSIVE": float(os.getenv("MMS4_LEVERAGE_AGGRESSIVE", "10.0")),
 }
-SCOUT_LEVERAGE: float = float(os.getenv("MMS4_LEVERAGE_SCOUT", "0.1"))
 DEFAULT_BASE_LEVERAGE: float = 1.0
+
+# ── SCOUT_MODE risk reduction ────────────────────────────────────────────
+#
+# Risk in SCOUT is cut through POSITION SIZE, not through leverage.
+#
+# Leverage cannot carry the reduction: OKX only accepts integer leverage >= 1, so the
+# old 0.1x was silently clamped to 1x on the exchange while the notional it implied
+# ($0.70 at a $10 cap) fell under the exchange's minimum order value — the entry was then
+# skipped entirely and the symbol could never trade its way back to BASE_MODE.
+#
+# Splitting the two knobs makes the reduction real and, crucially, scale-free:
+#
+#   scout_margin   = max_margin_usd * BASE_ALLOCATION * SCOUT_SIZE_MULT
+#   scout_notional = scout_margin * SCOUT_LEVERAGE
+#
+# Against BASE (max_margin * BASE_ALLOCATION * base_leverage) the notional ratio is
+# SCOUT_SIZE_MULT * SCOUT_LEVERAGE / base_leverage — independent of account size.
+# At the defaults (0.3 * 1.0 / 3.0) that is a 10x reduction at ANY capital level.
+# MMS4_LEVERAGE_SCOUT is the pre-rename name; honored so an existing .env keeps working.
+SCOUT_LEVERAGE: float = float(
+    os.getenv("MMS4_SCOUT_LEVERAGE", os.getenv("MMS4_LEVERAGE_SCOUT", "1.0"))
+)
+SCOUT_SIZE_MULT: float = float(os.getenv("MMS4_SCOUT_SIZE_MULT", "0.3"))
+
+# Split of the per-symbol margin cap between the base entry and the high-risk add.
+BASE_ALLOCATION: float = float(os.getenv("MMS4_BASE_ALLOCATION", "0.70"))
+ADDON_ALLOCATION: float = float(os.getenv("MMS4_ADDON_ALLOCATION", str(round(1.0 - BASE_ALLOCATION, 10))))
 
 
 class TradeRecord(BaseModel):
@@ -142,6 +168,37 @@ class MMS4StateManager:
         risk_prof = self._strategy_profile.risk_profile.upper()
         return BASE_LEVERAGE_BY_PROFILE.get(risk_prof, DEFAULT_BASE_LEVERAGE)
 
+    def get_symbol_size_multiplier(self, symbol: str) -> float:
+        """
+        Fraction of the normal allocation this symbol may commit right now.
+
+        1.0 in BASE_MODE, SCOUT_SIZE_MULT in SCOUT_MODE. This is the axis that actually
+        carries the defensive reduction — leverage only decides how much margin backs the
+        resulting notional, and the exchange refuses to go below 1x anyway.
+        """
+        return SCOUT_SIZE_MULT if self.get_symbol_state(symbol) == MMS4State.SCOUT_MODE else 1.0
+
+    @property
+    def size_multiplier(self) -> float:
+        """Size multiplier for the primary symbol."""
+        return SCOUT_SIZE_MULT if self._current_state == MMS4State.SCOUT_MODE else 1.0
+
+    def get_risk_profile_snapshot(self, symbol: str) -> Dict[str, Any]:
+        """Everything the position sizer needs, resolved for one symbol."""
+        state = self.get_symbol_state(symbol)
+        leverage = self._resolve_leverage(state)
+        size_mult = self.get_symbol_size_multiplier(symbol)
+        base_leverage = self._resolve_leverage(MMS4State.BASE_MODE)
+        return {
+            "state": state.value,
+            "leverage": leverage,
+            "size_multiplier": size_mult,
+            # How much smaller this symbol's notional is versus a full BASE_MODE entry.
+            "notional_reduction_factor": (
+                (base_leverage / (leverage * size_mult)) if leverage * size_mult > 0 else 0.0
+            ),
+        }
+
     def set_logger_db(self, logger_db: Any) -> None:
         """Attach LoggerDB instance and restore latest persisted state if present."""
         self.logger_db = logger_db
@@ -209,9 +266,12 @@ class MMS4StateManager:
         """
         Active leverage for the current state and StrategyProfile.
 
-        SCOUT_MODE always wins and returns SCOUT_LEVERAGE (0.1x by default) — a manual
-        override never re-arms risk while the system is in its defensive mode.
-        In BASE_MODE: an explicit override, else BASE_LEVERAGE_BY_PROFILE.
+        SCOUT_MODE always wins and returns SCOUT_LEVERAGE — a manual override never
+        re-arms risk while the system is in its defensive mode. In BASE_MODE: an explicit
+        override, else BASE_LEVERAGE_BY_PROFILE.
+
+        Note that leverage alone no longer describes SCOUT's risk posture; pair it with
+        `size_multiplier` / `get_symbol_size_multiplier()`.
         """
         return self._resolve_leverage(self._current_state)
 

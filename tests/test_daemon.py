@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
 from mms4tk.okx_executor import OKXExecutor
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle
 from mms4tk.logger_db import LoggerDB
@@ -99,12 +100,13 @@ def test_daemon_signal_handling_and_high_risk_add_blocking(temp_db: LoggerDB):
         # Transition state manager to SCOUT_MODE (leverage 0.1) via SL hit
         state_mgr.on_stop_loss_hit(0.02)
         assert state_mgr.current_state == MMS4State.SCOUT_MODE
-        assert state_mgr.leverage == 0.1
+        assert state_mgr.leverage == SCOUT_LEVERAGE
+        assert state_mgr.size_multiplier == SCOUT_SIZE_MULT
 
         # Execute cycle in SCOUT_MODE
         res = await daemon.execute_cycle()
         assert res["state"] == "SCOUT_MODE"
-        assert res["leverage"] == 0.1
+        assert res["leverage"] == SCOUT_LEVERAGE
 
     asyncio.run(_async_test())
 

@@ -58,7 +58,11 @@ def test_take_profit_and_flip_execution(temp_db: LoggerDB):
             executor=executor,
             state_manager=state_mgr,
             logger_db=temp_db,
-            symbol="BTC/USDC"
+            symbol="BTC/USDC",
+            # SCOUT sizes at BASE_ALLOCATION * SCOUT_SIZE_MULT of the cap, so the cap must
+            # leave the flip above the venue minimum: $100 * 0.7 * 0.3 = $21 notional.
+            # At the $10 forward-testing cap a BTC entry is correctly skipped instead.
+            trade_amount_usd=100.0,
         )
 
         # Mock signal engine to return BASE_LONG
