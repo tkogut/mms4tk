@@ -4,10 +4,11 @@ tmp/
 *.db
 __pycache__/
 .DS_Store
-node_modules/
+node_modules
 .env
 symbols.json
 .agents/swarm/symbols.json
 
-# Node dependencies (never commit; Docker installs them at build time)
-node_modules/
+# Node dependencies (never commit; Docker installs them at build time).
+# No trailing slash: the pattern must also match a stray SYMLINK named node_modules,
+# which is how a local build artifact slipped into the repo and broke the image build.
