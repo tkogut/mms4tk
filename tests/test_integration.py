@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from mms4tk.analytics import Candle, IndicatorParams, MMS4SignalEngine
 from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
 from mms4tk.api import calculate_analytics, get_latest_signal, CalculateRequest, state_manager as api_state_manager
 
 
@@ -19,7 +20,8 @@ def test_scout_mode_blocks_high_risk_add():
     transitioned = state_mgr.on_stop_loss_hit(0.025)
     assert transitioned is True
     assert state_mgr.current_state == MMS4State.SCOUT_MODE
-    assert state_mgr.leverage == 0.1
+    assert state_mgr.leverage == SCOUT_LEVERAGE
+    assert state_mgr.size_multiplier == SCOUT_SIZE_MULT
     assert state_mgr.is_high_risk_add_allowed() is False
 
     # Setup candles leading to High Risk Add SHORT candidate

@@ -1,5 +1,6 @@
 import pytest
 from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
 from mms4tk.api import app, configured_symbols_store
 from fastapi.testclient import TestClient
 
@@ -27,7 +28,8 @@ def test_per_symbol_state_isolation():
     assert sm.get_symbol_state("SOL/USDC") == MMS4State.BASE_MODE
 
     # Leverage isolation
-    assert sm.get_symbol_leverage("ETH/USDC") == 0.1
+    assert sm.get_symbol_leverage("ETH/USDC") == SCOUT_LEVERAGE
+    assert sm.get_symbol_size_multiplier("ETH/USDC") == SCOUT_SIZE_MULT
     assert sm.get_symbol_leverage("BTC/USDC") == 3.0  # Default MODERATE leverage
 
     # Take-Profit on ETH/USDC restores BASE_MODE for ETH/USDC

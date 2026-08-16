@@ -3,6 +3,7 @@ import tempfile
 import pytest
 from mms4tk.logger_db import LoggerDB
 from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
 
 
 def test_sqlite_state_save_and_restore():
@@ -20,18 +21,21 @@ def test_sqlite_state_save_and_restore():
         transitioned = sm1.on_stop_loss_hit(0.025)
         assert transitioned is True
         assert sm1.current_state == MMS4State.SCOUT_MODE
-        assert sm1.leverage == 0.1
+        # SCOUT cuts risk through SIZE now; leverage stays exchange-legal (>= 1x).
+        assert sm1.leverage == SCOUT_LEVERAGE
+        assert sm1.size_multiplier == SCOUT_SIZE_MULT
 
         # Verify DB has latest state as SCOUT_MODE
         latest_saved = logger_db.get_latest_state()
         assert latest_saved is not None
         assert latest_saved["state"] == "SCOUT_MODE"
-        assert latest_saved["leverage"] == 0.1
+        assert latest_saved["leverage"] == SCOUT_LEVERAGE
 
         # Re-initialize state manager with same logger_db -> should restore SCOUT_MODE
         sm2 = MMS4StateManager(initial_state=MMS4State.BASE_MODE, logger_db=logger_db)
         assert sm2.current_state == MMS4State.SCOUT_MODE
-        assert sm2.leverage == 0.1
+        assert sm2.leverage == SCOUT_LEVERAGE
+        assert sm2.size_multiplier == SCOUT_SIZE_MULT
 
         # Trigger Take Profit -> transitions back to BASE_MODE and saves to DB
         restored = sm2.on_take_profit_hit()
@@ -57,4 +61,5 @@ def test_set_logger_db_restores_state():
 
         sm.set_logger_db(logger_db)
         assert sm.current_state == MMS4State.SCOUT_MODE
-        assert sm.leverage == 0.1
+        assert sm.leverage == SCOUT_LEVERAGE
+        assert sm.size_multiplier == SCOUT_SIZE_MULT

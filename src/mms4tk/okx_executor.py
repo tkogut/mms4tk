@@ -20,9 +20,10 @@ from mms4tk.analytics import Candle
 
 logger = logging.getLogger("mms4tk.okx_executor")
 
-# Smallest order value OKX will accept. Used as a *gate* (skip the entry when the target
-# is below it), never as a floor that silently inflates the intended size.
-MIN_NOTIONAL_USD = float(os.getenv("MMS4_MIN_NOTIONAL_USD", "7.0"))
+# Last-resort floor used only when the exchange exposes no limits for an instrument.
+# The real minimum is read per-symbol from CCXT market metadata — see min_notional_for().
+# Set MMS4_MIN_NOTIONAL_USD to override the fallback; leave unset to rely on the exchange.
+FALLBACK_MIN_NOTIONAL_USD = float(os.getenv("MMS4_MIN_NOTIONAL_USD", "7.0"))
 
 # How far a rounded contract count may exceed the target allocation before it is rejected.
 SIZING_TOLERANCE = float(os.getenv("MMS4_SIZING_TOLERANCE", "0.10"))
@@ -287,6 +288,39 @@ class OKXExecutor:
             logger.warning(f"Failed to discover EEA X-Perp instrument for {symbol}: {e}")
         return None
 
+    def min_notional_for(self, symbol: str, price: float) -> float:
+        """
+        Smallest order value the exchange will accept for this instrument, in USD.
+
+        Derived from live CCXT market metadata so it scales with the instrument rather
+        than a hardcoded number:
+          * `limits.cost.min` when the venue publishes a notional floor, else
+          * `limits.amount.min` x contractSize x price (the smallest tradeable lot).
+        Falls back to FALLBACK_MIN_NOTIONAL_USD only when neither is available.
+        """
+        if price <= 0:
+            return FALLBACK_MIN_NOTIONAL_USD
+        try:
+            if self.exchange and self.exchange.markets and symbol in self.exchange.markets:
+                market = self.exchange.market(symbol)
+                limits = market.get("limits", {}) or {}
+
+                cost_min = (limits.get("cost", {}) or {}).get("min")
+                if cost_min:
+                    return float(cost_min)
+
+                amount_min = (limits.get("amount", {}) or {}).get("min")
+                if amount_min:
+                    contract_size = float(market.get("contractSize") or 1.0) or 1.0
+                    is_contract = bool(
+                        market.get("swap") or market.get("contract") or market.get("future")
+                    )
+                    lot = float(amount_min) * (contract_size if is_contract else 1.0)
+                    return lot * price
+        except Exception as e:
+            logger.debug(f"Could not read exchange minimum for {symbol}: {e}")
+        return FALLBACK_MIN_NOTIONAL_USD
+
     def calculate_order_amount(self, symbol: str, target_usd: float, price: float) -> float:
         """
         Calculate precise order amount (contracts or coins) for target USD allocation.
@@ -442,10 +476,11 @@ class OKXExecutor:
             # target. Do NOT raise it to the exchange minimum here — that used to turn a
             # deliberately small SCOUT_MODE position ($0.70) into a $12.61 one.
             est_usd = amount * ref_price
-            if est_usd < MIN_NOTIONAL_USD:
+            min_notional = self.min_notional_for(target_symbol, ref_price)
+            if est_usd < min_notional:
                 raise ValueError(
                     f"Order for {target_symbol} skipped: target ${est_usd:,.2f} is below the "
-                    f"exchange minimum ${MIN_NOTIONAL_USD:,.2f}. Reduce risk by not trading, "
+                    f"exchange minimum ${min_notional:,.2f}. Reduce risk by not trading, "
                     f"never by trading larger than intended."
                 )
 

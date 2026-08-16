@@ -17,7 +17,9 @@ from mms4tk.daemon import MMS4Daemon
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 from mms4tk.logger_db import LoggerDB
 from mms4tk.okx_executor import OKXExecutor, normalize_symbol
-from mms4tk.state_manager import MMS4State, MMS4StateManager
+from mms4tk.state_manager import (
+    MMS4State, MMS4StateManager, SCOUT_LEVERAGE, SCOUT_SIZE_MULT, BASE_ALLOCATION,
+)
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -107,7 +109,9 @@ def test_scout_mode_entry_on_sl(db):
     res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
 
     assert sm.get_symbol_state("ETH/USDC") == MMS4State.SCOUT_MODE
-    assert sm.leverage == 0.1
+    # Risk is cut through SIZE now; leverage stays exchange-legal.
+    assert sm.leverage == SCOUT_LEVERAGE
+    assert sm.size_multiplier == SCOUT_SIZE_MULT
     assert res["reconciliation"] and res["reconciliation"][0]["is_stop_loss"] is True
 
 
@@ -374,8 +378,10 @@ def test_signals_use_per_symbol_state():
     engine = MMS4SignalEngine()
     candles = flat_candles(40)
 
-    assert engine.evaluate_signals(candles, sm, symbol="BTC/USDC").leverage == 0.1
+    assert engine.evaluate_signals(candles, sm, symbol="BTC/USDC").leverage == SCOUT_LEVERAGE
     assert engine.evaluate_signals(candles, sm, symbol="ETH/USDC").leverage == 3.0
+    assert sm.get_symbol_size_multiplier("BTC/USDC") == SCOUT_SIZE_MULT
+    assert sm.get_symbol_size_multiplier("ETH/USDC") == 1.0
 
 
 # ── P1-7 / P1-8: allocation never exceeds the configured margin ─────────
@@ -485,7 +491,7 @@ def test_state_manager_exposes_settings_api():
     assert sm.leverage == 10.0, "override must clamp to 10x"
     sm.scout_mode = True
     assert sm.current_state == MMS4State.SCOUT_MODE
-    assert sm.leverage == 0.1, "SCOUT_MODE beats a manual override"
+    assert sm.leverage == SCOUT_LEVERAGE, "SCOUT_MODE beats a manual override"
     sm.scout_mode = False
     assert sm.current_state == MMS4State.BASE_MODE
     sm.save_state(reason="test")  # must not raise without a DB
@@ -612,3 +618,112 @@ def test_addon_clear_is_not_reissued_every_cycle(db):
         asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
 
     assert calls["n"] <= 2, f"expected one clear per side, got {calls['n']}"
+
+
+# ── Wariant A: SCOUT reduces SIZE, not leverage (scalable) ──────────────
+
+@pytest.mark.parametrize("cap", [10.0, 100.0, 500.0, 1000.0, 12345.67])
+def test_scout_reduction_is_scale_free(cap, db):
+    """
+    The BASE:SCOUT notional ratio must depend only on the configured multipliers,
+    never on the size of the account. Forward-testing at $10 and running at $1000 have
+    to exercise identical arithmetic.
+    """
+    sm = MMS4StateManager(trading_symbol="ETH/USDC")
+    d = MMS4Daemon(executor=MagicMock(spec=OKXExecutor), state_manager=sm,
+                   logger_db=db, symbol="ETH/USDC", trade_amount_usd=cap)
+
+    base = d.plan_allocation("ETH/USDC")
+    sm.set_symbol_state("ETH/USDC", MMS4State.SCOUT_MODE)
+    scout = d.plan_allocation("ETH/USDC")
+
+    # Margin follows the allocation relation exactly.
+    assert base["margin_base_usd"] == pytest.approx(cap * BASE_ALLOCATION)
+    assert scout["margin_base_usd"] == pytest.approx(cap * BASE_ALLOCATION * SCOUT_SIZE_MULT)
+
+    # Notional = margin x leverage, and the reduction is constant across capital levels.
+    expected_ratio = base["leverage"] / (SCOUT_LEVERAGE * SCOUT_SIZE_MULT)
+    assert base["notional_base_usd"] / scout["notional_base_usd"] == pytest.approx(expected_ratio)
+    assert scout["notional_reduction_factor"] == pytest.approx(expected_ratio)
+
+
+def test_scout_leverage_is_exchange_legal():
+    """OKX rejects leverage below 1x — SCOUT must never ask for less."""
+    assert SCOUT_LEVERAGE >= 1.0
+    sm = MMS4StateManager(trading_symbol="BTC/USDC")
+    sm.set_symbol_state("BTC/USDC", MMS4State.SCOUT_MODE)
+    assert sm.leverage >= 1.0
+    # int() clamping in set_leverage must therefore be a no-op, not a silent change.
+    assert max(1, int(sm.leverage)) == int(sm.leverage)
+
+
+def test_scout_axes_are_independent():
+    """Leverage and size multiplier are separate knobs, not the same number twice."""
+    sm = MMS4StateManager(trading_symbol="BTC/USDC")
+    assert sm.size_multiplier == 1.0 and sm.leverage == 3.0
+    sm.set_symbol_state("BTC/USDC", MMS4State.SCOUT_MODE)
+    assert sm.size_multiplier == SCOUT_SIZE_MULT
+    assert sm.leverage == SCOUT_LEVERAGE
+    assert sm.size_multiplier != sm.leverage, "the two axes must not be conflated"
+
+
+def test_scout_sizing_flows_into_orders(db):
+    """The daemon actually sizes a SCOUT entry from the reduced allocation."""
+    from mms4tk.analytics import SignalResult
+
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[])
+    seen = []
+
+    def capture(symbol, target_usd, price):
+        seen.append(target_usd)
+        return 5.0
+
+    ex.calculate_order_amount = MagicMock(side_effect=capture)
+    sm = MMS4StateManager(initial_state=MMS4State.SCOUT_MODE, trading_symbol="ETH/USDC")
+    d = MMS4Daemon(executor=ex, state_manager=sm,
+                   signal_engine=StubEngine(SignalResult(signal_type="BASE_LONG", price=100.0,
+                                                         stop_loss=98.0, leverage=1.0)),
+                   logger_db=db, symbol="ETH/USDC", trade_amount_usd=1000.0)
+    d.inactivity_manager.set_symbol_config("ETH/USDC", {"impulse_negation_enabled": False,
+                                                        "stale_candles_threshold": 10**6})
+    asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+
+    # The sizer is asked for both legs; base first, then the addon.
+    expected_base = 1000.0 * BASE_ALLOCATION * SCOUT_SIZE_MULT * SCOUT_LEVERAGE
+    expected_addon = 1000.0 * (1.0 - BASE_ALLOCATION) * SCOUT_SIZE_MULT * SCOUT_LEVERAGE
+    assert seen[0] == pytest.approx(expected_base), f"base leg sized at {seen[0]}"
+    assert expected_addon in [pytest.approx(v) for v in seen], "addon leg also scaled down"
+    assert ex.execute_order.await_args.kwargs["leverage"] == SCOUT_LEVERAGE
+
+
+def test_minimum_notional_comes_from_the_exchange():
+    """The order floor is read from CCXT limits, not from a hardcoded dollar amount."""
+    ex = OKXExecutor.__new__(OKXExecutor)
+
+    class FakeExchange:
+        markets = {"X/USD:USD": {"limits": {"cost": {"min": 1.25}}, "contractSize": 1.0, "swap": True}}
+        def market(self, s):
+            return self.markets[s]
+
+    ex.exchange = FakeExchange()
+    assert ex.min_notional_for("X/USD:USD", 100.0) == 1.25
+
+    # No cost floor: derive it from the smallest tradeable lot.
+    ex.exchange.markets["Y/USD:USD"] = {
+        "limits": {"amount": {"min": 1.0}}, "contractSize": 0.0001, "swap": True,
+    }
+    assert ex.min_notional_for("Y/USD:USD", 60_000.0) == pytest.approx(6.0)
+
+    # Unknown instrument falls back, and never crashes.
+    assert ex.min_notional_for("UNKNOWN", 100.0) > 0
+
+
+def test_no_hardcoded_dollar_limits_in_sizing_path():
+    """Guard against reintroducing a fixed cash threshold into the sizing code."""
+    import inspect
+    import mms4tk.okx_executor as oe
+
+    src = inspect.getsource(oe.OKXExecutor.calculate_order_amount)
+    src += inspect.getsource(oe.OKXExecutor._fit_contracts)
+    assert "7.0" not in src and "7.00" not in src, "sizing must not embed a cash minimum"

@@ -166,6 +166,10 @@ class DaemonStatusResponse(BaseModel):
     addon_ledger: Optional[List[Dict[str, Any]]] = None
     base_sl_pct: Optional[float] = None
     addon_sl_pct: Optional[float] = None
+    base_allocation: Optional[float] = None
+    addon_allocation: Optional[float] = None
+    # Per-symbol resolved sizing (margin, notional, size multiplier) for the current state.
+    allocation_plan: Optional[Dict[str, Any]] = None
 
 
 class CalculateRequest(BaseModel):

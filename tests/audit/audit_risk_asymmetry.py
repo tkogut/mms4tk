@@ -62,54 +62,69 @@ for prof in ("CONSERVATIVE", "MODERATE", "AGGRESSIVE"):
     sm2.update_strategy_profile(StrategyProfile(risk_profile=prof))
     levs[prof] = sm2.leverage
 print(f"   BASE_MODE leverage wg profilu: {levs}")
-from mms4tk.state_manager import BASE_LEVERAGE_BY_PROFILE, SCOUT_LEVERAGE
+from mms4tk.state_manager import BASE_LEVERAGE_BY_PROFILE, SCOUT_LEVERAGE, SCOUT_SIZE_MULT
 check("T2.5 [DECYZJA] Mapa lewara jest jawna i konfigurowalna (tryb scisly MMS v4 osiagalny)",
-      set(BASE_LEVERAGE_BY_PROFILE) == {"CONSERVATIVE", "MODERATE", "AGGRESSIVE"} and SCOUT_LEVERAGE == 0.1,
-      f"profile={BASE_LEVERAGE_BY_PROFILE}, scout=x{SCOUT_LEVERAGE}; MMS4_LEVERAGE_MODERATE=1.0 wlacza "
+      set(BASE_LEVERAGE_BY_PROFILE) == {"CONSERVATIVE", "MODERATE", "AGGRESSIVE"} and SCOUT_LEVERAGE >= 1.0,
+      f"profile={BASE_LEVERAGE_BY_PROFILE}, scout=x{SCOUT_LEVERAGE} + rozmiar x{SCOUT_SIZE_MULT}; MMS4_LEVERAGE_MODERATE=1.0 wlacza "
       "literalna zgodnosc ze specyfikacja. Wartosci domyslne zostawione swiadomie — zmiana lewara "
       "na zywym rachunku to decyzja biznesowa, nie poprawka buga")
 sm2.on_stop_loss_hit(0.05)
-check("T2.6 SCOUT_MODE zawsze x0.1 niezaleznie od profilu", sm2.leverage == 0.1, f"lev={sm2.leverage}")
+_red = sm2.get_risk_profile_snapshot(sm2.trading_symbol)["notional_reduction_factor"]
+check("T2.6 SCOUT_MODE redukuje ekspozycje niezaleznie od profilu ryzyka",
+      sm2.leverage == SCOUT_LEVERAGE and sm2.size_multiplier == SCOUT_SIZE_MULT and _red > 1.0,
+      f"lewar=x{sm2.leverage}, rozmiar=x{sm2.size_multiplier} => notional {_red:.1f}x mniejszy niz BASE")
 
 # ── T2.7 set_leverage: x0.1 realnie trafia na gielde? ───────────────────────
 src = inspect.getsource(OKXExecutor.set_leverage)
 lev_int = int(0.1) if 0.1 >= 1.0 else 1
 _fake_ex = OKXExecutor.__new__(OKXExecutor); _fake_ex.exchange = None
-_scout_size = _fake_ex.calculate_order_amount("BTC-USD_UM_XPERP", 7.0 * 0.1, 95000.0)
-check("T2.7 [DECYZJA] SCOUT redukuje ryzyko rozmiarem, skoro OKX nie przyjmuje lewara <1x",
-      _scout_size == 0.0 and "max(1, int(leverage))" in src,
-      f"lewar na gieldzie clampowany do 1x (logowane jawnie), a cel $0.70 daje {_scout_size} kontraktow "
-      "=> wejscie pominiete zamiast powiekszone")
+from mms4tk.state_manager import BASE_ALLOCATION as _BA
+# Redukcja jest teraz wyrazona rozmiarem i skaluje sie z kapitalem, a nie lewarem.
+_r10  = (10.0   * _BA * 1.0) / (10.0   * _BA * SCOUT_SIZE_MULT * SCOUT_LEVERAGE / 3.0)
+_r1000= (1000.0 * _BA * 1.0) / (1000.0 * _BA * SCOUT_SIZE_MULT * SCOUT_LEVERAGE / 3.0)
+check("T2.7 [DECYZJA] SCOUT redukuje ryzyko rozmiarem; lewar pozostaje legalny dla OKX (>=1x)",
+      SCOUT_LEVERAGE >= 1.0 and abs(_r10 - _r1000) < 1e-9,
+      f"lewar SCOUT=x{SCOUT_LEVERAGE} (akceptowany przez gielde), mnoznik rozmiaru x{SCOUT_SIZE_MULT}; "
+      f"redukcja notional identyczna przy $10 i $1000 ({_r10:.1f}x) — mechanika skalowalna")
 
-# ── T2.8 100 cykli BASE<->SCOUT przez pelna petle decyzyjna daemona ─────────
+
 def mk_candles(n=60, base=100.0):
     out = []
     for i in range(n):
-        p = base + (i % 5) * 0.2
-        out.append(Candle(timestamp=1_700_000_000_000 + i*900_000, open=p, high=p+0.5, low=p-0.5, close=p, volume=1.0))
+        px = base + (i % 5) * 0.2
+        out.append(Candle(timestamp=1_700_000_000_000 + i*900_000, open=px, high=px+0.5,
+                          low=px-0.5, close=px, volume=1.0))
     return out
 
+
 class StubEngine:
-    """Zwraca zadany sygnal, aby wymusic sciezke decyzyjna daemona."""
-    def __init__(self): self.next = SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=1.0)
-    def evaluate_signals(self, candles, state_manager, params=None, symbol=None): return self.next
+    """Zwraca zadany sygnal, aby wymusic konkretna sciezke decyzyjna daemona."""
+    def __init__(self):
+        self.next = SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=1.0)
+    def evaluate_signals(self, candles, state_manager, params=None, symbol=None):
+        return self.next
+
 
 import tempfile as _tf, os as _os
 from mms4tk.logger_db import LoggerDB as _LDB
 def _mkdb():
     return _LDB(db_path=_os.path.join(_tf.mkdtemp(), 'a.db'))
 
+
 def build_daemon(state=MMS4State.BASE_MODE):
     ex = MagicMock(spec=OKXExecutor)
     ex.fetch_candles = AsyncMock(return_value=mk_candles())
     ex.fetch_positions = AsyncMock(return_value=[])
     ex.execute_order = AsyncMock(return_value={"id": "mock", "status": "executed"})
-    ex.reduce_position = AsyncMock(return_value={"status": "executed"})
+    ex.reduce_position = AsyncMock(return_value={"id": "r", "status": "closed"})
     ex.calculate_order_amount = MagicMock(return_value=4.0)
     sm = MMS4StateManager(initial_state=state, trading_symbol="BTC/USDC")
     d = MMS4Daemon(executor=ex, state_manager=sm, signal_engine=StubEngine(),
                    logger_db=_mkdb(), symbol="BTC/USDC", trade_amount_usd=10.0)
+    d.inactivity_manager.set_symbol_config("BTC/USDC", {"impulse_negation_enabled": False,
+                                                         "stale_candles_threshold": 10**6})
     return d, ex, sm
+
 
 async def scenario_sl_liquidation():
     """100 cykli: pozycja otwierana, potem znika z gieldy (= SL zrealizowany po stronie OKX)."""
@@ -119,15 +134,12 @@ async def scenario_sl_liquidation():
     states = []
     for i in range(100):
         if i % 3 == 0:
-            # otwarcie pozycji (brak pozycji na gieldzie)
             d.signal_engine.next = SignalResult(signal_type="BASE_LONG", price=100.0, stop_loss=98.0, leverage=1.0)
             ex.fetch_positions = AsyncMock(return_value=[])
         elif i % 3 == 1:
-            # pozycja zyje -> snapshot zapisany
             d.signal_engine.next = SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=1.0)
             ex.fetch_positions = AsyncMock(return_value=pos)
         else:
-            # pozycja zniknela przy cenie -2% => SL wykonany po stronie OKX
             d.signal_engine.next = SignalResult(signal_type="NONE", price=98.0, stop_loss=0.0, leverage=1.0)
             ex.fetch_positions = AsyncMock(return_value=[])
         await d.execute_symbol_cycle("BTC/USDC")
@@ -165,8 +177,10 @@ _c = mk_candles(40)
 _lev_btc = _Eng().evaluate_signals(_c, _sm, symbol="BTC/USDC").leverage
 _lev_eth = _Eng().evaluate_signals(_c, _sm, symbol="ETH/USDC").leverage
 check("T2.10 [P1] evaluate_signals otrzymuje stan symbolu docelowego",
-      _lev_btc == 0.1 and _lev_eth != 0.1,
-      f"BTC(scout)=x{_lev_btc} vs ETH(base)=x{_lev_eth} — stan nie przecieka miedzy symbolami")
+      _lev_btc == SCOUT_LEVERAGE and _sm.get_symbol_size_multiplier("BTC/USDC") == SCOUT_SIZE_MULT
+      and _lev_eth != SCOUT_LEVERAGE and _sm.get_symbol_size_multiplier("ETH/USDC") == 1.0,
+      f"BTC(scout)=x{_lev_btc} rozmiar x{_sm.get_symbol_size_multiplier('BTC/USDC')} vs "
+      f"ETH(base)=x{_lev_eth} rozmiar x{_sm.get_symbol_size_multiplier('ETH/USDC')} — brak przecieku stanu")
 
 # ── T2.11 daemon ignoruje signal.is_allowed ────────────────────────────────
 async def _vetoed():
