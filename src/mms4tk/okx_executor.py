@@ -693,15 +693,19 @@ class OKXExecutor:
         Returns None when a partial reduction cannot be expressed without closing the
         entire position — the caller must then hold. The old rule,
         `max(1, floor(contracts * pct))`, silently turned a 1-contract SPLIT_50 into a
-        100% liquidation; combined with a repeating trigger that drained whole positions.
+        100% liquidation; dropping the `max(1, …)` is what fixes that.
 
-        Contract counts are integers, so a partial is accurate to +/- one contract.
+        Rounding stays on `floor`, deliberately. Contract counts are integers, so a
+        partial is only accurate to +/- one contract, and the error must fall on the side
+        of closing LESS: this rule exists to trim risk while keeping the position alive.
+        Rounding to nearest would close 2 of 3 contracts (67%) for a "50%" split, cutting
+        more than intended and irreversibly.
         """
         if contracts <= 0:
             return None
         if reduction_pct >= 1.0:
             return float(contracts)
-        amount = float(round(contracts * reduction_pct))
+        amount = float(math.floor(contracts * reduction_pct))
         if amount < 1.0 or amount >= contracts:
             return None
         return amount

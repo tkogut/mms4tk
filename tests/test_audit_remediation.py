@@ -409,7 +409,9 @@ def test_split_never_closes_whole_position(contracts):
         assert contracts == 1
     else:
         assert 0 < amount < contracts, "a partial reduction must never close everything"
-        assert abs(amount / contracts - 0.5) <= 0.2, "partial stays near 50%"
+        # Integer contracts round DOWN: the error must always leave more of the position
+        # on, never less. Closing 67% for a "50%" split would over-cut irreversibly.
+        assert amount / contracts <= 0.5, "a 50% split must never close more than half"
 
     # A full close always closes everything.
     assert OKXExecutor.reduction_amount(contracts, 1.0) == float(contracts)
@@ -507,3 +509,77 @@ def test_kpi_covers_full_history(db):
 )
 def test_symbol_normalization(raw, expected):
     assert normalize_symbol(raw) == expected
+
+
+# ── Regressions found while remediating ─────────────────────────────────
+
+def test_indivisible_split_does_not_book_a_stop_loss(db):
+    """
+    A SPLIT_50 that cannot be executed (1 contract) must leave everything intact.
+
+    The position stays open, so reconciliation must not read it as a vanished position
+    and book a phantom stop-loss — that would flip the system into SCOUT_MODE on a
+    non-event.
+    """
+    from mms4tk.analytics import SignalResult
+
+    ex = sizing_executor()
+    live = [position("ETH/USDC", "long", contracts=1.0, entry=100.0, notional=7.0)]
+    ex.fetch_positions = AsyncMock(return_value=live)
+    ex.reduce_position = AsyncMock(return_value={"status": "not_divisible", "contracts": 1.0})
+    ex.calculate_order_amount = MagicMock(return_value=1.0)
+
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol="ETH/USDC")
+    d = MMS4Daemon(
+        executor=ex, state_manager=sm,
+        signal_engine=StubEngine(SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=3.0)),
+        logger_db=db, symbol="ETH/USDC", trade_amount_usd=10.0,
+    )
+    d.inactivity_manager.set_symbol_config(
+        "ETH/USDC", {"stale_candles_threshold": 2, "impulse_negation_enabled": False}
+    )
+
+    base_ts = 1_700_000_000_000
+    for cycle in range(5):
+        # Advance the candle series so the tracker actually counts candles.
+        ex.fetch_candles = AsyncMock(return_value=[
+            Candle(timestamp=base_ts + (cycle + i) * 900_000, open=100.0, high=100.5,
+                   low=99.5, close=100.0, volume=1.0)
+            for i in range(60)
+        ])
+        asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+
+    assert sm.get_symbol_state("ETH/USDC") == MMS4State.BASE_MODE
+    assert [t for t in sm.trade_history if t.is_stop_loss] == [], "no phantom stop-loss"
+    assert d.inactivity_manager.is_tracking("ETH/USDC"), "position stays supervised"
+
+
+def test_partial_reduction_never_over_cuts():
+    """Integer rounding must always leave MORE of the position on, never less."""
+    for contracts in range(1, 21):
+        amount = OKXExecutor.reduction_amount(float(contracts), 0.5)
+        if amount is None:
+            continue
+        assert amount / contracts <= 0.5, f"{contracts} contracts: closed {amount} (>50%)"
+
+
+def test_addon_clear_is_not_reissued_every_cycle(db):
+    """The no-op ledger clear is guarded in memory rather than hitting SQLite each cycle."""
+    from mms4tk.analytics import SignalResult
+
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[])
+    d, _ = make_daemon(db, ex, SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=3.0))
+
+    calls = {"n": 0}
+    real_clear = db.clear_addon_state
+
+    def counting_clear(symbol, side=None):
+        calls["n"] += 1
+        return real_clear(symbol, side)
+
+    db.clear_addon_state = counting_clear
+    for _ in range(5):
+        asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+
+    assert calls["n"] <= 2, f"expected one clear per side, got {calls['n']}"

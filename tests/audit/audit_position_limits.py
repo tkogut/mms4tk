@@ -102,14 +102,14 @@ for ct in (1, 2, 3, 5, 10):
             print(f"   contracts={ct:>3} pct={pct:<4} -> not_divisible (pozycja utrzymana)")
             continue
         realized = amt / ct
-        # Odchylenie akceptowalne do +/- 1 kontraktu (ziarnistosc instrumentu).
-        tol = max(0.05, (1.0 / ct) * 0.55)
-        flag = "  <-- ODCHYLENIE" if abs(realized - pct) > tol else ""
+        # Redukcja czesciowa musi trafic po stronie ZAMYKANIA MNIEJ (floor), nigdy wiecej.
+        over_cut = realized > pct + 1e-9
+        flag = "  <-- ZAMYKA ZA DUZO" if over_cut else ""
         if flag:
             bad.append((ct, pct, realized))
         print(f"   contracts={ct:>3} pct={pct:<4} -> zamyka {amt:>4.0f} = {realized*100:>5.1f}%{flag}")
 check("T3.6 [P1] SPLIT_50 zamyka ~50% pozycji dla kazdej wielkosci",
-      not bad, f"odchylenia poza tolerancja +/-1 kontraktu: {bad}")
+      not bad, f"przypadki zamykajace WIECEJ niz zadano: {bad} (floor => blad zawsze na korzysc pozycji)")
 
 # ── T3.7 Single Addon Guard: czy lock przezywa cykl z sygnalem NONE ───────
 import tempfile as _tf, os as _os

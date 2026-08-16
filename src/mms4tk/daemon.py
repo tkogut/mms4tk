@@ -114,6 +114,9 @@ class MMS4Daemon:
         # Stop-loss percentages used when opening; reconciliation compares the exit price
         # against these to decide whether a vanished position was a stop-out.
         self.base_sl_pct: float = float(os.getenv("MMS4_BASE_SL_PCT", "0.02"))
+        # (symbol, side) pairs whose addon ledger is already known empty — avoids a no-op
+        # DELETE on every cycle for the side that has no position.
+        self._addons_known_clear: set = set()
         self.addon_sl_pct: float = float(os.getenv("MMS4_ADDON_SL_PCT", "0.0125"))
 
     # ── Addon ledger ────────────────────────────────────────────────────
@@ -129,6 +132,7 @@ class MMS4Daemon:
         try:
             # int() also guards against a logger_db double returning a non-numeric value,
             # which would otherwise blow up the comparison at the call site.
+            self._addons_known_clear.discard((symbol, side.lower()))
             return int(self.logger_db.get_addon_count(symbol, side, self._position_key(entry_price)))
         except Exception as e:
             logger.warning(f"Addon ledger read failed for {symbol}/{side}: {e}")
@@ -136,14 +140,25 @@ class MMS4Daemon:
 
     def _record_addon(self, symbol: str, side: str, entry_price: float) -> int:
         try:
+            self._addons_known_clear.discard((symbol, side.lower()))
             return self.logger_db.record_addon(symbol, side, self._position_key(entry_price))
         except Exception as e:
             logger.warning(f"Addon ledger write failed for {symbol}/{side}: {e}")
             return 1
 
     def _clear_addons(self, symbol: str, side: Optional[str] = None) -> None:
+        """
+        Drop the addon ledger for a symbol/side.
+
+        Called every cycle for whichever side has no open position, so an in-memory guard
+        keeps it from re-issuing the same no-op DELETE 5 760 times a day per side.
+        """
+        key = (symbol, (side or "").lower())
+        if key in self._addons_known_clear:
+            return
         try:
             self.logger_db.clear_addon_state(symbol, side)
+            self._addons_known_clear.add(key)
         except Exception as e:
             logger.warning(f"Addon ledger clear failed for {symbol}: {e}")
 
