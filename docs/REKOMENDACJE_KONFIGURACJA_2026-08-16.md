@@ -46,23 +46,37 @@ Zmierzone progi kapitału:
 
 ### Rekomendacja (kolejność wdrożenia)
 
-**Krok 1 — dziś, jednolinijkowo.** Dodać crona dla furtki awaryjnej, żeby SCOUT miał zaprojektowane
-wyjście:
+**Najpierw twarde ograniczenie, którego nie da się obejść konfiguracją.** Minimum giełdowe to $7
+notional. Baza w BASE_MODE ma $21 notional. Zatem **maksymalna osiągalna redukcja ryzyka w SCOUT przy
+`max_margin_usd = $10` wynosi 3× ($21 → $7)**, a nie 10× z opisu strategii. Asymetria x1.0/x0.1
+z MMS v4 jest przy tej wielkości rachunku **nieosiągalna** — nie z powodu błędu w kodzie, tylko
+dlatego, że giełda nie przyjmie zlecenia mniejszego niż $7.
+
+Trzeba więc wybrać jedno z dwojga:
+
+**Wariant A — redukcja 3×, możliwa dziś (rekomendowany).** SCOUT handluje pełną alokacją bazy przy
+lewarze 1.0: notional $7 × 1.0 = **$7.00**, dokładnie na minimum, czyli 3× mniejsza ekspozycja niż
+$21 w BASE. Wymaga zmiany kodu: rozdzielenia „lewara SCOUT" od „mnożnika rozmiaru SCOUT", bo dziś
+oba są tą samą liczbą (0.1) i to ona schodzi poniżej minimum.
+
+**Wariant B — redukcja 10× zgodna ze specyfikacją, wymaga kapitału.** Notional SCOUT = $7 przy
+`max_margin_usd ≥ $100` (bo $100 × 0.70 × 0.1 = $7.00). Uwaga: to dziesięciokrotnie zwiększa też
+ekspozycję w BASE_MODE — przy 4 symbolach $400 marży wobec ~$59 wolnego salda. **Przy obecnym
+kapitale niewykonalne.**
+
+**Krok doraźny — furtka awaryjna, do rozważenia natychmiast.** Niezależnie od wyboru A/B, SCOUT
+potrzebuje zaprojektowanego wyjścia. Skrypty istnieją, ale nie są w cronie:
 
 ```bash
-*/30 * * * * python3 /docker/mms4tk/scripts/hermes/mms4tk_h4_analysis.py    >> /var/log/mms4tk_h4.log 2>&1
+*/30 * * * * python3 /docker/mms4tk/scripts/hermes/mms4tk_h4_analysis.py     >> /var/log/mms4tk_h4.log 2>&1
 */10 * * * * python3 /docker/mms4tk/scripts/hermes/mms4tk_event_dispatcher.py >> /var/log/mms4tk_disp.log 2>&1
 ```
 
-**Krok 2 — właściwa naprawa (zmiana kodu).** SCOUT powinien redukować ryzyko **rozmiarem**, nie
-lewarem — giełda i tak nie przyjmuje lewara < 1x, więc obecna konstrukcja jest z nią sprzeczna.
-Proponowany kształt: `MMS4_SCOUT_SIZE_MULT=0.3` przy lewarze 1x → notional $7 × 1 × 0.3 = $2.10…
-nadal poniżej minimum. Przy `max_margin=$50`: $35 × 0.3 = $10.50 → handluje z 3× mniejszą ekspozycją
-niż BASE. To jest konfiguracja spójna: SCOUT handluje mniejszą pozycją, a nie wcale.
-
-**Krok 3 — alternatywa bez zmiany kodu.** Podnieść `max_margin_usd` do ≥ $100. Uwaga: to potroi
-ekspozycję także w BASE_MODE — przy 4 symbolach byłoby $400 marży wobec ~$59 wolnego salda, więc
-**tej drogi nie rekomenduję przy obecnym kapitale**.
+> ⚠️ **Nie dodałem tych wpisów** — uruchomienie nowej automatyki na żywym hoście handlowym to
+> osobna decyzja, a `mms4tk_h4_analysis.py` zapisuje `scout_override`, czyli **rozluźnia stan
+> ryzyka**. Oba skrypty nigdy nie były uruchamiane w produkcji, więc nie mają żadnego przebiegu.
+> Przed wpisaniem do crona uruchomić każdy **ręcznie raz** i sprawdzić wynik:
+> `ssh root@… "python3 /docker/mms4tk/scripts/hermes/mms4tk_h4_analysis.py"`.
 
 **Do czasu wdrożenia kroku 1 lub 2:** monitorować `/api/v1/state`. Jeśli symbol wejdzie w SCOUT_MODE,
 odblokować ręcznie:
@@ -172,10 +186,29 @@ strategii, nie tylko sposobu liczenia.
 
 | # | Pozycja | Priorytet | Działanie |
 |---|---|---|---|
-| 0 | SCOUT_MODE bez wyjścia | 🔴 **pilne** | Cron dla `h4_analysis` + `event_dispatcher`; docelowo SCOUT redukujący rozmiarem, nie lewarem |
+| 0 | SCOUT_MODE bez wyjścia | 🔴 **pilne** | Wariant A: SCOUT = baza przy lewarze 1.0 (redukcja 3×, możliwa dziś). Doraźnie: ręcznie sprawdzić, potem oplanować `h4_analysis` + `event_dispatcher` |
 | — | Brak limitu portfelowego | 🟠 średni | Dodać zbiorczy cap marży ponad `max_margin_usd` per symbol |
 | 1 | Lewar x3.0 | 🟢 bez zmian | Utrzymać; nie jest czynnikiem ryzyka przy tym kapitale |
 | 2 | `MMS4_BE_COST_PCT` | 🟢 niski | Tylko razem z `be_escape_threshold: 0.003`, inaczej wyłącza regułę II |
 | 3 | `MMS4_ATR_METHOD=wilder` | 🟢 niski | Tylko razem z `atr_mult ≈ 2.3`; sens wyłącznie przy strojeniu na TradingView |
 
 Żadna z pozycji 1–3 nie wymaga natychmiastowego działania. Pozycja 0 wymaga.
+
+---
+
+## Aneks: stan ledgera dokładek po migracji
+
+Jeden wiersz w `position_addons` powstał jeszcze pod starym kluczowaniem (przed poprawką `74d0e2b`)
+i przetrwał do nowego schematu. Zweryfikowano, że zachowuje się poprawnie:
+
+```
+ledger:                    [{'symbol': 'SOL/USDC', 'side': 'short', 'addon_count': 1}]
+otwarte pozycje:           ['BTC/USDC', 'ETH/USDC', 'ICP/USDC', 'SOL/USDC']
+zablokowana dokładka:      ['SOL/USDC']
+wolne na pierwszą dokładkę:['BTC/USDC', 'ETH/USDC', 'ICP/USDC']
+```
+
+SOL/USDC faktycznie otrzymał dokładkę (40 kontraktów ≈ 27 bazy + 11 dokładki), więc blokada jest
+zasadna — i teraz trzyma mimo dryfu średniej ceny wejścia z 75.45 na 75.375, co było istotą błędu
+naprawionego w `74d0e2b`. Pozostałe trzy symbole mają czysty ledger, więc ich pierwsza legalna
+dokładka nie jest blokowana. **Nie wymaga żadnego działania.**
