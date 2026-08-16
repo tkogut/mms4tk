@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, Award, Percent, AlertOctagon, Scale, Layers } from 'lucide-react';
 
-export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions = [], onRefresh }) {
+export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions = [], daemonData = null, onRefresh }) {
   const [activeSymbols, setActiveSymbols] = useState([
     { symbol: 'BTC/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
     { symbol: 'ETH/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
@@ -31,6 +31,16 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
   const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
   const leverage = stateData?.leverage || 3.0;
 
+  // Live sizing resolved by the engine, per symbol. Leverage alone no longer describes
+  // risk posture: SCOUT_MODE keeps leverage exchange-legal (>=1x) and cuts exposure
+  // through the size multiplier instead, so both have to be shown together.
+  const allocationPlan = daemonData?.allocation_plan || {};
+  const addonLedger = daemonData?.addon_ledger || [];
+  const addonsUsed = new Set(
+    addonLedger.filter((r) => Number(r.addon_count) > 0).map((r) => `${r.symbol}|${r.side}`)
+  );
+  const scoutSymbols = Object.entries(allocationPlan).filter(([, p]) => p.state === 'SCOUT_MODE');
+
   const totalTrades = statsData?.total_trades || 0;
   const hasTraded = totalTrades > 0;
 
@@ -43,11 +53,50 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
   // KPI Metrics: Only display real values if total_trades > 0, else 0.0 / Brak Transakcji
   const winRate = hasTraded && statsData?.win_rate !== undefined ? Number(statsData.win_rate).toFixed(1) : '0.0';
   const profitFactor = hasTraded && statsData?.profit_factor !== undefined ? Number(statsData.profit_factor).toFixed(2) : '0.00';
-  const maxDd = hasTraded && statsData?.max_drawdown !== undefined ? Number(statsData.max_drawdown).toFixed(2) : '0.00';
+  // The API reports drawdown in USD, with the ratio in its own field. Showing the
+  // percentage requires a starting balance, so it is only rendered when present.
+  const maxDdUsd = hasTraded && statsData?.max_drawdown_usd !== undefined
+    ? Number(statsData.max_drawdown_usd).toFixed(2)
+    : (hasTraded && statsData?.max_drawdown !== undefined ? Number(statsData.max_drawdown).toFixed(2) : '0.00');
+  const maxDdPct = hasTraded && Number(statsData?.max_drawdown_pct || 0) > 0
+    ? Number(statsData.max_drawdown_pct).toFixed(2)
+    : null;
   const avgRr = hasTraded && statsData?.average_rr !== undefined ? Number(statsData.average_rr).toFixed(2) : '0.00';
 
   return (
     <div className="space-y-6">
+      {/* SCOUT_MODE banner — a symbol only leaves this state on a take-profit or a
+          manual release, so it must be visible rather than buried in a per-symbol chip. */}
+      {scoutSymbols.length > 0 && (
+        <div className="bg-amber-950/40 border border-amber-500/40 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-bold text-amber-200 text-sm">
+                Tryb obronny SCOUT aktywny na {scoutSymbols.length}{' '}
+                {scoutSymbols.length === 1 ? 'parze' : 'parach'}
+              </div>
+              <div className="text-xs text-amber-100/80 leading-relaxed">
+                Ekspozycja zredukowana rozmiarem pozycji, dźwignia pozostaje zgodna z wymogiem
+                giełdy (≥1×). Para wraca do BASE_MODE po pierwszym Take Profit albo po ręcznym
+                zwolnieniu w zakładce Ustawienia.
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {scoutSymbols.map(([sym, p]) => (
+                  <span
+                    key={sym}
+                    className="text-[10px] font-mono bg-amber-900/50 border border-amber-500/30 text-amber-200 px-2 py-0.5 rounded"
+                  >
+                    {sym} · ${Number(p.notional_base_usd).toFixed(2)} · ↓
+                    {Number(p.notional_reduction_factor).toFixed(1)}×
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Multi-Symbol Active Pairs Grid Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
         <div className="flex items-center justify-between">
@@ -61,39 +110,80 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {activeSymbols.map((s) => (
-            <div key={s.symbol} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-                <span className="font-extrabold text-gray-100 font-mono text-sm">{s.symbol}</span>
-                <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold border ${
-                  s.state === 'SCOUT_MODE'
-                    ? 'bg-amber-950 text-amber-300 border-amber-500/40'
-                    : 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
-                }`}>
-                  {s.state || 'BASE_MODE'}
-                </span>
-              </div>
+          {activeSymbols.map((s) => {
+            // Engine-resolved plan wins over the /symbols config: it reflects the CURRENT
+            // risk state, including the SCOUT size reduction.
+            const plan = allocationPlan[s.symbol];
+            const symState = plan?.state || s.state || 'BASE_MODE';
+            const symLeverage = plan?.leverage ?? s.leverage ?? leverage;
+            const sizeMult = plan?.size_multiplier ?? 1.0;
+            const isReduced = sizeMult !== 1.0;
+            const hasAddon =
+              addonsUsed.has(`${s.symbol}|long`) || addonsUsed.has(`${s.symbol}|short`);
 
-              <div className="grid grid-cols-4 gap-1.5 text-xs font-mono">
-                <div>
-                  <span className="text-slate-500 text-[9px] block">Alokacja ($):</span>
-                  <span className="font-bold text-emerald-400">${Number(s.allocation_usd || 10.0).toFixed(2)}</span>
+            return (
+              <div key={s.symbol} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <span className="font-extrabold text-gray-100 font-mono text-sm">{s.symbol}</span>
+                  <div className="flex items-center gap-1.5">
+                    {hasAddon && (
+                      <span
+                        title="Dokładka 30% już wykorzystana na tej pozycji"
+                        className="px-2 py-0.5 text-[10px] rounded-full font-mono font-bold border bg-violet-950 text-violet-300 border-violet-500/40"
+                      >
+                        ADD ✓
+                      </span>
+                    )}
+                    <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono font-bold border ${
+                      symState === 'SCOUT_MODE'
+                        ? 'bg-amber-950 text-amber-300 border-amber-500/40'
+                        : 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                    }`}>
+                      {symState}
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-slate-500 text-[9px] block">Interwał:</span>
-                  <span className="font-bold text-amber-400">{s.timeframe || '15m'}</span>
+
+                <div className="grid grid-cols-4 gap-1.5 text-xs font-mono">
+                  <div>
+                    <span className="text-slate-500 text-[9px] block">Alokacja ($):</span>
+                    <span className="font-bold text-emerald-400">${Number(s.allocation_usd || 10.0).toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-[9px] block">Interwał:</span>
+                    <span className="font-bold text-amber-400">{s.timeframe || '15m'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-[9px] block">Dźwignia:</span>
+                    <span className="font-bold text-blue-400">{Number(symLeverage).toFixed(1)}x</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-[9px] block">Rozmiar:</span>
+                    <span className={`font-bold ${isReduced ? 'text-amber-400' : 'text-slate-300'}`}>
+                      {(Number(sizeMult) * 100).toFixed(0)}%
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-slate-500 text-[9px] block">Dźwignia:</span>
-                  <span className="font-bold text-blue-400">{Number(s.leverage || leverage).toFixed(1)}x</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 text-[9px] block">Base / Add:</span>
-                  <span className="font-bold text-slate-300">{s.base_ratio || 70}/{s.add_ratio || 30}%</span>
-                </div>
+
+                {plan && (
+                  <div className="flex items-center justify-between text-[10px] font-mono border-t border-slate-800/80 pt-2">
+                    <span className="text-slate-500">
+                      Pozycja bazowa:{' '}
+                      <span className="text-slate-300 font-bold">
+                        ${Number(plan.notional_base_usd).toFixed(2)}
+                      </span>
+                      <span className="text-slate-600"> nominał</span>
+                    </span>
+                    {isReduced && (
+                      <span className="text-amber-400 font-bold">
+                        ↓ {Number(plan.notional_reduction_factor).toFixed(1)}× mniej
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -193,9 +283,11 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
               <AlertOctagon className="w-3.5 h-3.5 text-red-400" />
             </div>
             <div className="text-xl font-bold text-red-400 font-mono">
-              {hasTraded ? `$${maxDd}` : '$0.00'}
+              {hasTraded ? `$${maxDdUsd}` : '$0.00'}
             </div>
-            <div className="text-[10px] text-slate-500">Maksymalne obsunięcie</div>
+            <div className="text-[10px] text-slate-500">
+              {maxDdPct ? `Maksymalne obsunięcie · ${maxDdPct}% kapitału` : 'Maksymalne obsunięcie (USD)'}
+            </div>
           </div>
 
           <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3.5">
