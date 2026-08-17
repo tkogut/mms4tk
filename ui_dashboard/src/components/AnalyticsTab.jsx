@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw, ChevronLeft, ChevronRight, XCircle, Search, Filter, Calendar, ArrowUpDown, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw, ChevronLeft, ChevronRight, XCircle, Search, Filter, Calendar, ArrowUpDown, CheckCircle, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
 
 export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = [], apiKey, onRefresh }) {
@@ -10,7 +10,8 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
   const [availableSymbols, setAvailableSymbols] = useState(['BTC/USDC', 'ETH/USDC', 'SOL/USDC', 'ICP/USDC']);
   const [loading, setLoading] = useState(false);
 
-  // Position closing state
+  // Position double-confirmation close modal state
+  const [confirmCloseTarget, setConfirmCloseTarget] = useState(null);
   const [closingSym, setClosingSym] = useState(null);
   const [actionMsg, setActionMsg] = useState('');
 
@@ -37,6 +38,21 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
   ];
 
   const currentTfObj = timeframes.find(t => t.id === timeframe) || timeframes[0];
+
+  // Symbol normalization utility helper for flawless symbol grouping & filtering
+  const normalizeSym = (sym) => {
+    if (!sym) return '';
+    let str = String(sym).toUpperCase().trim();
+    str = str.split(':')[0];
+    str = str.replace(/-\d+$/, '');
+    str = str.replace('-USD_UM_XPERP', '');
+    str = str.replace('_XPERP', '');
+    str = str.replace('-SWAP', '');
+    if (str.includes('-') && !str.includes('/')) {
+      str = str.replace('-', '/');
+    }
+    return str;
+  };
 
   useEffect(() => {
     const fetchSymbols = async () => {
@@ -107,13 +123,8 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     fetchHtf();
   }, [timeframe, selectedSymbol]);
 
-  // Position Close Handler
-  const handleClosePosition = async (rawSym, side) => {
-    const cleanSym = (rawSym || '').split(':')[0].replace(/-\d+$/, '').replace('-USD_UM_XPERP', '/USD').replace('_XPERP', '');
-    if (!window.confirm(`Czy na pewno chcesz zamknąć całą pozycję ${cleanSym} (${side || 'ALL'}) na giełdzie OKX?`)) {
-      return;
-    }
-    
+  // Execute Position Close after Double Confirmation Modal
+  const executeClosePosition = async (cleanSym, side) => {
     setClosingSym(cleanSym);
     setActionMsg('');
     try {
@@ -127,12 +138,12 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         body: JSON.stringify({ symbol: cleanSym, side: side ? side.toLowerCase() : null })
       });
       if (res.ok) {
-        const data = await res.json();
-        setActionMsg(`✓ Zlecenie zamknięcia pozycji ${cleanSym} zostało przyjęte przez giełdę OKX.`);
+        setActionMsg(`✓ Pozycja ${cleanSym} (${side || 'ALL'}) została pomyślnie zamknięta na giełdzie OKX.`);
+        setConfirmCloseTarget(null);
         if (onRefresh) onRefresh();
       } else {
         const errData = await res.json().catch(() => ({}));
-        setActionMsg(`❌ Błąd zamknięcia pozycji: ${errData.detail || errData.message || 'Operacja odrzucona'}`);
+        setActionMsg(`❌ Błąd zamknięcia pozycji: ${errData.detail || errData.message || 'Operacja odrzucona przez API'}`);
       }
     } catch (err) {
       setActionMsg('❌ Błąd połączenia z serwerem API');
@@ -142,30 +153,74 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     }
   };
 
-  // Dynamic Cumulative Realized PnL / Equity Curve
-  let cumulativePnl = 0;
-  const hasRealTrades = tradesHistory && Array.isArray(tradesHistory) && tradesHistory.length > 0;
-  const pnlCurve = hasRealTrades
-    ? tradesHistory.map((t) => {
+  // Dynamic Cumulative Realized PnL / Equity Curve scaled 1:1 to selected timeframe & candles
+  const pnlCurve = useMemo(() => {
+    const now = Date.now();
+    let timeframeCutoff = 0;
+    if (timeframe === '4h') timeframeCutoff = now - 24 * 3600 * 1000;
+    else if (timeframe === '1d') timeframeCutoff = now - 48 * 3600 * 1000;
+    else if (timeframe === '1w') timeframeCutoff = now - 7 * 24 * 3600 * 1000;
+    else if (timeframe === '1m') timeframeCutoff = now - 30 * 24 * 3600 * 1000;
+    else if (timeframe === '3m') timeframeCutoff = now - 90 * 24 * 3600 * 1000;
+    else if (timeframe === '6m') timeframeCutoff = now - 180 * 24 * 3600 * 1000;
+    else if (timeframe === '1y') timeframeCutoff = now - 365 * 24 * 3600 * 1000;
+    else timeframeCutoff = 0; // '5y' or all
+
+    // Filter trades within this timeframe range
+    const timeframeTrades = (tradesHistory && Array.isArray(tradesHistory))
+      ? tradesHistory.filter((t) => {
+          const ts = t.timestamp ? new Date(t.timestamp).getTime() : now;
+          if (timeframeCutoff > 0 && ts < timeframeCutoff) return false;
+          return true;
+        }).sort((a, b) => (new Date(a.timestamp).getTime() || 0) - (new Date(b.timestamp).getTime() || 0)) // Chronological ASC for chart line
+      : [];
+
+    if (timeframeTrades.length > 0) {
+      let cumulativePnl = 0;
+      return timeframeTrades.map((t) => {
         cumulativePnl += Number(t.pnl_usd || 0);
-        const ts = t.timestamp ? new Date(t.timestamp).getTime() : Date.now();
+        const ts = t.timestamp ? new Date(t.timestamp).getTime() : now;
         const dateObj = new Date(ts);
         return {
           date: dateObj.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           balance: Number(cumulativePnl.toFixed(2))
         };
-      })
-    : (candles.length > 0
-        ? candles.map((c) => ({
-            date: c.time,
-            balance: Number((statsData?.realized_pnl || 0).toFixed(2))
-          }))
-        : [
-            { date: 'Start', balance: 0.00 },
-            { date: 'Teraz', balance: 0.00 }
-          ]);
+      });
+    }
 
-  // Filter & Sort Trades History (Newest Trades First, Period Filter, Symbol, Side, PnL)
+    // Fallback: scale curve to current candles timeframe points
+    if (candles && candles.length > 0) {
+      return candles.map((c) => ({
+        date: c.time,
+        balance: Number((statsData?.realized_pnl || 0).toFixed(2))
+      }));
+    }
+
+    return [
+      { date: 'Start', balance: 0.00 },
+      { date: 'Teraz', balance: 0.00 }
+    ];
+  }, [tradesHistory, timeframe, candles, statsData]);
+
+  // Unique symbol options for flawless dropdown filtering
+  const symbolOptions = useMemo(() => {
+    const set = new Set();
+    availableSymbols.forEach(s => {
+      const norm = normalizeSym(s);
+      if (norm) set.add(norm);
+    });
+    if (Array.isArray(tradesHistory)) {
+      tradesHistory.forEach(t => {
+        if (t.symbol) {
+          const norm = normalizeSym(t.symbol);
+          if (norm) set.add(norm);
+        }
+      });
+    }
+    return Array.from(set);
+  }, [availableSymbols, tradesHistory]);
+
+  // Filter & Sort Trades History (Newest Trades First, Period Filter, Normalized Symbol Grouping, Side, PnL)
   const filteredAndSortedTrades = useMemo(() => {
     if (!tradesHistory || !Array.isArray(tradesHistory)) return [];
     
@@ -181,8 +236,12 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
       const tTs = t.timestamp ? new Date(t.timestamp).getTime() : now;
       if (periodCutoff > 0 && tTs < periodCutoff) return false;
 
-      // Symbol filter
-      if (filterSymbol !== 'ALL' && t.symbol !== filterSymbol) return false;
+      // Symbol filter with normalized symbol comparison
+      if (filterSymbol !== 'ALL') {
+        const normFilter = normalizeSym(filterSymbol);
+        const normTradeSym = normalizeSym(t.symbol);
+        if (normTradeSym !== normFilter) return false;
+      }
 
       // Side filter
       if (filterSide !== 'ALL') {
@@ -245,6 +304,70 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         </div>
       )}
 
+      {/* Modal / Popup Podwójnej Autoryzacji Zamknięcia Pozycji */}
+      {confirmCloseTarget && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+              <div className="p-3 bg-red-950/80 border border-red-500/30 rounded-xl text-red-400">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-100 text-lg">Potwierdzenie Zamknięcia</h3>
+                <p className="text-xs text-slate-400">Podwójna autoryzacja pozycji rynkowej OKX</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs font-mono">
+              <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                <span className="text-slate-400">Para Rynkowa:</span>
+                <span className="font-bold text-gray-100 text-sm">{confirmCloseTarget.cleanSym}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                <span className="text-slate-400">Strona Pozycji:</span>
+                <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
+                  confirmCloseTarget.isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-rose-950 text-rose-400 border border-rose-500/30'
+                }`}>
+                  {confirmCloseTarget.side}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                <span className="text-slate-400">Alokacja (Notional):</span>
+                <span className="font-bold text-gray-200">${confirmCloseTarget.notional?.toFixed(2)} USD</span>
+              </div>
+              <div className="flex justify-between items-center py-1">
+                <span className="text-slate-400">Niezrealizowany PnL:</span>
+                <span className={`font-bold ${confirmCloseTarget.upnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {confirmCloseTarget.upnl >= 0 ? `+$${confirmCloseTarget.upnl?.toFixed(2)}` : `-$${Math.abs(confirmCloseTarget.upnl || 0).toFixed(2)}`} USD
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 bg-amber-950/40 border border-amber-500/30 p-3 rounded-lg leading-relaxed">
+              ⚠️ <strong>Uwaga:</strong> Wyślesz natychmiastowe zlecenie rynkowe R-SEC do OKX zamykające 100% tej pozycji. Czy na pewno chcesz kontynuować?
+            </p>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setConfirmCloseTarget(null)}
+                disabled={closingSym === confirmCloseTarget.cleanSym}
+                className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs transition-colors"
+              >
+                Anuluj
+              </button>
+              <button
+                onClick={() => executeClosePosition(confirmCloseTarget.cleanSym, confirmCloseTarget.side)}
+                disabled={closingSym === confirmCloseTarget.cleanSym}
+                className="w-1/2 py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-red-600/30"
+              >
+                <XCircle className="w-4 h-4" />
+                <span>{closingSym === confirmCloseTarget.cleanSym ? 'Zamykanie...' : 'Potwierdzam Zamknięcie'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hermes H4 Analysis Report Box */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
         <div className="flex items-center justify-between mb-4">
@@ -295,7 +418,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
             onChange={(e) => setSelectedSymbol(e.target.value)}
             className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-blue-400 focus:outline-none focus:border-blue-500 cursor-pointer"
           >
-            {availableSymbols.map((sym) => (
+            {symbolOptions.map((sym) => (
               <option key={sym} value={sym}>
                 {sym}
               </option>
@@ -372,11 +495,6 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
               <h3 className="font-semibold text-gray-200">Krzywa Salda Portfela (Skala: {currentTfObj.label})</h3>
             </div>
             <div className="flex items-center gap-2">
-              {!hasRealTrades && (
-                <span className="text-[10px] text-slate-400 font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                  Czysta Baza
-                </span>
-              )}
               <span className="text-xs text-emerald-400 font-bold bg-emerald-950/60 px-2.5 py-1 rounded border border-emerald-500/30 font-mono">
                 PnL: ${Number(statsData?.realized_pnl || 0).toFixed(2)}
               </span>
@@ -411,7 +529,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         </div>
       </div>
 
-      {/* Live Open Positions Table with "Zamknij Pozycję" Button */}
+      {/* Live Open Positions Table with Double Confirmation "Zamknij Pozycję" Button */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
         <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
           <h3 className="font-semibold text-gray-200 flex items-center gap-2 text-base">
@@ -442,7 +560,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
               <tbody className="divide-y divide-slate-800/60 font-mono">
                 {openPositions.map((p, idx) => {
                   const rawSym = p.symbol || p.raw_symbol || 'N/A';
-                  const cleanSym = rawSym.split(':')[0].replace(/-\d+$/, '').replace('-USD_UM_XPERP', '/USD').replace('_XPERP', '');
+                  const cleanSym = normalizeSym(rawSym);
                   const side = String(p.side || 'long').toUpperCase();
                   const isLong = side === 'BUY' || side === 'LONG';
                   const leverage = Number(p.leverage || 1.0);
@@ -481,7 +599,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
-                          onClick={() => handleClosePosition(cleanSym, side)}
+                          onClick={() => setConfirmCloseTarget({ cleanSym, side, notional, margin, entryPx, markPx, upnl, isLong })}
                           disabled={isClosing}
                           className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg font-bold text-xs transition-colors flex items-center justify-end gap-1.5 shadow-md shadow-red-600/20 ml-auto"
                         >
@@ -558,7 +676,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
             />
           </div>
 
-          {/* Symbol Filter */}
+          {/* Symbol Filter with Normalized Symbols */}
           <div>
             <select
               value={filterSymbol}
@@ -566,7 +684,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
               className="w-full py-1.5 px-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-blue-500"
             >
               <option value="ALL">Wszystkie Pary</option>
-              {availableSymbols.map(sym => (
+              {symbolOptions.map(sym => (
                 <option key={sym} value={sym}>{sym}</option>
               ))}
             </select>
@@ -632,7 +750,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                 {currentTrades.map((t, idx) => (
                   <tr key={idx} className="hover:bg-slate-800/30">
                     <td className="px-4 py-3 text-slate-400 font-bold">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
-                    <td className="px-4 py-3 font-bold text-gray-100">{t.symbol || 'BTC/USDC'}</td>
+                    <td className="px-4 py-3 font-bold text-gray-100">{normalizeSym(t.symbol) || 'BTC/USDC'}</td>
                     <td className="px-4 py-3 font-bold">
                       <span className={`px-2 py-0.5 rounded text-[11px] ${
                         String(t.side || '').toUpperCase().includes('BUY') || String(t.side || '').toUpperCase().includes('LONG')

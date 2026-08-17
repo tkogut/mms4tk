@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.27.1] - 2026-08-17
+
+### 🛠️ AnalyticsTab Fixes & Double-Confirmation Modal
+- 🔒 **Double-Confirmation Modal for Position Closing**: Added styled React Modal overlay (`confirmCloseTarget`) with full details (Symbol, Side, Notional $, uPnL $) requiring explicit user double-confirmation before triggering market close.
+- 🔀 **Flawless Symbol Grouping & Filtering**: Implemented `normalizeSym` helper resolving symbol string variations (`BTC/USDC`, `BTC-USDC-SWAP`, `BTC/USDC:USDC`) across trade history records.
+- 📈 **Dynamic Equity Curve Rescaling**: Filtered `pnlCurve` chronologically according to the selected timeframe range cutoff (`4H`, `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `5Y`), scaling 1:1 with candles chart X-axis.
+
+---
+
 ## 🚀 [0.27.0] - 2026-08-17
 
 ### 📊 Dashboard Analytics & Live Position Closing Overhaul
