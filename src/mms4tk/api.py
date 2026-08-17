@@ -995,4 +995,44 @@ async def get_active_positions() -> Dict[str, Any]:
         return {"positions": [], "total": 0, "error": str(e)}
 
 
+class ClosePositionRequest(BaseModel):
+    symbol: str = Field(description="Trading symbol pair e.g. BTC/USDC or SOL/USDC")
+    side: Optional[str] = Field(default=None, description="Position side to close ('long' or 'short'); closes active side if omitted")
+
+
+@app.post("/api/v1/positions/close", tags=["Trading"], dependencies=[Depends(verify_api_key)])
+async def close_position_endpoint(req: ClosePositionRequest) -> Dict[str, Any]:
+    """Close an active open position for a given symbol and side on OKX via market reduce order."""
+    sym = req.symbol.strip().upper()
+    if "/" not in sym:
+        sym = sym.replace("USDC", "/USDC") if sym.endswith("USDC") else f"{sym}/USDC"
+
+    sides = [req.side.lower()] if req.side and req.side.lower() in ["long", "short"] else ["long", "short"]
+    results = []
+    for s in sides:
+        try:
+            res = await executor.reduce_position(
+                symbol=sym,
+                side=s,
+                reduction_pct=1.0,
+                reason="User manual position close from Web Dashboard"
+            )
+            results.append(res)
+        except Exception as err:
+            logger.warning(f"Failed to close position {sym} ({s}): {err}")
+            results.append({"status": "error", "symbol": sym, "side": s, "error": str(err)})
+
+    try:
+        await daemon.reconcile_positions()
+    except Exception as e:
+        logger.warning(f"Reconciliation failed after manual close: {e}")
+
+    return {
+        "status": "success",
+        "symbol": sym,
+        "results": results,
+        "message": f"Zlecenie zamknięcia pozycji dla {sym} zostało wysłane do OKX."
+    }
+
+
 

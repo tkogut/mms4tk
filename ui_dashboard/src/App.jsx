@@ -17,7 +17,7 @@ export default function App() {
   const [openPositions, setOpenPositions] = useState([]);
   const [daemonData, setDaemonData] = useState(null);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.26.0');
+  const [appVersion, setAppVersion] = useState('0.27.0');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
@@ -143,6 +143,8 @@ export default function App() {
             statsData={statsData} 
             tradesHistory={tradesHistory} 
             openPositions={openPositions}
+            apiKey={apiKey}
+            onRefresh={fetchDashboardData}
           />
         )}
 

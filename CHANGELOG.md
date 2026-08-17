@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.27.0] - 2026-08-17
+
+### 📊 Dashboard Analytics & Live Position Closing Overhaul
+- 📈 **Dynamic Equity Curve Timeframe Range Scaling**: Added explicit timeframe range selector pills (`4H`, `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `5Y`) and dynamic range title scaling (`AnalyticsTab.jsx`).
+- 📋 **Newest-First Multi-Filter Trades Table**: Reversed order of closed trades table to display newest trades first (`b.timestamp - a.timestamp`). Added dynamic multi-filtering controls (Time Period: 1W, 1M default, 3M, ALL; Symbol; Side; WIN/LOSS result) and custom sorting.
+- 🔴 **Live Position Close Action Button**: Added `POST /api/v1/positions/close` API endpoint and custom "Zamknij Pozycję" action button for each live position in OKX Active Positions table (`AnalyticsTab.jsx`), triggering position reduction and instant state reconciliation.
+
+---
+
 ## 🚀 [0.26.0] - 2026-08-16
 
 ### 🛡️ Audit Remediation — Risk Engine (P0/P1/P2)

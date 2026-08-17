@@ -1,20 +1,30 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw, ChevronLeft, ChevronRight, XCircle, Search, Filter, Calendar, ArrowUpDown, CheckCircle, AlertTriangle } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
 
-export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = [] }) {
+export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = [], apiKey, onRefresh }) {
   const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDC');
   const [timeframe, setTimeframe] = useState('4h');
   const [candles, setCandles] = useState([]);
   const [htfData, setHtfData] = useState(null);
-  const [availableSymbols, setAvailableSymbols] = useState(['BTC/USDC', 'ETH/USDC', 'SOL/USDC']);
+  const [availableSymbols, setAvailableSymbols] = useState(['BTC/USDC', 'ETH/USDC', 'SOL/USDC', 'ICP/USDC']);
   const [loading, setLoading] = useState(false);
 
-  // Closed Trades Table Pagination State
+  // Position closing state
+  const [closingSym, setClosingSym] = useState(null);
+  const [actionMsg, setActionMsg] = useState('');
+
+  // Closed Trades Table Filtering & Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [tradePeriod, setTradePeriod] = useState('1m'); // Default 1 Month range limit: '1w', '1m', '3m', 'all'
+  const [filterSymbol, setFilterSymbol] = useState('ALL');
+  const [filterSide, setFilterSide] = useState('ALL');
+  const [filterPnl, setFilterPnl] = useState('ALL');
+  const [sortOrder, setSortOrder] = useState('newest'); // 'newest' (default: newest first), 'oldest', 'pnl_high', 'pnl_low'
+  const [searchTerm, setSearchTerm] = useState('');
 
-  // Exact requested timeframes: 4H, 1D, 1W, 1M, 3M, 6M, 1Y, 5Y
+  // Timeframe range selector pills for candles and chart scale
   const timeframes = [
     { id: '4h', label: '4H', tf: '4h', limit: 60 },
     { id: '1d', label: '1D', tf: '1d', limit: 60 },
@@ -53,7 +63,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
-            // Sort candles chronologically ASC
+            // Sort candles chronologically ASC for chart rendering
             const sorted = [...data].sort((a, b) => a.timestamp - b.timestamp);
             setCandles(sorted.map((c) => {
               const ts = Number(c.timestamp);
@@ -97,7 +107,42 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     fetchHtf();
   }, [timeframe, selectedSymbol]);
 
-  // Dynamic Cumulative Realized PnL / Equity Curve scaled to actual trades
+  // Position Close Handler
+  const handleClosePosition = async (rawSym, side) => {
+    const cleanSym = (rawSym || '').split(':')[0].replace(/-\d+$/, '').replace('-USD_UM_XPERP', '/USD').replace('_XPERP', '');
+    if (!window.confirm(`Czy na pewno chcesz zamknąć całą pozycję ${cleanSym} (${side || 'ALL'}) na giełdzie OKX?`)) {
+      return;
+    }
+    
+    setClosingSym(cleanSym);
+    setActionMsg('');
+    try {
+      const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
+      const res = await fetch('/api/v1/positions/close', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-MMS4-API-KEY': currentKey
+        },
+        body: JSON.stringify({ symbol: cleanSym, side: side ? side.toLowerCase() : null })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setActionMsg(`✓ Zlecenie zamknięcia pozycji ${cleanSym} zostało przyjęte przez giełdę OKX.`);
+        if (onRefresh) onRefresh();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setActionMsg(`❌ Błąd zamknięcia pozycji: ${errData.detail || errData.message || 'Operacja odrzucona'}`);
+      }
+    } catch (err) {
+      setActionMsg('❌ Błąd połączenia z serwerem API');
+    } finally {
+      setClosingSym(null);
+      setTimeout(() => setActionMsg(''), 6000);
+    }
+  };
+
+  // Dynamic Cumulative Realized PnL / Equity Curve
   let cumulativePnl = 0;
   const hasRealTrades = tradesHistory && Array.isArray(tradesHistory) && tradesHistory.length > 0;
   const pnlCurve = hasRealTrades
@@ -120,16 +165,86 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
             { date: 'Teraz', balance: 0.00 }
           ]);
 
-  // Closed Trades Table Pagination Variables
-  const totalTrades = tradesHistory && Array.isArray(tradesHistory) ? tradesHistory.length : 0;
-  const totalPages = Math.max(1, Math.ceil(totalTrades / pageSize));
+  // Filter & Sort Trades History (Newest Trades First, Period Filter, Symbol, Side, PnL)
+  const filteredAndSortedTrades = useMemo(() => {
+    if (!tradesHistory || !Array.isArray(tradesHistory)) return [];
+    
+    const now = Date.now();
+    let periodCutoff = 0;
+    if (tradePeriod === '1w') periodCutoff = now - 7 * 24 * 3600 * 1000;
+    else if (tradePeriod === '1m') periodCutoff = now - 30 * 24 * 3600 * 1000; // 1 month default
+    else if (tradePeriod === '3m') periodCutoff = now - 90 * 24 * 3600 * 1000;
+    else periodCutoff = 0; // 'all'
+
+    return tradesHistory.filter((t) => {
+      // Date period filter
+      const tTs = t.timestamp ? new Date(t.timestamp).getTime() : now;
+      if (periodCutoff > 0 && tTs < periodCutoff) return false;
+
+      // Symbol filter
+      if (filterSymbol !== 'ALL' && t.symbol !== filterSymbol) return false;
+
+      // Side filter
+      if (filterSide !== 'ALL') {
+        const sideUpper = String(t.side || '').toUpperCase();
+        if (filterSide === 'BUY' && !sideUpper.includes('BUY') && !sideUpper.includes('LONG')) return false;
+        if (filterSide === 'SELL' && !sideUpper.includes('SELL') && !sideUpper.includes('SHORT')) return false;
+      }
+
+      // PnL result filter
+      const pnl = Number(t.pnl_usd || 0);
+      if (filterPnl === 'WIN' && (pnl < 0 || !t.is_win)) return false;
+      if (filterPnl === 'LOSS' && pnl >= 0 && t.is_win) return false;
+
+      // Search term
+      if (searchTerm.trim() !== '') {
+        const term = searchTerm.toLowerCase();
+        const sym = (t.symbol || '').toLowerCase();
+        const side = (t.side || '').toLowerCase();
+        const reason = (t.reason || '').toLowerCase();
+        if (!sym.includes(term) && !side.includes(term) && !reason.includes(term)) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      const tsA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const tsB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      const pnlA = Number(a.pnl_usd || 0);
+      const pnlB = Number(b.pnl_usd || 0);
+
+      if (sortOrder === 'newest') return tsB - tsA; // NEWEST FIRST (default)
+      if (sortOrder === 'oldest') return tsA - tsB;
+      if (sortOrder === 'pnl_high') return pnlB - pnlA;
+      if (sortOrder === 'pnl_low') return pnlA - pnlB;
+      return tsB - tsA;
+    });
+  }, [tradesHistory, tradePeriod, filterSymbol, filterSide, filterPnl, sortOrder, searchTerm]);
+
+  // Pagination for Closed Trades
+  const totalFilteredTrades = filteredAndSortedTrades.length;
+  const totalPages = Math.max(1, Math.ceil(totalFilteredTrades / pageSize));
   const validCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
   const startIndex = (validCurrentPage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, totalTrades);
-  const currentTrades = (tradesHistory && Array.isArray(tradesHistory)) ? tradesHistory.slice(startIndex, endIndex) : [];
+  const endIndex = Math.min(startIndex + pageSize, totalFilteredTrades);
+  const currentTrades = filteredAndSortedTrades.slice(startIndex, endIndex);
 
   return (
     <div className="space-y-6">
+      {/* Global Notification Banner */}
+      {actionMsg && (
+        <div className={`p-4 rounded-xl border text-xs font-mono font-bold flex items-center justify-between shadow-lg transition-all ${
+          actionMsg.includes('✓')
+            ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+            : 'bg-red-950/90 border-red-500/50 text-red-300'
+        }`}>
+          <div className="flex items-center gap-2">
+            {actionMsg.includes('✓') ? <CheckCircle className="w-5 h-5 text-emerald-400" /> : <AlertTriangle className="w-5 h-5 text-red-400" />}
+            <span>{actionMsg}</span>
+          </div>
+          <button onClick={() => setActionMsg('')} className="text-slate-400 hover:text-white text-xs">✕</button>
+        </div>
+      )}
+
       {/* Hermes H4 Analysis Report Box */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
         <div className="flex items-center justify-between mb-4">
@@ -209,7 +324,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
 
       {/* Synchronized Charts Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* TMA Bands & BTC Price Chart */}
+        {/* TMA Bands & Price Chart */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -249,12 +364,12 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
           </div>
         </div>
 
-        {/* Equity / PnL Progression Chart */}
+        {/* Equity / PnL Progression Chart with Timeframe Range Filter */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <div className="flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-blue-400" />
-              <h3 className="font-semibold text-gray-200">Krzywa Salda Portfela ({currentTfObj.label})</h3>
+              <h3 className="font-semibold text-gray-200">Krzywa Salda Portfela (Skala: {currentTfObj.label})</h3>
             </div>
             <div className="flex items-center gap-2">
               {!hasRealTrades && (
@@ -296,14 +411,14 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         </div>
       </div>
 
-      {/* Live Open Positions Table (OKX Real-Time Account Positions) */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-200 flex items-center gap-2">
+      {/* Live Open Positions Table with "Zamknij Pozycję" Button */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+          <h3 className="font-semibold text-gray-200 flex items-center gap-2 text-base">
             <Activity className="w-5 h-5 text-emerald-400" />
             <span>Aktywne Otwarte Pozycje na OKX ({openPositions.length} Otwarte)</span>
           </h3>
-          <span className="text-xs font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-full">
+          <span className="text-xs font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full font-bold">
             Live OKX Positions
           </span>
         </div>
@@ -320,7 +435,8 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                   <th className="px-4 py-2.5">Depozyt (Margin)</th>
                   <th className="px-4 py-2.5">Cena Wejścia</th>
                   <th className="px-4 py-2.5">Cena Rynkowa</th>
-                  <th className="px-4 py-2.5">Niezrealizowany PnL (uPnL)</th>
+                  <th className="px-4 py-2.5">Niezrealizowany PnL</th>
+                  <th className="px-4 py-2.5 text-right">Akcja / Zamknięcie</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -335,6 +451,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                   const entryPx = Number(p.entry_price || 0.0);
                   const markPx = Number(p.mark_price || 0.0);
                   const upnl = Number(p.unrealized_pnl || 0.0);
+                  const isClosing = closingSym === cleanSym;
 
                   return (
                     <tr key={idx} className="hover:bg-slate-800/30">
@@ -362,6 +479,16 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                           {upnl >= 0 ? `+$${upnl.toFixed(2)}` : `-$${Math.abs(upnl).toFixed(2)}`} USD
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => handleClosePosition(cleanSym, side)}
+                          disabled={isClosing}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg font-bold text-xs transition-colors flex items-center justify-end gap-1.5 shadow-md shadow-red-600/20 ml-auto"
+                        >
+                          <XCircle className="w-4 h-4" />
+                          <span>{isClosing ? 'Zamykanie...' : 'Zamknij Pozycję'}</span>
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -375,68 +502,156 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
         </div>
       </div>
 
-      {/* Real Closed Trades History Table with Pagination (SQLite logs.db) */}
+      {/* Real Closed Trades History Table with Search, Filter Range & Newest-First Sorting */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
-        {/* Header & Controls Bar */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-2 border-b border-slate-800/80">
+        {/* Header Bar */}
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
           <div className="flex items-center gap-2">
             <Layers className="w-5 h-5 text-blue-400" />
-            <h3 className="font-semibold text-gray-200">Wykaz Zarejestrowanych Transakcji Rzeczywistych (SQLite logs.db)</h3>
+            <h3 className="font-bold text-gray-100 text-base">Wykaz Zarejestrowanych Transakcji Rzeczywistych (SQLite logs.db)</h3>
             <span className="text-xs font-mono bg-blue-950/80 text-blue-300 border border-blue-500/30 px-2.5 py-0.5 rounded-full ml-2">
-              Łącznie: {totalTrades}
+              Znaleziono: {totalFilteredTrades} z {tradesHistory.length}
             </span>
           </div>
 
-          {/* Page Size & Quick Selector */}
-          <div className="flex items-center gap-3 text-xs font-mono">
-            <span className="text-slate-400">Na stronę:</span>
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
-                setCurrentPage(1);
-              }}
-              className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-blue-400 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+          {/* Quick Period Limitation Selector Pills */}
+          <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs font-mono">
+            <Calendar className="w-4 h-4 text-slate-400 ml-1.5" />
+            <button
+              onClick={() => { setTradePeriod('1w'); setCurrentPage(1); }}
+              className={`px-2.5 py-1 rounded text-xs transition-all ${tradePeriod === '1w' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
             >
-              <option value={5}>5</option>
-              <option value={10}>10</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
+              1 Tydzień
+            </button>
+            <button
+              onClick={() => { setTradePeriod('1m'); setCurrentPage(1); }}
+              className={`px-2.5 py-1 rounded text-xs transition-all ${tradePeriod === '1m' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+            >
+              1 Miesiąc ⭐
+            </button>
+            <button
+              onClick={() => { setTradePeriod('3m'); setCurrentPage(1); }}
+              className={`px-2.5 py-1 rounded text-xs transition-all ${tradePeriod === '3m' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+            >
+              3 Miesiące
+            </button>
+            <button
+              onClick={() => { setTradePeriod('all'); setCurrentPage(1); }}
+              className={`px-2.5 py-1 rounded text-xs transition-all ${tradePeriod === 'all' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+            >
+              Wszystkie Okresy
+            </button>
+          </div>
+        </div>
+
+        {/* Multi-Filter & Search Toolbar (Czas, Para, Strona, PnL, Sortowanie) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs font-mono">
+          {/* Search Input */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Szukaj pary..."
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              className="w-full pl-8 pr-2 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          {/* Symbol Filter */}
+          <div>
+            <select
+              value={filterSymbol}
+              onChange={(e) => { setFilterSymbol(e.target.value); setCurrentPage(1); }}
+              className="w-full py-1.5 px-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="ALL">Wszystkie Pary</option>
+              {availableSymbols.map(sym => (
+                <option key={sym} value={sym}>{sym}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Side Filter */}
+          <div>
+            <select
+              value={filterSide}
+              onChange={(e) => { setFilterSide(e.target.value); setCurrentPage(1); }}
+              className="w-full py-1.5 px-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="ALL">Wszystkie Strony</option>
+              <option value="BUY">BUY / LONG</option>
+              <option value="SELL">SELL / SHORT</option>
+            </select>
+          </div>
+
+          {/* PnL Filter */}
+          <div>
+            <select
+              value={filterPnl}
+              onChange={(e) => { setFilterPnl(e.target.value); setCurrentPage(1); }}
+              className="w-full py-1.5 px-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="ALL">Wszystkie Wyniki (PnL)</option>
+              <option value="WIN">Zyskowne (WIN 🟢)</option>
+              <option value="LOSS">Stratne (LOSS 🔴)</option>
+            </select>
+          </div>
+
+          {/* Sort Order (Grupowanie/Kolejność) */}
+          <div>
+            <select
+              value={sortOrder}
+              onChange={(e) => { setSortOrder(e.target.value); setCurrentPage(1); }}
+              className="w-full py-1.5 px-2 bg-slate-900 border border-slate-800 rounded-lg text-blue-400 font-bold text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="newest">Najnowsze wpisy najpierw ⭐</option>
+              <option value="oldest">Najstarsze wpisy najpierw</option>
+              <option value="pnl_high">Najwyższy Zysk (PnL)</option>
+              <option value="pnl_low">Największa Strata (PnL)</option>
             </select>
           </div>
         </div>
 
-        {/* Table Content */}
+        {/* Table Content (Newest Trades First) */}
         <div className="overflow-x-auto">
-          {totalTrades > 0 ? (
+          {totalFilteredTrades > 0 ? (
             <table className="w-full text-xs text-left text-slate-300">
               <thead className="bg-slate-950 text-slate-400 uppercase font-mono border-b border-slate-800">
                 <tr>
-                  <th className="px-4 py-2.5">Czas</th>
+                  <th className="px-4 py-2.5">Czas Zarejestrowania</th>
                   <th className="px-4 py-2.5">Para</th>
                   <th className="px-4 py-2.5">Strona</th>
                   <th className="px-4 py-2.5">Cena Wejścia</th>
                   <th className="px-4 py-2.5">Cena Wyjścia</th>
                   <th className="px-4 py-2.5">PnL ($)</th>
-                  <th className="px-4 py-2.5">Wynik</th>
+                  <th className="px-4 py-2.5">Wynik / Stan</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
                 {currentTrades.map((t, idx) => (
                   <tr key={idx} className="hover:bg-slate-800/30">
-                    <td className="px-4 py-3 text-slate-400">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
-                    <td className="px-4 py-3 font-bold text-gray-200">{t.symbol || 'BTC/USDC'}</td>
-                    <td className="px-4 py-3 font-bold">{t.side || 'BUY'}</td>
-                    <td className="px-4 py-3">${Number(t.entry_price || 0).toFixed(2)}</td>
-                    <td className="px-4 py-3">${Number(t.exit_price || 0).toFixed(2)}</td>
-                    <td className={`px-4 py-3 font-bold ${Number(t.pnl_usd || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <td className="px-4 py-3 text-slate-400 font-bold">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
+                    <td className="px-4 py-3 font-bold text-gray-100">{t.symbol || 'BTC/USDC'}</td>
+                    <td className="px-4 py-3 font-bold">
+                      <span className={`px-2 py-0.5 rounded text-[11px] ${
+                        String(t.side || '').toUpperCase().includes('BUY') || String(t.side || '').toUpperCase().includes('LONG')
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-rose-950 text-rose-400 border border-rose-500/30'
+                      }`}>
+                        {t.side || 'BUY'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-200">${Number(t.entry_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-slate-200">${Number(t.exit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className={`px-4 py-3 font-bold text-sm ${Number(t.pnl_usd || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       ${Number(t.pnl_usd || 0).toFixed(2)}
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded font-bold ${
-                        t.is_win ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-red-950 text-red-400 border border-red-500/30'
+                      <span className={`px-2.5 py-0.5 rounded font-bold ${
+                        t.is_win || Number(t.pnl_usd || 0) >= 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-red-950 text-red-400 border border-red-500/30'
                       }`}>
-                        {t.is_win ? 'WIN' : 'LOSS'}
+                        {t.is_win || Number(t.pnl_usd || 0) >= 0 ? 'WIN 🟢' : 'LOSS 🔴'}
                       </span>
                     </td>
                   </tr>
@@ -445,16 +660,32 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
             </table>
           ) : (
             <div className="text-center py-8 text-slate-500 text-sm bg-slate-950/40 rounded-lg border border-slate-800/60 font-mono">
-              Brak zarejestrowanych zamkniętych transakcji w bazie SQLite. Oczekiwanie na pierwsze zrealizowane pozycje z giełdy OKX.
+              Brak zarejestrowanych transakcji spełniających wybrane kryteria filtrowania w bazy SQLite.
             </div>
           )}
         </div>
 
-        {/* Pagination Controls Footer */}
-        {totalTrades > 0 && (
+        {/* Pagination Controls & Rows Per Page Selector */}
+        {totalFilteredTrades > 0 && (
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-800/80 text-xs font-mono text-slate-400">
-            <div>
-              Wyświetlono <span className="font-bold text-gray-200">{startIndex + 1}</span> - <span className="font-bold text-gray-200">{endIndex}</span> z <span className="font-bold text-gray-200">{totalTrades}</span> transakcji
+            <div className="flex items-center gap-3">
+              <span>Wyświetlono <span className="font-bold text-gray-200">{startIndex + 1}</span> - <span className="font-bold text-gray-200">{endIndex}</span> z <span className="font-bold text-gray-200">{totalFilteredTrades}</span> wpisów</span>
+              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-3">
+                <span>Na stronę:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-blue-400 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
