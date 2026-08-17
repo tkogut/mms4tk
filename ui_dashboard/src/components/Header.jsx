@@ -38,7 +38,7 @@ export function Header({ version = "0.25.0", isConnected, stateData, onRefresh }
           <p className="text-xs text-slate-400 flex items-center justify-center sm:justify-start gap-2 mt-0.5">
             <span>VPS Autotrading Engine & Strategy Supervisor</span>
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
-              <span>v{version || '0.28.0'}</span>
+              <span>v{version || '0.28.1'}</span>
               <button
                 onClick={handleForceRefresh}
                 title="Wymuś czyszczenie cache PWA i odśwież wersję"

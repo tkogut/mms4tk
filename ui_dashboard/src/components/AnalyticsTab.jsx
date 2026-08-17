@@ -39,19 +39,36 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
 
   const currentTfObj = timeframes.find(t => t.id === timeframe) || timeframes[0];
 
-  // Symbol normalization utility helper for flawless symbol grouping & filtering
+  // Symbol normalization utility helper: ALWAYS outputs full trading pair e.g. BTC/USDC, ETH/USDC, SOL/USDC
   const normalizeSym = (sym) => {
     if (!sym) return '';
     let str = String(sym).toUpperCase().trim();
+    // Split out CCXT symbol suffixes like :USD-310404, -310404, etc.
     str = str.split(':')[0];
+    str = str.replace(/-\d{6,}$/, '');
     str = str.replace(/-\d+$/, '');
+    str = str.replace('_UM_XPERP', '');
     str = str.replace('-USD_UM_XPERP', '');
     str = str.replace('_XPERP', '');
     str = str.replace('-SWAP', '');
-    if (str.includes('-') && !str.includes('/')) {
-      str = str.replace('-', '/');
+    str = str.replace('-SPOT', '');
+
+    if (str.includes('/')) {
+      const parts = str.split('/');
+      const base = parts[0];
+      const quote = parts[1] || 'USDC';
+      return `${base}/${quote === 'USD' ? 'USDC' : quote}`;
     }
-    return str;
+
+    if (str.includes('-')) {
+      const parts = str.split('-');
+      const base = parts[0];
+      const quote = parts[1] || 'USDC';
+      return `${base}/${quote === 'USD' ? 'USDC' : quote}`;
+    }
+
+    // Single coin ticker fallback (e.g. BTC -> BTC/USDC)
+    return `${str}/USDC`;
   };
 
   useEffect(() => {
