@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.28.2] - 2026-08-17
+
+### 🔔 Telegram Notification Bugfix & Digest PnL Addition
+- 🛠️ **`telegram_queue.py` Root Cause Fix**: Replaced `asyncio.PriorityQueue` with thread-safe `stdlib.PriorityQueue` + background daemon thread. `asyncio.PriorityQueue` created in `__init__` without an event loop caused `put_nowait()` to raise exceptions silently, blocking all position open/close notifications.
+- 🐛 **`mms4tk_multi_symbol_digest.py` NameError Fix**: `hermes_cli` was used in `create_kanban_digest_card()` but never defined in that scope — caused `NameError` on every hourly run, silently swallowing the Telegram dispatch.
+- 💸 **Zrealizowany PnL w Digest**: Added `💸 Zrealizowany PnL (Całkowity)` field to Multi-Symbol Digest portfolio summary via `/api/v1/stats` endpoint.
+
+---
+
 ## 🚀 [0.28.1] - 2026-08-17
 
 ### 🪙 AnalyticsTab Symbol Formatting & Pair Normalization Fix

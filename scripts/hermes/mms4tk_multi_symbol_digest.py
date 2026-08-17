@@ -65,6 +65,9 @@ def fetch_api(endpoint: str):
 
 def create_kanban_digest_card(title: str, description: str):
     """Post digest report to mms4tk webhook API and Hermes CLI."""
+    # Resolve Hermes CLI path (must be defined before use below)
+    hermes_cli = os.environ.get("HERMES_CLI_PATH", "/docker/hermes-agent/bin/hermes")
+
     # 1. Post to mms4tk Webhook API (instantly registers card on Dashboard Kanban & DB)
     try:
         headers = {"Content-Type": "application/json"}
@@ -76,24 +79,23 @@ def create_kanban_digest_card(title: str, description: str):
             "details": description
         }).encode("utf-8")
         req = Request(f"{MMS4TK_BASE}/api/v1/hermes/webhook", data=payload, headers=headers, method="POST")
-        resp = urlopen(req, timeout=10)
+        urlopen(req, timeout=10)
         print("✅ Digest card successfully posted to Dashboard Kanban & Webhook Engine!")
     except Exception as e:
         print(f"⚠️ Webhook API post notice: {e}", file=sys.stderr)
 
-    # 2. Informational digest is delivered to Telegram and Dashboard (no task card created on Kanban)
-    pass
-
-    # 3. Deliver via Hermes notification engine to Telegram
+    # 2. Deliver via Hermes notification engine to Telegram
     try:
         notify_msg = f"{title}\n\n{description}"
-        # Try native CLI or docker exec hermes-agent
         if os.path.exists(hermes_cli):
             n_cmd = [hermes_cli, "send", "--to", "telegram", notify_msg]
         else:
             n_cmd = ["docker", "exec", "hermes-agent", "hermes", "send", "--to", "telegram", notify_msg]
-        subprocess.run(n_cmd, capture_output=True, text=True, timeout=15)
-        print("💬 Hermes Telegram notification dispatched!")
+        result = subprocess.run(n_cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            print("💬 Hermes Telegram notification dispatched!")
+        else:
+            print(f"⚠️ Hermes CLI returned non-zero: {result.stderr.strip()}", file=sys.stderr)
     except Exception as ne:
         print(f"⚠️ Hermes Telegram notify notice: {ne}", file=sys.stderr)
 
@@ -116,16 +118,19 @@ def main():
     symbols_data = fetch_api("/api/v1/symbols") or {}
     positions_data = fetch_api("/api/v1/positions") or {}
     balance_data = fetch_api("/api/v1/balance") or {}
+    stats_data = fetch_api("/api/v1/stats") or {}
 
     symbols = symbols_data.get("symbols", [])
     positions = positions_data.get("positions", [])
 
     free_usdc = float(balance_data.get("free", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("available_usd", 0.0))
     total_eq = float(balance_data.get("total", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("total_usd", 0.0))
+    realized_pnl = float(stats_data.get("realized_pnl", stats_data.get("total_pnl_usd", 0.0)))
 
     if not symbols:
         print("⚠️ No symbol configuration returned from API.")
         return
+
 
     active_symbols = [s for s in symbols if s.get("is_active") is not False]
     total_alloc = sum(float(s.get("allocation_usd", 10.0)) for s in active_symbols)
@@ -181,7 +186,10 @@ def main():
     lines.append(f"- **🔒 Wykorzystany Depozyt (Margin)**: `${used_margin:.2f} USD`")
     lines.append(f"- **🎯 Łączna Alokacja Par**: `${total_alloc:.2f} USD`")
     lines.append(f"- **📈 Niezrealizowany PnL (uPnL)**: `{'+$' if total_upnl >= 0 else '-$'}{abs(total_upnl):.2f} USD`")
+    realized_pnl_sign = "+$" if realized_pnl >= 0 else "-$"
+    lines.append(f"- **💸 Zrealizowany PnL (Całkowity)**: `{realized_pnl_sign}{abs(realized_pnl):.2f} USD`")
     lines.append(f"- **Status Floty OKX**: `GOTOWA` 🟢")
+
 
     full_digest = "\n".join(lines)
     print(full_digest)
