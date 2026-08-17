@@ -62,6 +62,12 @@ class TelegramQueueManager:
         self._worker_thread.start()
         logger.info("TelegramQueueManager worker thread started.")
 
+    async def ensure_started(self) -> None:
+        """Async no-op compatibility shim for api.py lifespan. Worker starts in __init__."""
+        if self._worker_thread is None or not self._worker_thread.is_alive():
+            self._start_worker()
+        logger.info("TelegramQueueManager ensure_started() called — worker thread active.")
+
     def _clean_expired_hashes(self) -> None:
         """Remove dedupe hashes older than TTL."""
         now = time.time()
