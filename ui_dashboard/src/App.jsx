@@ -17,7 +17,7 @@ export default function App() {
   const [openPositions, setOpenPositions] = useState([]);
   const [daemonData, setDaemonData] = useState(null);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.27.1');
+  const [appVersion, setAppVersion] = useState('0.28.0');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();

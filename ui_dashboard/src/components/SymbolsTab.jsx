@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X } from 'lucide-react';
+import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X, ShieldAlert } from 'lucide-react';
 
 export function SymbolsTab({ apiKey }) {
   const [symbols, setSymbols] = useState([
@@ -11,6 +11,7 @@ export function SymbolsTab({ apiKey }) {
   const [newSymbolInput, setNewSymbolInput] = useState('');
   const [verifyResult, setVerifyResult] = useState(null);
   const [verifying, setVerifying] = useState(false);
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState(null);
   const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -68,7 +69,7 @@ export function SymbolsTab({ apiKey }) {
     }
     setLoading(true);
     try {
-      const currentKey = apiKey || 'test-api-auth-key-unit-test';
+      const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
       const res = await fetch('/api/v1/symbols/add', {
         method: 'POST',
         headers: {
@@ -98,42 +99,61 @@ export function SymbolsTab({ apiKey }) {
   };
 
   const handleToggleSymbol = async (symObj) => {
-    const currentKey = apiKey || 'test-api-auth-key-unit-test';
+    const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
+    const newActiveState = symObj.is_active === false; // Toggle
     try {
-      if (symObj.is_active) {
-        // Deactivate symbol
-        const res = await fetch(`/api/v1/symbols/${encodeURIComponent(symObj.symbol)}`, {
-          method: 'DELETE',
-          headers: { 'X-MMS4-API-KEY': currentKey }
-        });
-        if (res.ok) {
-          setMsg(`⏸️ Para ${symObj.symbol} została wstrzymana przez Użytkownika.`);
-          fetchSymbols();
-        }
+      const res = await fetch('/api/v1/symbols/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-MMS4-API-KEY': currentKey
+        },
+        body: JSON.stringify({
+          symbol: symObj.symbol,
+          is_active: newActiveState,
+          allocation_usd: parseFloat(symObj.allocation_usd || 10.0),
+          base_ratio: parseInt(symObj.base_ratio || 70),
+          add_ratio: parseInt(symObj.add_ratio || 30),
+          timeframe: symObj.timeframe || '15m'
+        })
+      });
+      if (res.ok) {
+        setMsg(newActiveState ? `▶️ Para ${symObj.symbol} została AKTYWOWANA!` : `⏸️ Para ${symObj.symbol} została WSTRZYMANA.`);
+        fetchSymbols();
       } else {
-        // Activate symbol
-        const res = await fetch('/api/v1/symbols/add', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-MMS4-API-KEY': currentKey
-          },
-          body: JSON.stringify({ symbol: symObj.symbol, is_active: true })
-        });
-        if (res.ok) {
-          setMsg(`▶️ Para ${symObj.symbol} została włączona do tradingu!`);
-          fetchSymbols();
-        }
+        setMsg('❌ Błąd aktualizacji stanu pary');
       }
     } catch (err) {
-      setMsg('❌ Błąd przełączania stanu pary');
+      setMsg('❌ Błąd połączenia z API');
     } finally {
       setTimeout(() => setMsg(''), 4000);
     }
   };
 
+  const handleDeleteSymbol = async (symbolStr) => {
+    const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
+    try {
+      const res = await fetch(`/api/v1/symbols/${encodeURIComponent(symbolStr)}`, {
+        method: 'DELETE',
+        headers: { 'X-MMS4-API-KEY': currentKey }
+      });
+      if (res.ok) {
+        setMsg(`🗑️ Para ${symbolStr} została trwale usunięta z menedżera.`);
+        setConfirmDeleteTarget(null);
+        fetchSymbols();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setMsg(`❌ Błąd usuwania pary: ${errData.detail || 'Operacja odrzucona'}`);
+      }
+    } catch (err) {
+      setMsg('❌ Błąd połączenia z API');
+    } finally {
+      setTimeout(() => setMsg(''), 5000);
+    }
+  };
+
   const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio, newTimeframe, staleConfig = {}) => {
-    const currentKey = apiKey || 'test-api-auth-key-unit-test';
+    const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
     try {
       const res = await fetch('/api/v1/symbols/update', {
         method: 'POST',
@@ -154,27 +174,27 @@ export function SymbolsTab({ apiKey }) {
         })
       });
       if (res.ok) {
-        setMsg(`✓ Zapisano ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%, Interwał: ${newTimeframe || '15m'}, Stale: ${staleConfig.stale_candles_threshold ?? 12} świec)`);
+        setMsg(`✓ Zapisano ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%, Interwał: ${newTimeframe || '15m'})`);
         fetchSymbols();
       }
     } catch (err) {
       setMsg('❌ Błąd zapisu ustawień pary');
     } finally {
-      setTimeout(() => setMsg(''), 4000);
+      setTimeout(() => setMsg(''), 5000);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Header & Add Pair Button */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-wrap items-center justify-between gap-4">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
         <div>
-          <h3 className="text-lg font-bold text-gray-100 flex items-center gap-2">
-            <Layers className="w-5 h-5 text-blue-400" />
-            <span>Zarządzanie Parami Rynkowymi (Multi-Symbol Manager)</span>
-          </h3>
-          <p className="text-xs text-slate-400 mt-1">
-            Ustal indywidualną alokację ($ USD) oraz proporcje Base/Add dla każdej pary rynkowej
+          <h2 className="font-extrabold text-xl text-gray-100 flex items-center gap-2">
+            <Layers className="w-6 h-6 text-blue-400" />
+            <span>Menedżer Par Rynkowych & Alokacji (Multi-Symbol Grid)</span>
+          </h2>
+          <p className="text-xs text-slate-400 mt-1 font-mono">
+            Zarządzaj aktywnymi parami, indywidualną alokacją ($ USD), proporcjami Base/Addon oraz interwałami świec.
           </p>
         </div>
 
@@ -194,16 +214,65 @@ export function SymbolsTab({ apiKey }) {
         </div>
       )}
 
+      {/* Confirmation Modal for Deleting a Symbol */}
+      {confirmDeleteTarget && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+              <div className="p-3 bg-red-950/80 border border-red-500/30 rounded-xl text-red-400">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-100 text-lg">Potwierdź Usunięcie Pary</h3>
+                <p className="text-xs text-slate-400">Trwałe usunięcie konfiguracji symbolu</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono space-y-2">
+              <div className="flex justify-between items-center py-1">
+                <span className="text-slate-400">Symbol do usunięcia:</span>
+                <span className="font-bold text-red-400 text-sm">{confirmDeleteTarget.symbol}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-t border-slate-800/60 pt-2">
+                <span className="text-slate-400">Alokacja:</span>
+                <span className="text-slate-200 font-bold">${confirmDeleteTarget.allocation_usd} USD</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 bg-red-950/30 border border-red-500/30 p-3 rounded-lg leading-relaxed">
+              ⚠️ <strong>Uwaga:</strong> Usunięcie pary wykasuje jej konfigurację z menedżera oraz z pliku <code>symbols.json</code>. Bot nie będzie więcej monitorować tego rynku.
+            </p>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setConfirmDeleteTarget(null)}
+                className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs transition-colors"
+              >
+                Anuluj
+              </button>
+              <button
+                onClick={() => handleDeleteSymbol(confirmDeleteTarget.symbol)}
+                className="w-1/2 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-red-600/30"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Trwale Usuń Parę</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Grid of Symbol Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {symbols.map((s) => {
-          const isAutotradeReady = s.autotrade_permitted !== false && s.okx_verified !== false;
+          const isAutotradeReady = s.autotrade_permitted !== false && s.okx_verified !== false && s.is_active !== false;
           return (
             <SymbolCard
               key={s.symbol}
               symbolObj={s}
               isAutotradeReady={isAutotradeReady}
               onToggle={handleToggleSymbol}
+              onRequestDelete={(target) => setConfirmDeleteTarget(target)}
               onSaveSettings={handleUpdateSymbolSettings}
             />
           );
@@ -259,43 +328,29 @@ export function SymbolsTab({ apiKey }) {
                 </div>
               </div>
 
-              {/* Live OKX API Verification Result Indicator */}
               {verifyResult && (
-                <div
-                  className={`p-3 rounded-lg border text-xs font-mono flex items-center justify-between ${
-                    verifyResult.okx_verified
-                      ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300'
-                      : 'bg-red-950/80 border-red-500/40 text-red-300'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full ${
-                        verifyResult.okx_verified ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'
-                      }`}
-                    ></span>
-                    <span>
-                      {verifyResult.okx_verified
-                        ? '🟢 Potwierdzono cenę rynkową z OKX API'
-                        : '🔴 Ticker nieodnaleziony na OKX API'}
-                    </span>
+                <div className={`p-3 rounded-lg border text-xs font-mono space-y-1 ${
+                  verifyResult.okx_verified !== false
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-red-950/60 border-red-500/40 text-red-300'
+                }`}>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    {verifyResult.okx_verified !== false ? <Check className="w-4 h-4 text-emerald-400" /> : <X className="w-4 h-4 text-red-400" />}
+                    <span>OKX Status: {verifyResult.okx_status || 'VERIFIED'}</span>
                   </div>
                   {verifyResult.last_price > 0 && (
-                    <span className="font-bold">
-                      ${Number(verifyResult.last_price).toLocaleString()}
-                    </span>
+                    <div className="text-[11px] text-slate-300">
+                      Aktualna Cena Rynkowa: <span className="font-bold text-gray-100">${Number(verifyResult.last_price).toLocaleString()}</span>
+                    </div>
                   )}
                 </div>
               )}
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsModalOpen(false);
-                    setVerifyResult(null);
-                  }}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold transition-colors"
                 >
                   Anuluj
                 </button>
@@ -315,7 +370,7 @@ export function SymbolsTab({ apiKey }) {
   );
 }
 
-function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
+function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, onSaveSettings }) {
   const [allocUsd, setAllocUsd] = useState(symbolObj.allocation_usd || 10.0);
   const [baseRatio, setBaseRatio] = useState(symbolObj.base_ratio || 70);
   const [timeframe, setTimeframe] = useState(symbolObj.timeframe || '15m');
@@ -369,7 +424,7 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
           className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-mono transition-all border ${
             symbolObj.is_active !== false
               ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900'
-              : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+              : 'bg-amber-950 text-amber-300 border-amber-500/40 hover:bg-amber-900'
           }`}
         >
           <Power className="w-3.5 h-3.5" />
@@ -394,7 +449,7 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
             <span>
               {isAutotradeReady
                 ? '🟢 HANDEL AUTOMATYCZNY: GOTOWY'
-                : '🔴 HANDEL AUTOMATYCZNY: BLOKOWANY'}
+                : '🔴 HANDEL AUTOMATYCZNY: BLOKOWANY / WSTRZYMANY'}
             </span>
           </div>
           {symbolObj.okx_price > 0 && (
@@ -517,17 +572,29 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onSaveSettings }) {
           </div>
         </div>
 
-        <button
-          onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio, timeframe, {
-            stale_candles_threshold: staleCandles,
-            stale_atr_threshold: staleAtr,
-            impulse_negation_enabled: impulseNeg
-          })}
-          className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
-        >
-          <Check className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Zapisz Ustawienia Pary</span>
-        </button>
+        {/* Action Buttons: Save Settings & Delete Pair */}
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={() => onSaveSettings(symbolObj, allocUsd, baseRatio, timeframe, {
+              stale_candles_threshold: staleCandles,
+              stale_atr_threshold: staleAtr,
+              impulse_negation_enabled: impulseNeg
+            })}
+            className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
+          >
+            <Check className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Zapisz Ustawienia</span>
+          </button>
+
+          <button
+            onClick={() => onRequestDelete(symbolObj)}
+            title="Usuń parę z menedżera"
+            className="px-3 py-1.5 bg-red-950/60 hover:bg-red-900 border border-red-500/40 text-red-300 hover:text-white rounded-lg text-xs font-semibold font-mono transition-colors flex items-center justify-center gap-1"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Usuń</span>
+          </button>
+        </div>
       </div>
     </div>
   );

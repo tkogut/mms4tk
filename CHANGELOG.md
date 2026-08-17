@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.28.0] - 2026-08-17
+
+### 🛡️ Hard Inactive Guard & Symbol Deletion Overhaul
+- 🛑 **Daemon Inactive Symbol Guard Bugfix**: Fixed dict truthiness evaluation in `daemon.py` (`run_loop` & `execute_symbol_cycle`) where `{ "is_active": False }` was evaluating as truthy `True`. Added hard `SKIPPED_INACTIVE` check blocking paused/inactive symbols from trading.
+- 🗑️ **Permanent Symbol Deletion Endpoint & Store Cleanup**: Updated `DELETE /api/v1/symbols/{symbol}` to purge entries from `configured_symbols_store`, SQLite `symbol_configurations` (`logger_db.delete_symbol_config`), and persistent `symbols.json`.
+- 🗑️ **"Usuń Parę" Action Button & Modal**: Added dedicated "Usuń Parę" button on symbol cards in `SymbolsTab.jsx` with confirmation modal dialog overlay.
+
+---
+
 ## 🚀 [0.27.1] - 2026-08-17
 
 ### 🛠️ AnalyticsTab Fixes & Double-Confirmation Modal

@@ -396,6 +396,30 @@ class MMS4Daemon:
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         
+        # 0. Hard Guard: Check if target_symbol is active
+        try:
+            from mms4tk.api import configured_symbols_store
+            sym_cfg = configured_symbols_store.get(target_symbol, {})
+            if isinstance(sym_cfg, dict):
+                if not sym_cfg.get("is_active", True):
+                    logger.info(f"⏭️ Skipping cycle for paused/inactive symbol: {target_symbol}")
+                    return {
+                        "symbol": target_symbol,
+                        "status": "SKIPPED_INACTIVE",
+                        "reason": f"Symbol {target_symbol} is set to inactive (is_active=False)",
+                        "timestamp": now_iso
+                    }
+            elif sym_cfg is False:
+                logger.info(f"⏭️ Skipping cycle for paused/inactive symbol: {target_symbol}")
+                return {
+                    "symbol": target_symbol,
+                    "status": "SKIPPED_INACTIVE",
+                    "reason": f"Symbol {target_symbol} is set to inactive",
+                    "timestamp": now_iso
+                }
+        except Exception as e:
+            logger.warning(f"Error checking active status for {target_symbol}: {e}")
+
         # 1. Fetch candles for target symbol using symbol's configured timeframe
         sym_tf = "15m"
         try:
@@ -1083,7 +1107,7 @@ class MMS4Daemon:
         while self._is_running:
             try:
                 from mms4tk.api import configured_symbols_store
-                symbols = [s for s, act in configured_symbols_store.items() if act]
+                symbols = [s for s, cfg in configured_symbols_store.items() if (isinstance(cfg, dict) and cfg.get("is_active")) or cfg is True]
             except Exception:
                 symbols = [self.symbol]
             try:
@@ -1100,7 +1124,7 @@ class MMS4Daemon:
         """Return current status dictionary of the daemon."""
         try:
             from mms4tk.api import configured_symbols_store
-            active_syms = [s for s, act in configured_symbols_store.items() if act]
+            active_syms = [s for s, cfg in configured_symbols_store.items() if (isinstance(cfg, dict) and cfg.get("is_active")) or cfg is True]
         except Exception:
             active_syms = [self.symbol]
         return {

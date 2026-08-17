@@ -485,6 +485,13 @@ class LoggerDB:
             )
             conn.commit()
 
+    def delete_symbol_config(self, symbol: str) -> None:
+        """Delete per-symbol configuration entry from SQLite symbol_configurations table."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM symbol_configurations WHERE symbol = ?", (symbol,))
+            conn.commit()
+
     # ── Addon ledger (survives daemon restarts) ─────────────────────────
 
     def get_addon_count(self, symbol: str, side: str, position_key: str = "") -> int:

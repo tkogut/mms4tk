@@ -951,19 +951,27 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
 
 @app.delete("/api/v1/symbols/{symbol:path}", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 async def remove_trading_symbol(symbol: str) -> Dict[str, Any]:
-    """Deactivate (pause) a trading pair without deleting it from the manager UI."""
+    """Completely remove a trading pair from the symbols configuration and SQLite store."""
     formatted_sym = symbol.upper().strip()
+    if "/" not in formatted_sym:
+        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+
+    removed = False
     if formatted_sym in configured_symbols_store:
-        if isinstance(configured_symbols_store[formatted_sym], dict):
-            configured_symbols_store[formatted_sym]["is_active"] = False
-        else:
-            configured_symbols_store[formatted_sym] = {"is_active": False, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30}
+        configured_symbols_store.pop(formatted_sym, None)
+        removed = True
         save_symbols_config(configured_symbols_store)
+        try:
+            logger_db.delete_symbol_config(formatted_sym)
+        except Exception as e:
+            logger.warning(f"Failed to delete symbol {formatted_sym} from SQLite: {e}")
+
     return {
         "status": "success",
-        "paused": formatted_sym,
+        "removed": formatted_sym,
         "is_active": False,
-        "configured_symbols": configured_symbols_store
+        "configured_symbols": configured_symbols_store,
+        "message": f"Para {formatted_sym} została trwale usunięta z menedżera."
     }
 
 
