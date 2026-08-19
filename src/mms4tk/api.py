@@ -88,7 +88,11 @@ async def lifespan(app: FastAPI):
         logger.info("FastAPI Shutdown: Stopping background workers...")
         await daemon.stop()
         await trade_sync_worker.stop()
-        await tq.stop()
+        # TelegramQueueManager.stop() is a plain sync method by design (it just flips
+        # the worker thread's running flag — see telegram_queue.py) — awaiting it
+        # raised TypeError on every lifespan shutdown, failing teardown for any test
+        # that exercises the app via `with TestClient(app)`.
+        tq.stop()
 
 
 app = FastAPI(
