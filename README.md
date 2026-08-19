@@ -2,10 +2,10 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
-[![React Dashboard](https://img.shields.io/badge/React--UI-v0.26.0-blue.svg)](ui_dashboard/src/App.jsx)
+[![React Dashboard](https://img.shields.io/badge/React--UI-v0.30.1-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.26.0](https://img.shields.io/badge/Version-0.26.0-emerald.svg)](VERSION)
+[![Version: 0.30.1](https://img.shields.io/badge/Version-0.30.1-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -15,12 +15,11 @@ combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React da
 (`ui_dashboard`), and an autonomous LLM strategic supervisor
 ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
 
-> **v0.26.0 is a risk-engine release.** A full quantitative audit
-> ([report](docs/AUDIT_MMS4_2026-08-16.md)) found that the defensive layer described in earlier
-> versions of this README was not actually reachable in running code. It is now implemented,
-> tested and verified in production. The sections below describe what the system *does*, not what
-> it was intended to do — see [Refactoring report](docs/REFACTORING_REPORT_2026-08-16.md) for the
-> before/after.
+> **v0.30.0 introduces the Hybrid Adaptive Engine (Fast-Path Supervision)** and **Portfolio Margin Guard**.
+> The execution engine dynamically computes the Volatility Ratio ($VR$) to filter out high-risk addons
+> during violent breakout expansions, mandates Sweep Rejection wicks during compression, blocks shorting
+> during the US Open institutional liquidity window (13:30–14:30 UTC), and caps total portfolio notional
+> across all pairs.
 
 ---
 
@@ -28,28 +27,30 @@ combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React da
 
 ```mermaid
 flowchart TD
-    subgraph UI["1. React Dashboard (v0.26.0)"]
+    subgraph UI["1. React Dashboard (v0.30.1)"]
         A1["Multi-Symbol Manager<br/>(allocation, Base/Add split, timeframe)"]
         A2["Live Risk Grid<br/>(state, leverage, SIZE multiplier, resolved notional)"]
+        A3["Settings & Adaptive Engine Controls<br/>(VR High/Low, Time-Lock, Portfolio Guard)"]
     end
 
     subgraph API["2. FastAPI REST Gateway"]
         B1["GET/POST /api/v1/symbols"]
         B2["GET /api/v1/state · /stats/pnl · /positions"]
-        B3["GET /api/v1/daemon/status<br/>(allocation plan + addon ledger)"]
+        B3["GET /api/v1/daemon/status · GET/POST /api/v1/settings"]
     end
 
-    subgraph ENGINE["3. MMS4Daemon — cycle every 15s"]
+    subgraph ENGINE["3. MMS4Daemon & Fast-Path Adaptive Engine — cycle every 15s"]
         C1["Fetch OHLCV (per-symbol timeframe)"]
         C2["Stop-Loss RECONCILIATION<br/>diff live positions vs SQLite snapshot"]
-        C3["TMA + ATR bands on CLOSED candles"]
-        C4{"Signal evaluation<br/>band touch AND candle direction"}
-        C5["plan_allocation(symbol)<br/>margin × leverage × size multiplier"]
-        C6["Order execution<br/>(exchange minimum enforced)"]
-        C7["Inactivity Manager<br/>impulse negation · stagnation ladder · BE escape"]
-        C1 --> C2 --> C3 --> C4 --> C5 --> C6
+        C3["TMA + ATR Bands + Volatility Ratio (VR)"]
+        C4{"Adaptive Signal Gate<br/>VR trend block · VR compression sweep · US Open Time-Lock"}
+        C5["Portfolio Margin Guard<br/>(Total portfolio notional cap check)"]
+        C6["plan_allocation(symbol)<br/>margin × leverage × size multiplier"]
+        C7["Order execution<br/>(exchange minimum enforced)"]
+        C8["Inactivity Manager<br/>impulse negation · stagnation ladder · BE escape"]
+        C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7
         C2 -->|position vanished beyond SL| ST["record_trade → SCOUT_MODE"]
-        C6 --> C7
+        C7 --> C8
     end
 
     subgraph HERMES["4. Strategic Supervisor (Hermes)"]
@@ -57,15 +58,33 @@ flowchart TD
         D2["Telegram digest · Kanban alerts"]
     end
 
-    A1 & A2 --> B1 & B2 & B3
+    A1 & A2 & A3 --> B1 & B2 & B3
     B1 --> C1
-    C6 --> D1 & D2
+    C7 --> D1 & D2
     ST --> D1
 ```
 
 ---
 
-## 🛡️ Risk Model
+## 🛡️ Risk Model & Adaptive Tactics
+
+### ⚡ Hybrid Adaptive Engine (Fast-Path Supervision)
+
+Operating in two switchable modes (`MMS4_ENGINE_MODE`):
+- `CLASSIC`: Standard MMS v4 mean-reversion rules.
+- `ADAPTIVE`: Fast-path supervision using mathematical volatility and session filters:
+
+1. **Volatility Ratio ($VR$)**:
+   $$\text{VR} = \frac{\text{ATR}(14)}{\text{SMA}(\text{ATR}(100), 14) + \epsilon}, \quad \epsilon = 10^{-8}$$
+   - **High Volatility Expansion ($VR > MMS4\_ADAPTIVE\_VR\_HIGH$, default `1.6`)**: Blocks `HIGH_RISK_ADD` signals (`SKIPPED_HIGH_VOLATILITY`).
+   - **Low Volatility Compression ($VR < MMS4\_ADAPTIVE\_VR\_LOW$, default `0.8`)**: Blocks base entries without a verified **Sweep Rejection** wick ($\ge 20\%$ of candle range; `SKIPPED_COMPRESSION_NO_SWEEP`).
+2. **US Open Session Window Time-Lock**:
+   - In UTC window `13:30` - `14:30` (`MMS4_TIME_LOCK_START` - `MMS4_TIME_LOCK_END`), blocks `BASE_SHORT` entries (`SKIPPED_TIME_LOCK`), unless an **Extreme Sweep Rejection** (upper wick $\ge 40\%$) is present.
+
+### 🛡️ Portfolio Margin Guard (Circuit Breaker)
+
+- `MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD`: Global ceiling on total committed position notional across **all symbols combined**.
+- When $> 0$, the daemon evaluates $\sum \text{Notional}_{\text{open}} + \text{Notional}_{\text{candidate}} \le \text{Cap} \times 1.05$. If exceeded, new entries are blocked (`PORTFOLIO_GUARD_BLOCKED_*`).
 
 ### Capital allocation — relational, not hardcoded
 
@@ -86,35 +105,6 @@ notional      = margin × leverage
 The reduction factor is `base_leverage / (SCOUT_LEVERAGE × SCOUT_SIZE_MULT)` — independent of
 account size.
 
-### Why SCOUT reduces SIZE and not leverage
-
-OKX only accepts integer leverage `>= 1`. A sub-1x setting is silently clamped to 1x on the
-exchange, so leverage cannot express a defensive reduction at all. Worse, the notional it implied
-fell below the venue's minimum order value, the entry was skipped, no position opened, no
-take-profit could fire — and the symbol could never leave `SCOUT_MODE`. Risk is therefore cut
-through position **size**, with leverage kept exchange-legal.
-
-### State machine
-
-- `BASE_MODE → SCOUT_MODE` — a stop-out of `>= 2%`, detected by **reconciliation**: the daemon
-  compares live OKX positions against a SQLite snapshot each cycle and books the trade the moment
-  a position disappears beyond the SL distance. Snapshots persist, so this survives a restart.
-- `SCOUT_MODE → BASE_MODE` — first take-profit on that symbol, or a manual release
-  (`POST /api/v1/settings/update {"scout_mode": false}`), or Hermes `scout_override`.
-- State is **per symbol**. A stop-out on BTC does not touch ETH.
-
-### Exchange minimums
-
-Read per instrument from CCXT market metadata (`limits.cost.min`, or smallest lot × price) — not a
-fixed dollar figure. Measured on OKX X-Perps: BTC $6.30, ETH $1.88, SOL $0.75, ICP $2.28. When the
-intended size falls below the venue minimum the entry is **skipped** (`SKIPPED_*` outcome), never
-inflated to meet it.
-
-> At the $10 forward-testing cap, `SCOUT_MODE` can trade ETH and SOL but not BTC or ICP. All four
-> clear at `MMS4_MAX_MARGIN_USD >= ~$30` — the exact threshold is
-> `min_notional / (BASE_ALLOCATION × SCOUT_SIZE_MULT × SCOUT_LEVERAGE)` and moves with the price of
-> the most expensive contract (BTC at the time of writing).
-
 ### Position lifecycle protection
 
 | Rule | Trigger | Action |
@@ -123,6 +113,9 @@ inflated to meet it.
 | Stagnation ladder | price within 0.5×ATR of entry for `stale_candles_threshold` candles | `SPLIT_50` → `FORCE_CLOSE_BE` after grace |
 | Break-even escape | price back at entry after stagnation | `BE_ESCAPE` (optional round-trip cost allowance) |
 | Single Addon Guard | one high-risk add per position | persisted in SQLite, survives restarts |
+| Portfolio Margin Guard | total open portfolio notional > cap | blocks new base/addon order creation |
+| Adaptive VR Gate | $VR > 1.6$ (trend) or $VR < 0.8$ (compression) | blocks addon in trend / requires sweep wick in compression |
+| US Open Time-Lock | $13:30 - 14:30$ UTC window | blocks shorting unless extreme sweep wick $\ge 40\%$ |
 | Take Profit & Flip | opposite TMA band reached | verified close, then flip — aborts if the close is unconfirmed |
 
 ---
@@ -138,7 +131,7 @@ OKX_API_KEY=your_okx_api_key
 OKX_SECRET=your_okx_api_secret
 OKX_PASSPHRASE=your_okx_passphrase
 
-# Capital
+# Capital & Position Sizing
 MMS4_SYMBOL=BTC/USDC
 MMS4_MAX_MARGIN_USD=10.0
 MMS4_BASE_ALLOCATION=0.70
@@ -156,6 +149,16 @@ MMS4_LEVERAGE_AGGRESSIVE=10.0
 # Stop-loss distances (entries + reconciliation threshold)
 MMS4_BASE_SL_PCT=0.02
 MMS4_ADDON_SL_PCT=0.0125
+
+# Portfolio Margin Guard (0 = disabled)
+MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD=0
+
+# Adaptive Hybrid Engine (CLASSIC | ADAPTIVE)
+MMS4_ENGINE_MODE=CLASSIC
+MMS4_ADAPTIVE_VR_HIGH=1.6
+MMS4_ADAPTIVE_VR_LOW=0.8
+MMS4_TIME_LOCK_START=13:30
+MMS4_TIME_LOCK_END=14:30
 
 # Indicators
 MMS4_ATR_METHOD=sma          # "wilder" aligns with TradingView; also retune atr_mult

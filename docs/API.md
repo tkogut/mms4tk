@@ -1,6 +1,6 @@
 # 📡 mms4tk REST API & Hermes Function Tools Reference
 
-**Application Version:** `v0.16.1`  
+**Application Version:** `v0.30.1`  
 This document provides technical documentation for all HTTP REST API endpoints exposed by `mms4tk` (FastAPI) and consumed by the **Hermes Agent** function-calling engine and Web Dashboard UI.
 
 ---
@@ -25,14 +25,14 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
   - **Response**:
     ```json
     {
-      "status": "healthy",
-      "version": "0.16.1"
+      "status": "ok",
+      "version": "0.30.1"
     }
     ```
 
 ---
 
-### 2. Daemon Status
+### 2. Daemon Status & Adaptive Metrics
 - **`GET /api/v1/daemon/status`**
   - **Auth**: Public
   - **Response**:
@@ -46,7 +46,13 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
       "base_trade_usd": 7.0,
       "addon_trade_usd": 3.0,
       "trade_amount_usd": 10.0,
-      "last_cycle_timestamp": "2026-08-14T12:51:17.000000+00:00",
+      "total_max_portfolio_margin_usd": 0.0,
+      "engine_mode": "CLASSIC",
+      "adaptive_vr_high": 1.6,
+      "adaptive_vr_low": 0.8,
+      "time_lock_start": "13:30",
+      "time_lock_end": "14:30",
+      "last_cycle_timestamp": "2026-08-19T16:35:00.000000+00:00",
       "processed_cycles": 1420
     }
     ```
@@ -165,7 +171,62 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
 
 ---
 
-### 7. Hermes Webhook Integration
+### 7. Settings & Adaptive Hybrid Engine Configuration
+- **`GET /api/v1/settings`**
+  - **Auth**: Public
+  - **Description**: Returns all runtime risk parameters, portfolio cap, and Adaptive Engine configuration.
+  - **Response**:
+    ```json
+    {
+      "leverage": 3.0,
+      "scout_mode": false,
+      "capital_split_ratio": 0.70,
+      "max_margin_usd": 10.0,
+      "stop_loss_pct": 2.0,
+      "total_max_portfolio_margin_usd": 0.0,
+      "engine_mode": "CLASSIC",
+      "adaptive_vr_high": 1.6,
+      "adaptive_vr_low": 0.8,
+      "time_lock_start": "13:30",
+      "time_lock_end": "14:30"
+    }
+    ```
+
+- **`POST /api/v1/settings/update`**
+  - **Auth**: Required (`X-MMS4-API-KEY`)
+  - **Description**: Updates strategy parameters, leverage (1x–10x), Stop Loss %, portfolio cap, and Adaptive Engine settings in memory and persists them to `.env`.
+  - **Request Body**:
+    ```json
+    {
+      "leverage": 3.0,
+      "scout_mode": false,
+      "capital_split_ratio": 0.70,
+      "max_margin_usd": 10.0,
+      "stop_loss_pct": 1.25,
+      "total_max_portfolio_margin_usd": 1500.0,
+      "engine_mode": "ADAPTIVE",
+      "adaptive_vr_high": 1.6,
+      "adaptive_vr_low": 0.8,
+      "time_lock_start": "13:30",
+      "time_lock_end": "14:30"
+    }
+    ```
+  - **Response**: Status object with all updated parameters.
+
+- **`POST /api/v1/settings/change_password`**
+  - **Auth**: Required (`X-MMS4-API-KEY`)
+  - **Description**: Updates Traefik HTTP BasicAuth login password and updates `.env`.
+  - **Request Body**:
+    ```json
+    {
+      "new_password": "your_secure_password",
+      "username": "admin"
+    }
+    ```
+
+---
+
+### 8. Hermes Webhook Integration
 - **`POST /api/v1/hermes/webhook`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
   - **Description**: Receives custom webhook events from Hermes Agent swarm.
@@ -185,7 +246,7 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
 
 ---
 
-### 8. Emergency Actions
+### 9. Emergency Actions
 - **`POST /api/v1/emergency/killall`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
   - **Description**: Immediately cancels all open orders on OKX and closes active positions.

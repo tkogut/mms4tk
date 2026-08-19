@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.1] - 2026-08-19
+
+### 📝 Dokumentacja Techniczna & API Reference Sync
+- 📖 **`README.md`**: Zaktualizowano architekturę systemu, diagram Mermaid, opis Hybrydowego Silnika Adaptacyjnego (VR & Time-Lock), Portfolio Margin Guard oraz zmienne konfiguracyjne.
+- 📡 **`docs/API.md`**: Dodano pełną dokumentację endpointów `GET /api/v1/settings`, `POST /api/v1/settings/update` (wraz ze wszystkimi 10 parametrami konfiguracyjnymi) oraz `POST /api/v1/settings/change_password`.
+- 🏷️ **Wersjonowanie**: Zsynchronizowano wersję `0.30.1` we wszystkich komponentach aplikacji (`VERSION`, `__init__.py`, `ui_dashboard`).
+
+---
+
 ## 🚀 [0.30.0] - 2026-08-19
 
 ### ⚡ Hybrydowy Silnik Adaptacyjny & Fast-Path Supervision (Wariant A)
