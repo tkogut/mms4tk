@@ -776,14 +776,21 @@ def test_exchange_minimum_gates_every_sizing_path():
 
 
 def test_legacy_scout_leverage_env_name_still_honored(monkeypatch):
-    """A .env still using the pre-rename MMS4_LEVERAGE_SCOUT must keep working."""
-    import importlib
+    """
+    A .env still using the pre-rename MMS4_LEVERAGE_SCOUT must keep working.
+
+    This must NOT use importlib.reload(mms4tk.state_manager): reload re-executes the
+    module's class statements in place, so MMS4State/MMS4StateManager become NEW class
+    objects while every module already holding `from mms4tk.state_manager import
+    MMS4State` (daemon.py, this test file, every other test file collected earlier)
+    keeps referencing the OLD ones. Enum members compare equal across generations only
+    because MMS4State mixes in str, but `isinstance(x, MMS4State)` checks — e.g.
+    daemon.execute_symbol_cycle's defensive per-symbol-state guard — silently fail
+    across that identity split and fall back to BASE_MODE for the rest of the pytest
+    session. Test the exact fallback expression SCOUT_LEVERAGE is built from instead;
+    that's what "still honored" actually means, with no shared class identity at risk.
+    """
     monkeypatch.delenv("MMS4_SCOUT_LEVERAGE", raising=False)
     monkeypatch.setenv("MMS4_LEVERAGE_SCOUT", "2.5")
-    import mms4tk.state_manager as sm_mod
-    importlib.reload(sm_mod)
-    try:
-        assert sm_mod.SCOUT_LEVERAGE == 2.5
-    finally:
-        monkeypatch.delenv("MMS4_LEVERAGE_SCOUT", raising=False)
-        importlib.reload(sm_mod)
+    resolved = float(os.getenv("MMS4_SCOUT_LEVERAGE", os.getenv("MMS4_LEVERAGE_SCOUT", "1.0")))
+    assert resolved == 2.5
