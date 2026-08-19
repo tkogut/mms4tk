@@ -453,3 +453,68 @@ def test_settings_api_adaptive_configuration(client, restore_adaptive_settings):
     assert verify_get.json()["engine_mode"] == "ADAPTIVE"
     assert verify_get.json()["adaptive_vr_high"] == 1.75
 
+
+def test_settings_api_rejects_inverted_vr_thresholds(client, restore_adaptive_settings):
+    """adaptive_vr_low >= adaptive_vr_high sent together must be rejected — a valid
+    combo means every VR reading falls in exactly one band, never both or neither."""
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
+
+    res = client.post(
+        "/api/v1/settings/update",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"adaptive_vr_high": 1.0, "adaptive_vr_low": 1.5},
+    )
+    assert res.status_code == 400
+    assert "adaptive_vr_low" in res.json()["detail"]
+
+    # Neither threshold may have been applied — no partial write on a rejected combo.
+    assert float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")) == 1.6
+    assert float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")) == 0.8
+
+
+def test_settings_api_rejects_vr_low_against_existing_high(client, restore_adaptive_settings):
+    """Sending only adaptive_vr_low must be validated against the CURRENTLY active
+    adaptive_vr_high, not skip the cross-field check just because it wasn't resent."""
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
+
+    # Lower the high threshold first...
+    ok = client.post(
+        "/api/v1/settings/update",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"adaptive_vr_high": 1.0},
+    )
+    assert ok.status_code == 200
+
+    # ...then try to raise the low threshold above it, without resending vr_high.
+    res = client.post(
+        "/api/v1/settings/update",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"adaptive_vr_low": 1.2},
+    )
+    assert res.status_code == 400
+    assert float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")) == 0.8
+
+
+def test_settings_api_rejects_negative_portfolio_cap(client, restore_adaptive_settings):
+    """A negative cap would silently disable the guard (cap<=0 means 'off'), which
+    reads as the opposite of what someone setting a negative number likely intends."""
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
+    saved_cap = api_daemon.total_max_portfolio_margin_usd
+
+    res = client.post(
+        "/api/v1/settings/update",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"total_max_portfolio_margin_usd": -50.0},
+    )
+    assert res.status_code == 400
+    assert api_daemon.total_max_portfolio_margin_usd == saved_cap
+
+    # 0 is the documented, legitimate way to disable the guard — must still work.
+    ok = client.post(
+        "/api/v1/settings/update",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"total_max_portfolio_margin_usd": 0.0},
+    )
+    assert ok.status_code == 200
+    assert api_daemon.total_max_portfolio_margin_usd == 0.0
+

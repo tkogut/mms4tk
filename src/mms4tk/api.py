@@ -785,8 +785,17 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         daemon.base_sl_pct = float(req.stop_loss_pct) / 100.0 if req.stop_loss_pct > 0.5 else float(req.stop_loss_pct)
         env_updates["MMS4_BASE_SL_PCT"] = str(daemon.base_sl_pct)
     if req.total_max_portfolio_margin_usd is not None:
-        daemon.total_max_portfolio_margin_usd = float(req.total_max_portfolio_margin_usd)
-        env_updates["MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD"] = str(daemon.total_max_portfolio_margin_usd)
+        cap_val = float(req.total_max_portfolio_margin_usd)
+        # A negative cap would silently disable the guard (check_portfolio_margin_guard
+        # treats any cap <= 0 as "off"), which reads as "guard active at $0" to whoever
+        # set it — reject instead of accepting a value that means the opposite.
+        if cap_val < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="total_max_portfolio_margin_usd must be >= 0 (0 disables the guard)"
+            )
+        daemon.total_max_portfolio_margin_usd = cap_val
+        env_updates["MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD"] = str(cap_val)
 
     # Validate and apply 5 Adaptive Engine settings
     if req.engine_mode is not None:
@@ -796,19 +805,39 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         os.environ["MMS4_ENGINE_MODE"] = mode_clean
         env_updates["MMS4_ENGINE_MODE"] = mode_clean
 
-    if req.adaptive_vr_high is not None:
-        vr_h = float(req.adaptive_vr_high)
-        if vr_h <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_high must be > 0")
-        os.environ["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
-        env_updates["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
+    # adaptive_vr_high/low are validated TOGETHER, against the value that will actually
+    # be in effect after this request (falling back to the current env for whichever
+    # one wasn't sent) — a low >= high combo collapses or inverts the "normal"
+    # VR band the two thresholds are supposed to bracket. Nothing is written to
+    # os.environ until BOTH individual and cross-field checks pass, so a bad combo
+    # can't leave one threshold updated and the other stale (no partial apply).
+    if req.adaptive_vr_high is not None or req.adaptive_vr_low is not None:
+        if req.adaptive_vr_high is not None:
+            vr_h = float(req.adaptive_vr_high)
+            if vr_h <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_high must be > 0")
+        else:
+            vr_h = float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6"))
 
-    if req.adaptive_vr_low is not None:
-        vr_l = float(req.adaptive_vr_low)
-        if vr_l <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_low must be > 0")
-        os.environ["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
-        env_updates["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
+        if req.adaptive_vr_low is not None:
+            vr_l = float(req.adaptive_vr_low)
+            if vr_l <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_low must be > 0")
+        else:
+            vr_l = float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))
+
+        if vr_l >= vr_h:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"adaptive_vr_low ({vr_l}) must be < adaptive_vr_high ({vr_h})"
+            )
+
+        if req.adaptive_vr_high is not None:
+            os.environ["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
+            env_updates["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
+        if req.adaptive_vr_low is not None:
+            os.environ["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
+            env_updates["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
 
     if req.time_lock_start is not None:
         t_start = str(req.time_lock_start).strip()
