@@ -201,7 +201,13 @@ class TMAIndicator:
 
         # 5. Volatility Ratio (VR) = ATR(14) / SMA(ATR(100), 14)
         # Includes epsilon (1e-8) to guard against zero division.
-        atr100 = tr.rolling(window=100, min_periods=min(14, len(df))).mean()
+        # atr100 must use the SAME smoothing basis as the atr computed above — mixing
+        # Wilder RMA(14) over plain SMA(100) would make VR the ratio of two differently
+        # smoothed series, quietly shifting where it crosses adaptive_vr_high/low.
+        if str(params.atr_method).lower() == "wilder":
+            atr100 = tr.ewm(alpha=1.0 / 100, adjust=False, min_periods=min(14, len(df))).mean()
+        else:
+            atr100 = tr.rolling(window=100, min_periods=min(14, len(df))).mean()
         sma_atr100 = atr100.rolling(window=14, min_periods=1).mean()
         vr = atr / (sma_atr100 + 1e-8)
         vr = vr.fillna(1.0)
