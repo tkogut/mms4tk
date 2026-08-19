@@ -1241,6 +1241,12 @@ class MMS4Daemon:
             "allocation_plan": {sym: self.plan_allocation(sym) for sym in active_syms},
             "base_sl_pct": self.base_sl_pct,
             "addon_sl_pct": self.addon_sl_pct,
+            "total_max_portfolio_margin_usd": self.total_max_portfolio_margin_usd,
+            "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
+            "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
+            "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
+            "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
+            "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
         }
 
     def _safe_addon_ledger(self) -> List[Dict[str, Any]]:

@@ -197,3 +197,174 @@ def test_risk_profile_leverage_modulation():
     sig_agg = engine.evaluate_signals(candles_short, sm)
     assert sig_agg.signal_type == "BASE_SHORT"
     assert sig_agg.leverage == 2.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚡ Adaptive Hybrid Engine Tests (Fast-Path Supervision)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_adaptive_engine_classic_mode_bypass():
+    """In CLASSIC mode, all adaptive VR and time-lock filters must be bypassed (Early Return)."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # 14:00 UTC (inside 13:30-14:30 window)
+    ts = 1787148000  # epoch seconds for a 14:00 UTC timestamp
+
+    candles_short = [
+        Candle(timestamp=ts + i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # Standard short trigger without extreme wick
+    candles_short[-2] = Candle(timestamp=ts + 23 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
+    candles_short[-1] = Candle(timestamp=ts + 24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    params_classic = IndicatorParams(engine_mode="CLASSIC", time_lock_start="13:30", time_lock_end="14:30")
+    sig = engine.evaluate_signals(candles_short, sm, params=params_classic)
+    assert sig.signal_type == "BASE_SHORT"
+    assert sig.is_allowed is True
+    assert "Base SHORT signal" in sig.reason
+
+
+def test_adaptive_engine_volatility_ratio_high_blocks_addons():
+    """In ADAPTIVE mode, VR > adaptive_vr_high blocks HIGH_RISK_ADD signals."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # Create candles where prev was base_short and curr closes down (standard addon trigger)
+    candles = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # Prev was base short
+    candles[-3] = Candle(timestamp=22 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
+    # Curr is addon short
+    candles[-2] = Candle(timestamp=23 * 60, open=99.2, high=99.4, low=98.0, close=98.5)
+    candles[-1] = Candle(timestamp=24 * 60, open=98.5, high=98.8, low=98.2, close=98.6)
+
+    # Force adaptive mode with very low vr_high threshold (0.5) so any normal market triggers VR > 0.5
+    params_adaptive = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=0.1)
+    sig = engine.evaluate_signals(candles, sm, params=params_adaptive)
+
+    assert sig.signal_type == "HIGH_RISK_ADD_SHORT"
+    assert sig.is_allowed is False
+    assert "SKIPPED_HIGH_VOLATILITY" in sig.reason
+    assert sig.volatility_ratio is not None
+
+
+def test_adaptive_engine_volatility_ratio_low_requires_sweep_rejection():
+    """In ADAPTIVE mode, VR < adaptive_vr_low blocks base entries unless Sweep Rejection is present."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # 1. Base Short WITHOUT upper wick rejection (e.g. open=100, high=108, close=99.8, low=99.7 -> tiny wick)
+    candles_no_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # High is barely above open (wick is small)
+    candles_no_sweep[-2] = Candle(timestamp=23 * 60, open=107.8, high=108.0, low=99.0, close=99.2)
+    candles_no_sweep[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    # High vr_low threshold (e.g. 5.0) forces compression check
+    params_compression = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_low=5.0, time_lock_start="00:00", time_lock_end="00:01")
+    sig_blocked = engine.evaluate_signals(candles_no_sweep, sm, params=params_compression)
+
+    assert sig_blocked.signal_type == "BASE_SHORT"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_COMPRESSION_NO_SWEEP" in sig_blocked.reason
+
+    # 2. Base Short WITH prominent upper wick rejection (open=100, high=108, close=99.2 -> upper wick 8.0 / 9.0 = 88%)
+    candles_with_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_with_sweep[-2] = Candle(timestamp=23 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
+    candles_with_sweep[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig_allowed = engine.evaluate_signals(candles_with_sweep, sm, params=params_compression)
+    assert sig_allowed.signal_type == "BASE_SHORT"
+    assert sig_allowed.is_allowed is True
+    assert "Base SHORT signal" in sig_allowed.reason
+
+
+def test_adaptive_engine_us_open_time_lock_filtering():
+    """In ADAPTIVE mode, time lock window (13:30 - 14:30 UTC) blocks BASE_SHORT without extreme sweep."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # 14:00:00 UTC timestamp (2026-08-19 14:00:00 UTC)
+    ts_inside_lock = 1787148000
+
+    # 1. Base Short inside time lock with moderate wick -> BLOCKED
+    candles_mod_wick = [
+        Candle(timestamp=ts_inside_lock + i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # Upper wick is 25% (open=102, high=104, low=96, close=97 -> upper wick = 2, range = 8 -> 25% < 40%)
+    candles_mod_wick[-2] = Candle(timestamp=ts_inside_lock + 23 * 60, open=102.0, high=104.0, low=96.0, close=97.0)
+    candles_mod_wick[-1] = Candle(timestamp=ts_inside_lock + 24 * 60, open=97.0, high=97.5, low=96.5, close=97.2)
+
+    params_timelock = IndicatorParams(engine_mode="ADAPTIVE", time_lock_start="13:30", time_lock_end="14:30", adaptive_vr_low=0.0)
+    sig_blocked = engine.evaluate_signals(candles_mod_wick, sm, params=params_timelock)
+
+    assert sig_blocked.signal_type == "BASE_SHORT"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_TIME_LOCK" in sig_blocked.reason
+
+    # 2. Base Short inside time lock with EXTREME upper wick (>= 40%) -> ALLOWED (Extreme Sweep Rejection)
+    candles_extreme_wick = [
+        Candle(timestamp=ts_inside_lock + i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # Upper wick is 60% (open=100, high=110, low=99, close=99.5 -> upper wick = 10, range = 11 -> 90%)
+    candles_extreme_wick[-2] = Candle(timestamp=ts_inside_lock + 23 * 60, open=100.0, high=110.0, low=99.0, close=99.5)
+    candles_extreme_wick[-1] = Candle(timestamp=ts_inside_lock + 24 * 60, open=99.5, high=100.0, low=99.0, close=99.8)
+
+    sig_allowed = engine.evaluate_signals(candles_extreme_wick, sm, params=params_timelock)
+    assert sig_allowed.signal_type == "BASE_SHORT"
+    assert sig_allowed.is_allowed is True
+
+
+def test_settings_api_adaptive_configuration(client):
+    """Test GET /api/v1/settings and POST /api/v1/settings/update for adaptive parameters."""
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
+
+    # 1. GET current settings
+    get_res = client.get("/api/v1/settings")
+    assert get_res.status_code == 200
+    s_data = get_res.json()
+    assert "engine_mode" in s_data
+    assert "adaptive_vr_high" in s_data
+    assert "adaptive_vr_low" in s_data
+    assert "time_lock_start" in s_data
+    assert "time_lock_end" in s_data
+
+    # 2. POST update settings
+    post_res = client.post(
+        "/api/v1/settings/update",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={
+            "engine_mode": "ADAPTIVE",
+            "adaptive_vr_high": 1.75,
+            "adaptive_vr_low": 0.75,
+            "time_lock_start": "14:00",
+            "time_lock_end": "15:00",
+            "total_max_portfolio_margin_usd": 1200.0
+        }
+    )
+    assert post_res.status_code == 200
+    updated = post_res.json()
+    assert updated["engine_mode"] == "ADAPTIVE"
+    assert updated["adaptive_vr_high"] == 1.75
+    assert updated["adaptive_vr_low"] == 0.75
+    assert updated["time_lock_start"] == "14:00"
+    assert updated["time_lock_end"] == "15:00"
+    assert updated["total_max_portfolio_margin_usd"] == 1200.0
+
+    # 3. Verify GET reflects update
+    verify_get = client.get("/api/v1/settings")
+    assert verify_get.status_code == 200
+    assert verify_get.json()["engine_mode"] == "ADAPTIVE"
+    assert verify_get.json()["adaptive_vr_high"] == 1.75
+

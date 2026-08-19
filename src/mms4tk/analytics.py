@@ -1,12 +1,85 @@
 import math
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Union, Dict, Any
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
 from mms4tk.state_manager import MMS4StateManager, MMS4State
+
+
+def _parse_candle_datetime(ts: Union[int, float, str, datetime]) -> datetime:
+    """Safely convert diverse candle timestamp formats to a UTC datetime."""
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    if isinstance(ts, (int, float)):
+        if ts > 1e11:
+            return datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                num = float(ts)
+                return _parse_candle_datetime(num)
+            except Exception:
+                pass
+    return datetime.now(timezone.utc)
+
+
+def is_in_time_lock_window(ts: Union[int, float, str, datetime], start_str: str, end_str: str) -> bool:
+    """Check if candle timestamp falls within HH:MM start-end window (UTC)."""
+    try:
+        s_h, s_m = map(int, start_str.strip().split(":"))
+        e_h, e_m = map(int, end_str.strip().split(":"))
+        dt = _parse_candle_datetime(ts)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        cur_min = dt.hour * 60 + dt.minute
+        start_min = s_h * 60 + s_m
+        end_min = e_h * 60 + e_m
+
+        if start_min <= end_min:
+            return start_min <= cur_min <= end_min
+        else:  # Overnight wrap e.g. 23:00 - 02:00
+            return cur_min >= start_min or cur_min <= end_min
+    except Exception:
+        return False
+
+
+def check_sweep_rejection(candle: Any, side: str, extreme: bool = False) -> bool:
+    """
+    Check if candle has a valid rejection wick indicating a liquidity sweep.
+    For SHORT (upper band): upper wick, candle closed down (close < open).
+    For LONG (lower band): lower wick, candle closed up (close > open).
+    """
+    try:
+        c_high = float(getattr(candle, "high", candle.get("high") if isinstance(candle, dict) else 0))
+        c_low = float(getattr(candle, "low", candle.get("low") if isinstance(candle, dict) else 0))
+        c_open = float(getattr(candle, "open", candle.get("open") if isinstance(candle, dict) else 0))
+        c_close = float(getattr(candle, "close", candle.get("close") if isinstance(candle, dict) else 0))
+    except Exception:
+        return False
+
+    rng = c_high - c_low
+    if rng <= 0:
+        return False
+
+    req_ratio = 0.40 if extreme else 0.20
+
+    if side.upper() == "SHORT":
+        upper_wick = c_high - max(c_open, c_close)
+        wick_ratio = upper_wick / rng
+        closed_down = c_close < c_open
+        return closed_down and (wick_ratio >= req_ratio)
+    elif side.upper() == "LONG":
+        lower_wick = min(c_open, c_close) - c_low
+        wick_ratio = lower_wick / rng
+        closed_up = c_close > c_open
+        return closed_up and (wick_ratio >= req_ratio)
+    return False
 
 
 class Candle(BaseModel):
@@ -23,7 +96,7 @@ class Candle(BaseModel):
 
 class IndicatorParams(BaseModel):
     """
-    Parameters for TMA and ATR calculation.
+    Parameters for TMA, ATR, and Adaptive Hybrid Engine calculation.
 
     atr_method: "sma" (historical mms4tk behaviour) or "wilder" (RMA, what TradingView's
     ATR and the classic Wilder definition use). Defaults to the env var
@@ -39,6 +112,13 @@ class IndicatorParams(BaseModel):
     # Higher-timeframe volatility expansion threshold from MMS v4 (zones > 2.5x ATR).
     htf_expansion_threshold: float = 2.5
 
+    # ── Adaptive Hybrid Engine Parameters (Fast-Path Supervised) ──
+    engine_mode: str = Field(default_factory=lambda: os.getenv("MMS4_ENGINE_MODE", "CLASSIC"))
+    adaptive_vr_high: float = Field(default_factory=lambda: float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")))
+    adaptive_vr_low: float = Field(default_factory=lambda: float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")))
+    time_lock_start: str = Field(default_factory=lambda: os.getenv("MMS4_TIME_LOCK_START", "13:30"))
+    time_lock_end: str = Field(default_factory=lambda: os.getenv("MMS4_TIME_LOCK_END", "14:30"))
+
 
 class SignalResult(BaseModel):
     """
@@ -51,6 +131,7 @@ class SignalResult(BaseModel):
     leverage: float
     is_allowed: bool = True
     reason: Optional[str] = None
+    volatility_ratio: Optional[float] = None
 
 
 class TMAIndicator:
@@ -118,11 +199,19 @@ class TMAIndicator:
         upper_band = tma + (params.atr_mult * atr)
         lower_band = tma - (params.atr_mult * atr)
 
+        # 5. Volatility Ratio (VR) = ATR(14) / SMA(ATR(100), 14)
+        # Includes epsilon (1e-8) to guard against zero division.
+        atr100 = tr.rolling(window=100, min_periods=min(14, len(df))).mean()
+        sma_atr100 = atr100.rolling(window=14, min_periods=1).mean()
+        vr = atr / (sma_atr100 + 1e-8)
+        vr = vr.fillna(1.0)
+
         return pd.DataFrame({
             "tma": tma,
             "atr": atr,
             "upper_band": upper_band,
-            "lower_band": lower_band
+            "lower_band": lower_band,
+            "vr": vr
         })
 
 
@@ -178,9 +267,12 @@ class MMS4SignalEngine:
         latest_tma = df["tma"].iloc[-1]
         latest_upper = df["upper_band"].iloc[-1]
         latest_lower = df["lower_band"].iloc[-1]
+        latest_vr = float(df["vr"].iloc[-1]) if "vr" in df and not pd.isna(df["vr"].iloc[-1]) else 1.0
 
         curr_c = closed_candles[-1]
         prev_c = closed_candles[-2]
+
+        is_adaptive = str(params.engine_mode).strip().upper() == "ADAPTIVE"
 
         if pd.isna(latest_upper) or pd.isna(latest_lower) or pd.isna(latest_tma):
             return SignalResult(
@@ -189,7 +281,8 @@ class MMS4SignalEngine:
                 stop_loss=0.0,
                 leverage=active_leverage,
                 is_allowed=True,
-                reason="Indicators resulting in NaN (need more candle history)"
+                reason="Indicators resulting in NaN (need more candle history)",
+                volatility_ratio=latest_vr
             )
 
         # Degenerate volatility: with ATR == 0 the bands collapse onto the TMA and every
@@ -202,7 +295,8 @@ class MMS4SignalEngine:
                 stop_loss=0.0,
                 leverage=active_leverage,
                 is_allowed=True,
-                reason="ATR is zero (flat market or missing data) — bands collapsed onto TMA"
+                reason="ATR is zero (flat market or missing data) — bands collapsed onto TMA",
+                volatility_ratio=latest_vr
             )
 
         prev_upper = df["upper_band"].iloc[-2]
@@ -222,7 +316,8 @@ class MMS4SignalEngine:
                     stop_loss=0.0,
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="Signal blocked by directional_bias=FLAT"
+                    reason="Signal blocked by directional_bias=FLAT",
+                    volatility_ratio=latest_vr
                 )
             if bias == "LONG_ONLY" and sig_type in ("BASE_SHORT", "HIGH_RISK_ADD_SHORT"):
                 return SignalResult(
@@ -231,7 +326,8 @@ class MMS4SignalEngine:
                     stop_loss=0.0,
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="Signal blocked by directional_bias=LONG_ONLY"
+                    reason="Signal blocked by directional_bias=LONG_ONLY",
+                    volatility_ratio=latest_vr
                 )
             if bias == "SHORT_ONLY" and sig_type in ("BASE_LONG", "HIGH_RISK_ADD_LONG"):
                 return SignalResult(
@@ -240,7 +336,8 @@ class MMS4SignalEngine:
                     stop_loss=0.0,
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="Signal blocked by directional_bias=SHORT_ONLY"
+                    reason="Signal blocked by directional_bias=SHORT_ONLY",
+                    volatility_ratio=latest_vr
                 )
             return None
 
@@ -262,7 +359,20 @@ class MMS4SignalEngine:
                     stop_loss=0.0,
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="HIGH_RISK_ADD blocked by risk_profile=CONSERVATIVE"
+                    reason="HIGH_RISK_ADD blocked by risk_profile=CONSERVATIVE",
+                    volatility_ratio=latest_vr
+                )
+
+            # Adaptive Fast-Path: High Volatility VR Filter (Block High Risk Add)
+            if is_adaptive and latest_vr > params.adaptive_vr_high:
+                return SignalResult(
+                    signal_type="HIGH_RISK_ADD_SHORT",
+                    price=curr_c.close,
+                    stop_loss=round(curr_c.close * 1.01, 6),
+                    leverage=active_leverage,
+                    is_allowed=False,
+                    reason=f"HIGH_RISK_ADD blocked: Volatility Ratio ({latest_vr:.2f}) > {params.adaptive_vr_high:.2f} (SKIPPED_HIGH_VOLATILITY)",
+                    volatility_ratio=latest_vr
                 )
 
             if active_state != MMS4State.BASE_MODE:
@@ -272,7 +382,8 @@ class MMS4SignalEngine:
                     stop_loss=round(curr_c.close * 1.01, 6),
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)"
+                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)",
+                    volatility_ratio=latest_vr
                 )
             else:
                 return SignalResult(
@@ -281,7 +392,8 @@ class MMS4SignalEngine:
                     stop_loss=round(curr_c.close * 1.01, 6),
                     leverage=1.0,
                     is_allowed=True,
-                    reason="HIGH_RISK_ADD SHORT signal: follow-up candle confirmed down trend"
+                    reason="HIGH_RISK_ADD SHORT signal: follow-up candle confirmed down trend" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
+                    volatility_ratio=latest_vr
                 )
 
         if prev_was_base_long and (curr_c.close > curr_c.open):
@@ -297,7 +409,20 @@ class MMS4SignalEngine:
                     stop_loss=0.0,
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="HIGH_RISK_ADD blocked by risk_profile=CONSERVATIVE"
+                    reason="HIGH_RISK_ADD blocked by risk_profile=CONSERVATIVE",
+                    volatility_ratio=latest_vr
+                )
+
+            # Adaptive Fast-Path: High Volatility VR Filter (Block High Risk Add)
+            if is_adaptive and latest_vr > params.adaptive_vr_high:
+                return SignalResult(
+                    signal_type="HIGH_RISK_ADD_LONG",
+                    price=curr_c.close,
+                    stop_loss=round(curr_c.close * 0.99, 6),
+                    leverage=active_leverage,
+                    is_allowed=False,
+                    reason=f"HIGH_RISK_ADD blocked: Volatility Ratio ({latest_vr:.2f}) > {params.adaptive_vr_high:.2f} (SKIPPED_HIGH_VOLATILITY)",
+                    volatility_ratio=latest_vr
                 )
 
             if active_state != MMS4State.BASE_MODE:
@@ -307,7 +432,8 @@ class MMS4SignalEngine:
                     stop_loss=round(curr_c.close * 0.99, 6),
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)"
+                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)",
+                    volatility_ratio=latest_vr
                 )
             else:
                 return SignalResult(
@@ -316,22 +442,17 @@ class MMS4SignalEngine:
                     stop_loss=round(curr_c.close * 0.99, 6),
                     leverage=1.0,
                     is_allowed=True,
-                    reason="HIGH_RISK_ADD LONG signal: follow-up candle confirmed up trend"
+                    reason="HIGH_RISK_ADD LONG signal: follow-up candle confirmed up trend" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
+                    volatility_ratio=latest_vr
                 )
 
         # 3. Evaluate Base Entries on current candle (Outer TMA Band penetration).
-        #
-        # A base entry is a mean-reversion trade: the candle must both touch the outer
-        # band AND close against the penetration. Without the direction check a candle
-        # closing strongly UP through the upper band produced a SHORT — an entry against
-        # a live breakout. Matches the prev_was_base_* conditions above.
         touched_upper = (curr_c.high >= latest_upper or curr_c.close >= latest_upper)
         touched_lower = (curr_c.low <= latest_lower or curr_c.close <= latest_lower)
         curr_is_base_short = touched_upper and (curr_c.close < curr_c.open)
         curr_is_base_long = touched_lower and (curr_c.close > curr_c.open)
 
-        # Outside bar: one candle pierced BOTH bands. Direction is genuinely ambiguous,
-        # so take no position rather than defaulting to whichever branch is tested first.
+        # Outside bar: one candle pierced BOTH bands. Direction is genuinely ambiguous.
         if touched_upper and touched_lower:
             return SignalResult(
                 signal_type="NONE",
@@ -339,7 +460,8 @@ class MMS4SignalEngine:
                 stop_loss=0.0,
                 leverage=active_leverage,
                 is_allowed=False,
-                reason="Outside bar pierced both TMA bands — direction ambiguous, no entry"
+                reason="Outside bar pierced both TMA bands — direction ambiguous, no entry",
+                volatility_ratio=latest_vr
             )
 
         if curr_is_base_short:
@@ -354,13 +476,42 @@ class MMS4SignalEngine:
             else:
                 lev = active_leverage
 
+            # Adaptive Fast-Path: Time-Lock Window (US Open)
+            if is_adaptive and is_in_time_lock_window(curr_c.timestamp, params.time_lock_start, params.time_lock_end):
+                has_extreme_sweep = check_sweep_rejection(curr_c, "SHORT", extreme=True)
+                if not has_extreme_sweep:
+                    return SignalResult(
+                        signal_type="BASE_SHORT",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * 1.02, 6),
+                        leverage=lev,
+                        is_allowed=False,
+                        reason=f"BASE_SHORT blocked during US Open Time-Lock ({params.time_lock_start}-{params.time_lock_end} UTC): SKIPPED_TIME_LOCK",
+                        volatility_ratio=latest_vr
+                    )
+
+            # Adaptive Fast-Path: Low Volatility Compression (VR < VR_LOW)
+            if is_adaptive and latest_vr < params.adaptive_vr_low:
+                has_sweep = check_sweep_rejection(curr_c, "SHORT", extreme=False)
+                if not has_sweep:
+                    return SignalResult(
+                        signal_type="BASE_SHORT",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * 1.02, 6),
+                        leverage=lev,
+                        is_allowed=False,
+                        reason=f"BASE_SHORT blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
+                        volatility_ratio=latest_vr
+                    )
+
             return SignalResult(
                 signal_type="BASE_SHORT",
                 price=curr_c.close,
                 stop_loss=round(curr_c.close * 1.02, 6),
                 leverage=lev,
                 is_allowed=True,
-                reason="Base SHORT signal: candle hit upper band and closed down"
+                reason="Base SHORT signal: candle hit upper band and closed down" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
+                volatility_ratio=latest_vr
             )
 
         if curr_is_base_long:
@@ -375,13 +526,28 @@ class MMS4SignalEngine:
             else:
                 lev = active_leverage
 
+            # Adaptive Fast-Path: Low Volatility Compression (VR < VR_LOW)
+            if is_adaptive and latest_vr < params.adaptive_vr_low:
+                has_sweep = check_sweep_rejection(curr_c, "LONG", extreme=False)
+                if not has_sweep:
+                    return SignalResult(
+                        signal_type="BASE_LONG",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * 0.98, 6),
+                        leverage=lev,
+                        is_allowed=False,
+                        reason=f"BASE_LONG blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
+                        volatility_ratio=latest_vr
+                    )
+
             return SignalResult(
                 signal_type="BASE_LONG",
                 price=curr_c.close,
                 stop_loss=round(curr_c.close * 0.98, 6),
                 leverage=lev,
                 is_allowed=True,
-                reason="Base LONG signal: candle hit lower band and closed up"
+                reason="Base LONG signal: candle hit lower band and closed up" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
+                volatility_ratio=latest_vr
             )
 
         return SignalResult(
@@ -390,7 +556,8 @@ class MMS4SignalEngine:
             stop_loss=0.0,
             leverage=active_leverage,
             is_allowed=True,
-            reason="No signal condition met"
+            reason="No signal condition met",
+            volatility_ratio=latest_vr
         )
 
 

@@ -4,6 +4,21 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.0] - 2026-08-19
+
+### ⚡ Hybrydowy Silnik Adaptacyjny & Fast-Path Supervision (Wariant A)
+- 🧠 **Architektura Nadzoru Asynchronicznego**: Wdrożenie hybrydowego silnika adaptacyjnego w `analytics.py` bez obciążania pętli transakcyjnej ciężkimi modelami ML/LLM.
+- 📈 **Volatility Ratio (VR)**: Wyliczanie wskaźnika $VR = ATR(14) / (SMA(ATR(100), 14) + \epsilon)$ z zabezpieczeniem $\epsilon = 10^{-8}$ przed dzieleniem przez zero.
+  - **Filtr Ekstremalnego Trendu**: Przy $VR > MMS4\_ADAPTIVE\_VR\_HIGH$ (domyślnie `1.6`) automatycznie blokowane są sygnały `HIGH_RISK_ADD` z powodem `SKIPPED_HIGH_VOLATILITY`.
+  - **Filtr Kompresji/Marazmu**: Przy $VR < MMS4\_ADAPTIVE\_VR\_LOW$ (domyślnie `0.8`) wejścia na bandach wymagają potwierdzenia knotem odrzucenia (Sweep Rejection $\ge 20\%$) z powodem `SKIPPED_COMPRESSION_NO_SWEEP`.
+- ⏰ **Filtr Okna Sesyjnego US Open (Time-Lock)**: W trybie `ADAPTIVE` w godzinach $MMS4\_TIME\_LOCK\_START$ – $MMS4\_TIME\_LOCK\_END$ (domyślnie `13:30` - `14:30` UTC) blokowane są wejścia `BASE_SHORT` (`SKIPPED_TIME_LOCK`), chyba że wystąpiło ekstremalne odrzucenie płynności (knot $\ge 40\%$).
+- 🎛️ **Konfiguracja w Locie (Settings API & Web UI)**:
+  - Dodano `GET /api/v1/settings` oraz rozbudowano `POST /api/v1/settings/update` o walidację Pydantic i bezpieczną persystencję do plików `.env`.
+  - Nowa karta w panelu UI: *Hybrydowy Silnik Adaptacyjny* z przełącznikiem trybu `CLASSIC` / `ADAPTIVE`, suwakami progów VR i polami godzin sesyjnych.
+- 🧪 **Pełne pokrycie testami jednostkowymi**: Dodano testy `test_adaptive_engine_*` i `test_settings_api_adaptive_configuration` w `tests/test_adaptive_tactics.py`.
+
+---
+
 ## 🚀 [0.29.0] - 2026-08-19
 
 ### 🛡️ Portfolio Margin Guard (Circuit Breaker)

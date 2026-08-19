@@ -658,29 +658,156 @@ async def get_kanban_cards() -> Dict[str, Any]:
     return {"cards": cards, "total": len(cards)}
 
 
+def persist_env_config(updates: Dict[str, Any]) -> None:
+    """Safely persist key-value pairs to .env files without destroying other settings."""
+    env_paths = [".env", "/app/.env", "../.env"]
+    for env_path in env_paths:
+        if os.path.exists(env_path):
+            try:
+                lines = []
+                found_keys = set()
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line_stripped = line.strip()
+                        if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
+                            k = line_stripped.split("=", 1)[0].strip()
+                            if k in updates:
+                                val = updates[k]
+                                lines.append(f"{k}={val}\n")
+                                found_keys.add(k)
+                            else:
+                                lines.append(line)
+                        else:
+                            lines.append(line)
+                for k, val in updates.items():
+                    if k not in found_keys:
+                        lines.append(f"{k}={val}\n")
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+            except Exception as e:
+                logger.warning(f"Failed to persist env updates to {env_path}: {e}")
+
+
 class SettingsUpdateRequest(BaseModel):
-    leverage: Optional[float] = 3.0
-    stop_loss_pct: Optional[float] = 1.25
-    scout_mode: Optional[bool] = False
+    leverage: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    scout_mode: Optional[bool] = None
     api_key: Optional[str] = None
-    capital_split_ratio: Optional[float] = 0.70
-    max_margin_usd: Optional[float] = 10.0
+    capital_split_ratio: Optional[float] = None
+    max_margin_usd: Optional[float] = None
+    total_max_portfolio_margin_usd: Optional[float] = None
+
+    # ── Adaptive Hybrid Engine Parameters ──
+    engine_mode: Optional[str] = Field(default=None, description="CLASSIC | ADAPTIVE")
+    adaptive_vr_high: Optional[float] = Field(default=None, description="High Volatility Ratio threshold (default 1.6)")
+    adaptive_vr_low: Optional[float] = Field(default=None, description="Low Volatility Ratio threshold (default 0.8)")
+    time_lock_start: Optional[str] = Field(default=None, description="Time Lock Start in HH:MM (default 13:30)")
+    time_lock_end: Optional[str] = Field(default=None, description="Time Lock End in HH:MM (default 14:30)")
+
+
+@app.get("/api/v1/settings", tags=["Settings"])
+async def get_settings() -> Dict[str, Any]:
+    """Get all current strategy, risk profile, and adaptive engine settings."""
+    return {
+        "leverage": state_manager.leverage,
+        "scout_mode": state_manager.scout_mode,
+        "capital_split_ratio": daemon.base_allocation,
+        "max_margin_usd": daemon.max_margin_usd,
+        "stop_loss_pct": round(daemon.base_sl_pct * 100, 2),
+        "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
+        "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
+        "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
+        "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
+        "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
+        "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
+    }
 
 
 @app.post("/api/v1/settings/update", tags=["Settings"], dependencies=[Depends(verify_api_key)])
 async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
-    """Update runtime strategy parameters, leverage (up to 10x), SL %, and risk profile."""
+    """Update runtime strategy parameters, leverage, SL %, risk profile, and adaptive engine settings."""
+    env_updates: Dict[str, Any] = {}
+
     if req.leverage is not None:
         state_manager.leverage = req.leverage  # setter clamps to [1.0, 10.0]
     if req.scout_mode is not None:
         state_manager.scout_mode = bool(req.scout_mode)
+    if req.capital_split_ratio is not None:
+        daemon.base_allocation = float(req.capital_split_ratio)
+        daemon.addon_allocation = round(1.0 - daemon.base_allocation, 4)
+        env_updates["MMS4_BASE_ALLOCATION"] = str(daemon.base_allocation)
+        env_updates["MMS4_ADDON_ALLOCATION"] = str(daemon.addon_allocation)
+    if req.max_margin_usd is not None:
+        daemon.max_margin_usd = float(req.max_margin_usd)
+        daemon.base_trade_usd = round(daemon.max_margin_usd * daemon.base_allocation, 2)
+        daemon.addon_trade_usd = round(daemon.max_margin_usd * daemon.addon_allocation, 2)
+        env_updates["MMS4_MAX_MARGIN_USD"] = str(daemon.max_margin_usd)
+    if req.stop_loss_pct is not None:
+        daemon.base_sl_pct = float(req.stop_loss_pct) / 100.0 if req.stop_loss_pct > 0.5 else float(req.stop_loss_pct)
+        env_updates["MMS4_BASE_SL_PCT"] = str(daemon.base_sl_pct)
+    if req.total_max_portfolio_margin_usd is not None:
+        daemon.total_max_portfolio_margin_usd = float(req.total_max_portfolio_margin_usd)
+        env_updates["MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD"] = str(daemon.total_max_portfolio_margin_usd)
+
+    # Validate and apply 5 Adaptive Engine settings
+    if req.engine_mode is not None:
+        mode_clean = str(req.engine_mode).strip().upper()
+        if mode_clean not in ["CLASSIC", "ADAPTIVE"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="engine_mode must be 'CLASSIC' or 'ADAPTIVE'")
+        os.environ["MMS4_ENGINE_MODE"] = mode_clean
+        env_updates["MMS4_ENGINE_MODE"] = mode_clean
+
+    if req.adaptive_vr_high is not None:
+        vr_h = float(req.adaptive_vr_high)
+        if vr_h <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_high must be > 0")
+        os.environ["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
+        env_updates["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
+
+    if req.adaptive_vr_low is not None:
+        vr_l = float(req.adaptive_vr_low)
+        if vr_l <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_low must be > 0")
+        os.environ["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
+        env_updates["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
+
+    if req.time_lock_start is not None:
+        t_start = str(req.time_lock_start).strip()
+        try:
+            parts = t_start.split(":")
+            if len(parts) != 2 or not (0 <= int(parts[0]) <= 23 and 0 <= int(parts[1]) <= 59):
+                raise ValueError()
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="time_lock_start must be in HH:MM format (00:00 - 23:59)")
+        os.environ["MMS4_TIME_LOCK_START"] = t_start
+        env_updates["MMS4_TIME_LOCK_START"] = t_start
+
+    if req.time_lock_end is not None:
+        t_end = str(req.time_lock_end).strip()
+        try:
+            parts = t_end.split(":")
+            if len(parts) != 2 or not (0 <= int(parts[0]) <= 23 and 0 <= int(parts[1]) <= 59):
+                raise ValueError()
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="time_lock_end must be in HH:MM format (00:00 - 23:59)")
+        os.environ["MMS4_TIME_LOCK_END"] = t_end
+        env_updates["MMS4_TIME_LOCK_END"] = t_end
+
+    if env_updates:
+        persist_env_config(env_updates)
 
     state_manager.save_state(reason="Settings update via Web Dashboard")
     return {
         "status": "success",
         "leverage": state_manager.leverage,
         "state": state_manager.current_state.value,
-        "scout_mode": state_manager.scout_mode
+        "scout_mode": state_manager.scout_mode,
+        "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
+        "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
+        "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
+        "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
+        "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
+        "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
     }
 
 
