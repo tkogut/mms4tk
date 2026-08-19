@@ -690,7 +690,19 @@ def _persist_env_line_rhs(existing_rhs: str, new_value: Any) -> str:
 
 
 def persist_env_config(updates: Dict[str, Any]) -> None:
-    """Safely persist key-value pairs to .env files without destroying other settings."""
+    """
+    Safely persist key-value pairs to .env files without destroying other settings.
+
+    Writes to every candidate path that already exists, not just one, because the
+    same settings-update call can run from more than one working directory depending
+    on how the process was launched:
+      - ".env"      — repo root, when running directly on the host (dev, CLI).
+      - "/app/.env" — the container's WORKDIR in the Docker image (see Dockerfile /
+        docker-compose.yml), when running inside the deployed container.
+      - "../.env"   — one level up, when the CWD is a subdirectory (e.g. ui_dashboard/)
+        that shares the repo's top-level .env.
+    A path that doesn't exist is skipped, so this never creates a stray .env file.
+    """
     env_paths = [".env", "/app/.env", "../.env"]
     for env_path in env_paths:
         if os.path.exists(env_path):
