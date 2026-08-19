@@ -2,7 +2,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from mms4tk.api import app, state_manager
+from mms4tk.api import app, state_manager, daemon as api_daemon
 from mms4tk.analytics import Candle, IndicatorParams, HigherTimeframeAnalytics, MMS4SignalEngine
 from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
 from mms4tk.logger_db import LoggerDB
@@ -11,6 +11,31 @@ from mms4tk.logger_db import LoggerDB
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture
+def restore_adaptive_settings():
+    """
+    POST /api/v1/settings/update mutates process-wide os.environ AND the shared
+    `daemon` singleton directly (that's the point — a live-reload endpoint). Left
+    unrestored, a test that flips MMS4_ENGINE_MODE to ADAPTIVE or sets a custom
+    portfolio cap leaks that into every test running afterward in the same pytest
+    session, since default IndicatorParams()/daemon state reads env at construction
+    time. Snapshot and restore both around any test that calls this endpoint.
+    """
+    env_keys = [
+        "MMS4_ENGINE_MODE", "MMS4_ADAPTIVE_VR_HIGH", "MMS4_ADAPTIVE_VR_LOW",
+        "MMS4_TIME_LOCK_START", "MMS4_TIME_LOCK_END",
+    ]
+    saved_env = {k: os.environ.get(k) for k in env_keys}
+    saved_cap = api_daemon.total_max_portfolio_margin_usd
+    yield
+    for k, v in saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    api_daemon.total_max_portfolio_margin_usd = saved_cap
 
 
 def test_higher_timeframe_analytics():
@@ -252,6 +277,31 @@ def test_adaptive_engine_volatility_ratio_high_blocks_addons():
     assert sig.volatility_ratio is not None
 
 
+def test_adaptive_engine_volatility_ratio_high_blocks_addons_long():
+    """LONG mirror of the SHORT case above — the engine has a separate, duplicated
+    code branch for HIGH_RISK_ADD_LONG that the SHORT-only test never exercises."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    candles = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # Prev was base long: touches lower band and closes up
+    candles[-3] = Candle(timestamp=22 * 60, open=100.0, high=101.0, low=92.0, close=100.8)
+    # Curr is addon long: confirms the up-move
+    candles[-2] = Candle(timestamp=23 * 60, open=100.8, high=101.6, low=100.0, close=101.5)
+    candles[-1] = Candle(timestamp=24 * 60, open=101.5, high=101.8, low=101.2, close=101.6)
+
+    params_adaptive = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=0.1)
+    sig = engine.evaluate_signals(candles, sm, params=params_adaptive)
+
+    assert sig.signal_type == "HIGH_RISK_ADD_LONG"
+    assert sig.is_allowed is False
+    assert "SKIPPED_HIGH_VOLATILITY" in sig.reason
+    assert sig.volatility_ratio is not None
+
+
 def test_adaptive_engine_volatility_ratio_low_requires_sweep_rejection():
     """In ADAPTIVE mode, VR < adaptive_vr_low blocks base entries unless Sweep Rejection is present."""
     engine = MMS4SignalEngine()
@@ -286,6 +336,42 @@ def test_adaptive_engine_volatility_ratio_low_requires_sweep_rejection():
     assert sig_allowed.signal_type == "BASE_SHORT"
     assert sig_allowed.is_allowed is True
     assert "Base SHORT signal" in sig_allowed.reason
+
+
+def test_adaptive_engine_volatility_ratio_low_requires_sweep_rejection_long():
+    """LONG mirror of the compression/sweep-rejection test above — BASE_LONG has its
+    own, separately-coded compression branch that the SHORT-only test never touches."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # 1. Base Long WITHOUT lower wick rejection (tiny wick)
+    candles_no_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    # Low is barely below open (wick is small)
+    candles_no_sweep[-2] = Candle(timestamp=23 * 60, open=92.2, high=101.0, low=92.0, close=100.8)
+    candles_no_sweep[-1] = Candle(timestamp=24 * 60, open=100.8, high=101.0, low=100.5, close=100.9)
+
+    params_compression = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_low=5.0, time_lock_start="00:00", time_lock_end="00:01")
+    sig_blocked = engine.evaluate_signals(candles_no_sweep, sm, params=params_compression)
+
+    assert sig_blocked.signal_type == "BASE_LONG"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_COMPRESSION_NO_SWEEP" in sig_blocked.reason
+
+    # 2. Base Long WITH prominent lower wick rejection (open=100, high=101, low=92, close=100.8 -> lower wick 8.0 / 9.0 = 88.9%)
+    candles_with_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_with_sweep[-2] = Candle(timestamp=23 * 60, open=100.0, high=101.0, low=92.0, close=100.8)
+    candles_with_sweep[-1] = Candle(timestamp=24 * 60, open=100.8, high=101.0, low=100.5, close=100.9)
+
+    sig_allowed = engine.evaluate_signals(candles_with_sweep, sm, params=params_compression)
+    assert sig_allowed.signal_type == "BASE_LONG"
+    assert sig_allowed.is_allowed is True
+    assert "Base LONG signal" in sig_allowed.reason
 
 
 def test_adaptive_engine_us_open_time_lock_filtering():
@@ -325,7 +411,7 @@ def test_adaptive_engine_us_open_time_lock_filtering():
     assert sig_allowed.is_allowed is True
 
 
-def test_settings_api_adaptive_configuration(client):
+def test_settings_api_adaptive_configuration(client, restore_adaptive_settings):
     """Test GET /api/v1/settings and POST /api/v1/settings/update for adaptive parameters."""
     api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
 
