@@ -296,14 +296,14 @@ def test_adaptive_engine_us_open_time_lock_filtering():
     # 14:00:00 UTC timestamp (2026-08-19 14:00:00 UTC)
     ts_inside_lock = 1787148000
 
-    # 1. Base Short inside time lock with moderate wick -> BLOCKED
+    # 1. Base Short inside time lock with moderate wick (wick ~25-33% < 40%) -> BLOCKED
     candles_mod_wick = [
         Candle(timestamp=ts_inside_lock + i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
         for i in range(25)
     ]
-    # Upper wick is 25% (open=102, high=104, low=96, close=97 -> upper wick = 2, range = 8 -> 25% < 40%)
-    candles_mod_wick[-2] = Candle(timestamp=ts_inside_lock + 23 * 60, open=102.0, high=104.0, low=96.0, close=97.0)
-    candles_mod_wick[-1] = Candle(timestamp=ts_inside_lock + 24 * 60, open=97.0, high=97.5, low=96.5, close=97.2)
+    # Upper wick is 3.0 / 9.0 = 33.3% (< 40% extreme threshold, but >= 20% standard sweep)
+    candles_mod_wick[-2] = Candle(timestamp=ts_inside_lock + 23 * 60, open=105.0, high=108.0, low=99.0, close=99.2)
+    candles_mod_wick[-1] = Candle(timestamp=ts_inside_lock + 24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
 
     params_timelock = IndicatorParams(engine_mode="ADAPTIVE", time_lock_start="13:30", time_lock_end="14:30", adaptive_vr_low=0.0)
     sig_blocked = engine.evaluate_signals(candles_mod_wick, sm, params=params_timelock)
@@ -312,14 +312,13 @@ def test_adaptive_engine_us_open_time_lock_filtering():
     assert sig_blocked.is_allowed is False
     assert "SKIPPED_TIME_LOCK" in sig_blocked.reason
 
-    # 2. Base Short inside time lock with EXTREME upper wick (>= 40%) -> ALLOWED (Extreme Sweep Rejection)
+    # 2. Base Short inside time lock with EXTREME upper wick (8.0 / 9.0 = 88.8% >= 40%) -> ALLOWED
     candles_extreme_wick = [
         Candle(timestamp=ts_inside_lock + i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
         for i in range(25)
     ]
-    # Upper wick is 60% (open=100, high=110, low=99, close=99.5 -> upper wick = 10, range = 11 -> 90%)
-    candles_extreme_wick[-2] = Candle(timestamp=ts_inside_lock + 23 * 60, open=100.0, high=110.0, low=99.0, close=99.5)
-    candles_extreme_wick[-1] = Candle(timestamp=ts_inside_lock + 24 * 60, open=99.5, high=100.0, low=99.0, close=99.8)
+    candles_extreme_wick[-2] = Candle(timestamp=ts_inside_lock + 23 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
+    candles_extreme_wick[-1] = Candle(timestamp=ts_inside_lock + 24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
 
     sig_allowed = engine.evaluate_signals(candles_extreme_wick, sm, params=params_timelock)
     assert sig_allowed.signal_type == "BASE_SHORT"
