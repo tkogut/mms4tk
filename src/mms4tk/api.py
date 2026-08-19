@@ -88,7 +88,11 @@ async def lifespan(app: FastAPI):
         logger.info("FastAPI Shutdown: Stopping background workers...")
         await daemon.stop()
         await trade_sync_worker.stop()
-        await tq.stop()
+        # TelegramQueueManager.stop() is a plain sync method by design (it just flips
+        # the worker thread's running flag — see telegram_queue.py) — awaiting it
+        # raised TypeError on every lifespan shutdown, failing teardown for any test
+        # that exercises the app via `with TestClient(app)`.
+        tq.stop()
 
 
 app = FastAPI(
@@ -658,6 +662,33 @@ async def get_kanban_cards() -> Dict[str, Any]:
     return {"cards": cards, "total": len(cards)}
 
 
+def _persist_env_line_rhs(existing_rhs: str, new_value: Any) -> str:
+    """
+    Build the replacement right-hand side for a KEY=... line, preserving any trailing
+    inline comment from the original line (e.g. 'CLASSIC  # explains the mode' keeps
+    the '# explains the mode' part after the value is swapped).
+
+    A quoted original value ('...' / "...") keeps everything after the closing quote
+    verbatim as the "comment" tail; otherwise the first whitespace-preceded '#' is
+    treated as the comment start. Neither pattern matching means no comment to keep.
+    """
+    comment_suffix = ""
+    if existing_rhs and existing_rhs[0] in ("'", '"'):
+        end = existing_rhs.find(existing_rhs[0], 1)
+        if end != -1:
+            comment_suffix = existing_rhs[end + 1:]
+    else:
+        for sep in (" #", "\t#"):
+            idx = existing_rhs.find(sep)
+            if idx != -1:
+                comment_suffix = existing_rhs[idx:]
+                break
+    # A value can never legitimately contain a newline in a .env file — strip any
+    # that slipped in rather than let it inject an extra, uncontrolled line.
+    safe_val = str(new_value).replace("\r", " ").replace("\n", " ")
+    return f"{safe_val}{comment_suffix}"
+
+
 def persist_env_config(updates: Dict[str, Any]) -> None:
     """Safely persist key-value pairs to .env files without destroying other settings."""
     env_paths = [".env", "/app/.env", "../.env"]
@@ -670,18 +701,26 @@ def persist_env_config(updates: Dict[str, Any]) -> None:
                     for line in f:
                         line_stripped = line.strip()
                         if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
-                            k = line_stripped.split("=", 1)[0].strip()
+                            k, rest = line_stripped.split("=", 1)
+                            k = k.strip()
                             if k in updates:
-                                val = updates[k]
-                                lines.append(f"{k}={val}\n")
+                                lines.append(f"{k}={_persist_env_line_rhs(rest, updates[k])}\n")
                                 found_keys.add(k)
                             else:
                                 lines.append(line)
                         else:
                             lines.append(line)
+
+                # A file whose last line lacks a trailing newline (common after a
+                # manual edit) would otherwise glue an appended key onto it —
+                # e.g. 'KEY=valNEW_KEY=x' — so normalize before appending anything.
+                if lines and not lines[-1].endswith("\n"):
+                    lines[-1] = lines[-1] + "\n"
+
                 for k, val in updates.items():
                     if k not in found_keys:
-                        lines.append(f"{k}={val}\n")
+                        safe_val = str(val).replace("\r", " ").replace("\n", " ")
+                        lines.append(f"{k}={safe_val}\n")
                 with open(env_path, "w", encoding="utf-8") as f:
                     f.writelines(lines)
             except Exception as e:
