@@ -118,7 +118,7 @@ def main():
     symbols_data = fetch_api("/api/v1/symbols") or {}
     positions_data = fetch_api("/api/v1/positions") or {}
     balance_data = fetch_api("/api/v1/balance") or {}
-    stats_data = fetch_api("/api/v1/stats") or {}
+    stats_data = fetch_api("/api/v1/stats/pnl") or {}
 
     symbols = symbols_data.get("symbols", [])
     positions = positions_data.get("positions", [])

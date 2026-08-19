@@ -4,6 +4,24 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.29.0] - 2026-08-19
+
+### 🛡️ Portfolio Margin Guard (Circuit Breaker)
+- 🆕 **Global portfolio notional cap**: New `MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD` env var (default `0` = disabled). When set, the daemon blocks any new BASE or HIGH_RISK_ADD entry whose addition would push the aggregate portfolio notional (across ALL symbols) above the configured limit.
+- 🛡️ **Circuit breaker logic**: `check_portfolio_margin_guard()` method in `MMS4Daemon` sums all open OKX position notionals and compares against the cap with 5% tolerance. Blocks with `PORTFOLIO_GUARD_BLOCKED_*` outcome logged to cycle_logs and Hermes webhook.
+- 📊 **Prevents correlated drawdown**: Addresses the risk of 4+ symbols × $500/symbol = $2000+ unguarded exposure during correlated market moves.
+- 📝 **`.env.example` updated** with documentation and configuration guidance.
+
+---
+
+## 🚀 [0.28.3] - 2026-08-18
+
+### 💸 Hermes Digest Realized PnL Endpoint Fix & API Alias
+- 🐛 **`mms4tk_multi_symbol_digest.py` PnL Sync Fix**: Changed endpoint query in digest script from `/api/v1/stats` (which previously returned 404 and defaulted realized PnL to $0.00) to `/api/v1/stats/pnl`.
+- 🔌 **FastAPI `/api/v1/stats` Alias Route**: Added `@app.get("/api/v1/stats")` route decorator pointing to `get_pnl()` alongside `/api/v1/stats/pnl` for seamless backwards compatibility.
+
+---
+
 ## 🚀 [0.28.2] - 2026-08-17
 
 ### 🔔 Telegram Notification Bugfix & Digest PnL Addition

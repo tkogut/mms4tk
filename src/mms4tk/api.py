@@ -285,6 +285,7 @@ async def get_balance() -> Dict[str, Any]:
 
 
 @app.get("/api/v1/stats/pnl", response_model=PnLResponse, tags=["Stats"])
+@app.get("/api/v1/stats", response_model=PnLResponse, tags=["Stats"])
 async def get_pnl() -> Dict[str, Any]:
     """Get daily ROE %, realized PnL, unrealized PnL, KPI summary, and account balances."""
     summary = state_manager.get_summary()

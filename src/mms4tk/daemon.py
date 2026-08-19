@@ -125,6 +125,75 @@ class MMS4Daemon:
         self._addons_known_clear: set = set()
         self.addon_sl_pct: float = float(os.getenv("MMS4_ADDON_SL_PCT", "0.0125"))
 
+        # ── Portfolio Margin Guard (Circuit Breaker) ────────────────────
+        # Global cap on total committed margin across ALL symbols.
+        # When > 0, the daemon blocks any new entry whose addition would push
+        # the aggregate portfolio notional above this limit.
+        # Set to 0 (default) to disable the guard entirely.
+        self.total_max_portfolio_margin_usd: float = float(
+            os.getenv("MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD", "0")
+        )
+
+    # ── Portfolio Margin Guard ───────────────────────────────────────────
+
+    def check_portfolio_margin_guard(
+        self, live_positions: list, new_notional_usd: float, target_symbol: str
+    ) -> Dict[str, Any]:
+        """
+        Verify that opening a new position of `new_notional_usd` would not push
+        the total portfolio notional above `total_max_portfolio_margin_usd`.
+
+        Returns a dict:
+            allowed: bool — True if the order may proceed
+            current_total_usd: float — aggregate notional of all open positions
+            headroom_usd: float — remaining capacity before cap
+            cap_usd: float — the configured cap (0 = disabled)
+        """
+        cap = self.total_max_portfolio_margin_usd
+        if cap <= 0:
+            return {
+                "allowed": True,
+                "current_total_usd": 0.0,
+                "headroom_usd": float("inf"),
+                "cap_usd": 0.0,
+            }
+
+        total_notional = 0.0
+        for p in live_positions:
+            contracts = _pos_contracts(p)
+            if contracts <= 0:
+                continue
+            sym = p.get("symbol", "")
+            price = 0.0
+            try:
+                price = float(
+                    p.get("markPrice")
+                    or p.get("info", {}).get("markPx")
+                    or p.get("entryPrice")
+                    or p.get("info", {}).get("avgPx")
+                    or 0.0
+                )
+            except (TypeError, ValueError):
+                pass
+            total_notional += _pos_notional(p, price, sym)
+
+        headroom = cap - total_notional
+        allowed = (total_notional + new_notional_usd) <= cap * 1.05  # 5% tolerance
+
+        if not allowed:
+            logger.warning(
+                f"🛡️ PORTFOLIO MARGIN GUARD: Blocking {target_symbol} order "
+                f"(+${new_notional_usd:.2f}). Portfolio notional: ${total_notional:.2f} / "
+                f"${cap:.2f} cap. Headroom: ${headroom:.2f}"
+            )
+
+        return {
+            "allowed": allowed,
+            "current_total_usd": round(total_notional, 2),
+            "headroom_usd": round(headroom, 2),
+            "cap_usd": cap,
+        }
+
     # ── Position sizing ─────────────────────────────────────────────────
 
     def plan_allocation(self, symbol: str) -> Dict[str, Any]:
@@ -880,32 +949,46 @@ class MMS4Daemon:
                 )
                 logger.info(f"⊘ {details}")
             else:
-                order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
-                try:
-                    order_info = await self.executor.execute_order(
-                        symbol=target_symbol,
-                        side=order_side,
-                        amount=base_order_amount,
-                        stop_loss_pct=self.base_sl_pct,
-                        leverage=sym_leverage,
-                        price=signal.price
-                    )
-                    outcome = f"EXECUTED_{signal.signal_type}"
+                # ── Portfolio Margin Guard: block if global cap would be exceeded ──
+                pmg = self.check_portfolio_margin_guard(
+                    live_positions, notional_base_usd, target_symbol
+                )
+                if not pmg["allowed"]:
+                    outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
                     details = (
-                        f"Executed {signal.signal_type} base order for {target_symbol} "
-                        f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
-                        f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                        f"🛡️ Portfolio Margin Guard blocked {signal.signal_type} for {target_symbol}: "
+                        f"adding ${notional_base_usd:.2f} would push total from "
+                        f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap. "
+                        f"Headroom: ${pmg['headroom_usd']:.2f}"
                     )
-                except BelowMinimumNotional as e:
-                    # Not a failure: the intended size is under the venue's minimum, so
-                    # the correct action is to stand down rather than trade bigger.
-                    outcome = f"SKIPPED_{signal.signal_type}"
-                    details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
-                    logger.info(f"⊘ {details}")
-                except Exception as e:
-                    outcome = f"ERROR_{signal.signal_type}"
-                    details = f"Failed to execute order for {target_symbol}: {str(e)}"
-                    logger.error(details, exc_info=True)
+                    logger.warning(details)
+                else:
+                    order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                    try:
+                        order_info = await self.executor.execute_order(
+                            symbol=target_symbol,
+                            side=order_side,
+                            amount=base_order_amount,
+                            stop_loss_pct=self.base_sl_pct,
+                            leverage=sym_leverage,
+                            price=signal.price
+                        )
+                        outcome = f"EXECUTED_{signal.signal_type}"
+                        details = (
+                            f"Executed {signal.signal_type} base order for {target_symbol} "
+                            f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
+                            f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                        )
+                    except BelowMinimumNotional as e:
+                        # Not a failure: the intended size is under the venue's minimum, so
+                        # the correct action is to stand down rather than trade bigger.
+                        outcome = f"SKIPPED_{signal.signal_type}"
+                        details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
+                        logger.info(f"⊘ {details}")
+                    except Exception as e:
+                        outcome = f"ERROR_{signal.signal_type}"
+                        details = f"Failed to execute order for {target_symbol}: {str(e)}"
+                        logger.error(details, exc_info=True)
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
             # Single Addon Guard: an explicit, persisted per-position counter.
@@ -950,31 +1033,44 @@ class MMS4Daemon:
                     f"not fit a whole contract within budget."
                 )
             else:
-                order_side = "SELL" if "SHORT" in signal.signal_type else "BUY"
-                try:
-                    order_info = await self.executor.execute_order(
-                        symbol=target_symbol,
-                        side=order_side,
-                        amount=addon_order_amount,
-                        stop_loss_pct=self.addon_sl_pct,
-                        leverage=sym_leverage,
-                        price=signal.price
-                    )
-                    self._record_addon(target_symbol, target_pos_side, match_entry)
-                    outcome = f"EXECUTED_{signal.signal_type}"
+                # ── Portfolio Margin Guard: block addon if global cap would be exceeded ──
+                pmg = self.check_portfolio_margin_guard(
+                    live_positions, notional_addon_usd, target_symbol
+                )
+                if not pmg["allowed"]:
+                    outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
                     details = (
-                        f"Executed High Risk Add order for {target_symbol} "
-                        f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
-                        f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                        f"🛡️ Portfolio Margin Guard blocked High Risk Add for {target_symbol}: "
+                        f"adding ${notional_addon_usd:.2f} would push total from "
+                        f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap."
                     )
-                except BelowMinimumNotional as e:
-                    outcome = f"SKIPPED_{signal.signal_type}"
-                    details = f"High Risk Add for {target_symbol} skipped — {e}"
-                    logger.info(f"⊘ {details}")
-                except Exception as e:
-                    outcome = f"ERROR_{signal.signal_type}"
-                    details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
-                    logger.error(details, exc_info=True)
+                    logger.warning(details)
+                else:
+                    order_side = "SELL" if "SHORT" in signal.signal_type else "BUY"
+                    try:
+                        order_info = await self.executor.execute_order(
+                            symbol=target_symbol,
+                            side=order_side,
+                            amount=addon_order_amount,
+                            stop_loss_pct=self.addon_sl_pct,
+                            leverage=sym_leverage,
+                            price=signal.price
+                        )
+                        self._record_addon(target_symbol, target_pos_side, match_entry)
+                        outcome = f"EXECUTED_{signal.signal_type}"
+                        details = (
+                            f"Executed High Risk Add order for {target_symbol} "
+                            f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
+                            f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                        )
+                    except BelowMinimumNotional as e:
+                        outcome = f"SKIPPED_{signal.signal_type}"
+                        details = f"High Risk Add for {target_symbol} skipped — {e}"
+                        logger.info(f"⊘ {details}")
+                    except Exception as e:
+                        outcome = f"ERROR_{signal.signal_type}"
+                        details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
+                        logger.error(details, exc_info=True)
 
         # 4. Log cycle outcome for specific symbol
         self.logger_db.log_cycle(
