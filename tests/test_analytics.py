@@ -38,6 +38,53 @@ def test_tma_indicator_math():
     assert df["lower_band"].iloc[-1] == pytest.approx(92.0)
 
 
+def test_volatility_ratio_uses_same_atr_basis_as_atr_method():
+    """
+    VR = ATR(14) / SMA(ATR(100), 14) must use the SAME smoothing basis for both the
+    ATR(14) numerator and the ATR(100) baseline. Mixing a Wilder-RMA ATR(14) over an
+    SMA-based ATR(100) would silently shift where VR crosses adaptive_vr_high/low.
+    """
+    candles = []
+    # Ramp True Range up partway through so SMA and Wilder RMA actually diverge —
+    # a flat series makes both bases converge to the same number and the test proves
+    # nothing.
+    for i in range(40):
+        spread = 1.0 if i < 20 else 6.0
+        candles.append(Candle(
+            timestamp=i * 60, open=100.0, high=100.0 + spread, low=100.0 - spread, close=100.0
+        ))
+
+    closes = pd.Series([c.close for c in candles])
+    highs = pd.Series([c.high for c in candles])
+    lows = pd.Series([c.low for c in candles])
+    close_prev = closes.shift(1)
+    tr = pd.concat(
+        [highs - lows, (highs - close_prev).abs(), (lows - close_prev).abs()], axis=1
+    ).max(axis=1)
+
+    for method in ("sma", "wilder"):
+        params = IndicatorParams(tma_length=10, atr_period=14, atr_method=method)
+        df = TMAIndicator.calculate(candles, params)
+
+        if method == "wilder":
+            expected_atr100 = tr.ewm(alpha=1.0 / 100, adjust=False, min_periods=min(14, len(candles))).mean()
+        else:
+            expected_atr100 = tr.rolling(window=100, min_periods=min(14, len(candles))).mean()
+        expected_sma_atr100 = expected_atr100.rolling(window=14, min_periods=1).mean()
+        expected_vr = (df["atr"] / (expected_sma_atr100 + 1e-8)).iloc[-1]
+
+        assert df["vr"].iloc[-1] == pytest.approx(expected_vr, rel=1e-6)
+
+        if method == "wilder":
+            # The bug this guards against: atr100 hardcoded to plain SMA regardless of
+            # atr_method. Prove the two bases actually disagree here, so a regression
+            # back to the mixed-basis formula would be caught, not accidentally match.
+            wrong_basis_atr100 = tr.rolling(window=100, min_periods=min(14, len(candles))).mean()
+            wrong_basis_sma = wrong_basis_atr100.rolling(window=14, min_periods=1).mean()
+            wrong_vr = (df["atr"] / (wrong_basis_sma + 1e-8)).iloc[-1]
+            assert df["vr"].iloc[-1] != pytest.approx(wrong_vr, rel=1e-3)
+
+
 def test_base_short_signal():
     """Verify BASE_SHORT signal trigger when candle hits upper band and closes down."""
     params = IndicatorParams(tma_length=10, atr_period=5, atr_mult=2.0)

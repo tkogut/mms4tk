@@ -1,10 +1,34 @@
 import pytest
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
-from mms4tk.api import app, configured_symbols_store
+from mms4tk.api import app, configured_symbols_store, executor
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_okx_verification(monkeypatch):
+    """
+    GET /api/v1/symbols and /api/v1/symbols/verify call the shared `executor`'s
+    verify_symbol_with_okx(), which — regardless of configured OKX credentials —
+    makes real, unauthenticated ccxt ticker requests against OKX for every
+    candidate symbol spelling. In a sandbox with no network egress that hangs
+    until ccxt's retry/timeout chain resolves, once per not-yet-cached symbol.
+    Stub it so these tests exercise route wiring and the verification cache, not
+    live exchange connectivity.
+    """
+    async def _fake_verify(symbol: str, *args, **kwargs):
+        return {
+            "symbol": symbol,
+            "okx_verified": True,
+            "autotrade_permitted": True,
+            "okx_status": "AUTOTRADE_READY",
+            "last_price": 100.0,
+            "reason": "stubbed for test — no live OKX call",
+        }
+
+    monkeypatch.setattr(executor, "verify_symbol_with_okx", _fake_verify)
 
 
 def test_per_symbol_state_isolation():
@@ -68,15 +92,17 @@ def test_add_remove_trading_symbol_api():
     syms = [s["symbol"] for s in get_res.json()["symbols"] if s["is_active"]]
     assert "DOGE/USDC" in syms
 
-    # Delete (Pause) DOGE/USDC
+    # Delete DOGE/USDC — the endpoint performs a hard removal from the symbols store
+    # (its own docstring/message say "permanently removed"), not a pause. The response
+    # has no "paused" key; asserting one always raised KeyError before this fix.
     del_res = client.delete("/api/v1/symbols/DOGE/USDC", headers=headers)
     assert del_res.status_code == 200
-    assert del_res.json()["paused"] == "DOGE/USDC"
+    assert del_res.json()["removed"] == "DOGE/USDC"
 
-    # Verify paused
+    # Verify it's gone entirely, not merely deactivated
     get_res2 = client.get("/api/v1/symbols")
-    active_syms = [s["symbol"] for s in get_res2.json()["symbols"] if s["is_active"]]
-    assert "DOGE/USDC" not in active_syms
+    all_syms = [s["symbol"] for s in get_res2.json()["symbols"]]
+    assert "DOGE/USDC" not in all_syms
 
 
 def test_multi_symbol_daemon_cycle():

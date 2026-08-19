@@ -21,8 +21,33 @@ AUTH_HEADERS = {"X-MMS4-API-KEY": API_KEY}
 
 
 @pytest.fixture
-def client():
-    """FastAPI TestClient fixture for Hermes network route testing."""
+def client(monkeypatch):
+    """
+    FastAPI TestClient fixture for Hermes network route testing.
+
+    Using TestClient as a context manager fires the real ASGI lifespan, which starts
+    the shared daemon's background loop against the shared `executor` singleton.
+    OKXExecutor.initialize()/fetch_candles() fall back to a real, unauthenticated ccxt
+    client for public market data even with no OKX credentials configured ("Mock
+    Mode") — in a sandbox with no network egress those calls hang until ccxt's own
+    (long) timeout/retry chain resolves, stalling every test in this file one after
+    another. Stub the network-touching methods so this file tests HTTP route wiring
+    (the actual point of these tests, per the module docstring), not live exchange
+    connectivity.
+    """
+    from mms4tk.api import executor as shared_executor
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    async def _empty_list(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(shared_executor, "initialize", _noop)
+    monkeypatch.setattr(shared_executor, "close", _noop)
+    monkeypatch.setattr(shared_executor, "fetch_candles", _empty_list)
+    monkeypatch.setattr(shared_executor, "fetch_positions", _empty_list)
+
     with TestClient(app) as test_client:
         yield test_client
 

@@ -134,18 +134,37 @@ class MMS4Daemon:
             os.getenv("MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD", "0")
         )
 
+        # Serializes check-then-commit across concurrently running symbol cycles (see
+        # reserve_portfolio_margin below) and protects _reserved_notional_usd.
+        self._portfolio_margin_lock: asyncio.Lock = asyncio.Lock()
+        # Notional already approved by the guard this cycle-batch but not yet visible in
+        # live_positions (the order hasn't landed on the exchange, or the next
+        # fetch_positions() hasn't run yet). Included in the guard's total so a sibling
+        # symbol racing the same cap sees it as committed.
+        self._reserved_notional_usd: float = 0.0
+
     # ── Portfolio Margin Guard ───────────────────────────────────────────
 
     def check_portfolio_margin_guard(
-        self, live_positions: list, new_notional_usd: float, target_symbol: str
+        self,
+        live_positions: list,
+        new_notional_usd: float,
+        target_symbol: str,
+        extra_reserved_usd: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Verify that opening a new position of `new_notional_usd` would not push
         the total portfolio notional above `total_max_portfolio_margin_usd`.
 
+        `extra_reserved_usd` folds in notional reserved by other in-flight cycles (see
+        reserve_portfolio_margin) that isn't in `live_positions` yet — a pure snapshot
+        check here would let concurrent symbol cycles each pass against the same stale
+        total and jointly blow through the cap.
+
         Returns a dict:
             allowed: bool — True if the order may proceed
             current_total_usd: float — aggregate notional of all open positions
+            reserved_usd: float — notional reserved by other in-flight cycles this batch
             headroom_usd: float — remaining capacity before cap
             cap_usd: float — the configured cap (0 = disabled)
         """
@@ -154,6 +173,7 @@ class MMS4Daemon:
             return {
                 "allowed": True,
                 "current_total_usd": 0.0,
+                "reserved_usd": 0.0,
                 "headroom_usd": float("inf"),
                 "cap_usd": 0.0,
             }
@@ -177,22 +197,65 @@ class MMS4Daemon:
                 pass
             total_notional += _pos_notional(p, price, sym)
 
+        total_notional += max(0.0, extra_reserved_usd)
+
         headroom = cap - total_notional
         allowed = (total_notional + new_notional_usd) <= cap * 1.05  # 5% tolerance
 
         if not allowed:
             logger.warning(
                 f"🛡️ PORTFOLIO MARGIN GUARD: Blocking {target_symbol} order "
-                f"(+${new_notional_usd:.2f}). Portfolio notional: ${total_notional:.2f} / "
-                f"${cap:.2f} cap. Headroom: ${headroom:.2f}"
+                f"(+${new_notional_usd:.2f}). Portfolio notional: ${total_notional:.2f} "
+                f"(incl. ${extra_reserved_usd:.2f} reserved) / ${cap:.2f} cap. "
+                f"Headroom: ${headroom:.2f}"
             )
 
         return {
             "allowed": allowed,
             "current_total_usd": round(total_notional, 2),
+            "reserved_usd": round(max(0.0, extra_reserved_usd), 2),
             "headroom_usd": round(headroom, 2),
             "cap_usd": cap,
         }
+
+    async def reserve_portfolio_margin(
+        self, live_positions: list, new_notional_usd: float, target_symbol: str
+    ) -> Dict[str, Any]:
+        """
+        Atomic check-and-commit wrapper around check_portfolio_margin_guard.
+
+        execute_multi_symbol_cycle runs every symbol's cycle concurrently via
+        asyncio.gather. Without this lock, two symbols can each fetch the same
+        pre-order positions snapshot, both pass the cap check against it, and jointly
+        exceed the cap once both orders land — the guard's own purpose defeated by the
+        concurrency it runs under. Holding a global lock across the check makes the
+        decisions serial; the caller MUST pair a True result with a matching
+        release_portfolio_reservation(new_notional_usd) once the order attempt (success
+        or failure) is finished, in a finally block.
+        """
+        async with self._portfolio_margin_lock:
+            pmg = self.check_portfolio_margin_guard(
+                live_positions,
+                new_notional_usd,
+                target_symbol,
+                extra_reserved_usd=self._reserved_notional_usd,
+            )
+            if pmg["allowed"]:
+                self._reserved_notional_usd += new_notional_usd
+            return pmg
+
+    async def release_portfolio_reservation(self, amount: float) -> None:
+        """
+        Release a reservation taken by reserve_portfolio_margin.
+
+        Called once the order attempt this cycle is done (executed, failed, or
+        skipped) — a filled order becomes real notional via the next fetch_positions(),
+        so the reservation must not linger past this cycle or it double-counts forever.
+        """
+        if amount <= 0:
+            return
+        async with self._portfolio_margin_lock:
+            self._reserved_notional_usd = max(0.0, self._reserved_notional_usd - amount)
 
     # ── Position sizing ─────────────────────────────────────────────────
 
@@ -949,8 +1012,11 @@ class MMS4Daemon:
                 )
                 logger.info(f"⊘ {details}")
             else:
-                # ── Portfolio Margin Guard: block if global cap would be exceeded ──
-                pmg = self.check_portfolio_margin_guard(
+                # ── Portfolio Margin Guard: reserve before checking, hold across the
+                # await to execute_order() so a sibling symbol cycle racing the same cap
+                # (they all run concurrently under asyncio.gather) sees this notional as
+                # already committed instead of checking against a stale snapshot. ──
+                pmg = await self.reserve_portfolio_margin(
                     live_positions, notional_base_usd, target_symbol
                 )
                 if not pmg["allowed"]:
@@ -989,6 +1055,11 @@ class MMS4Daemon:
                         outcome = f"ERROR_{signal.signal_type}"
                         details = f"Failed to execute order for {target_symbol}: {str(e)}"
                         logger.error(details, exc_info=True)
+                    finally:
+                        # Whichever branch ran, this cycle is done deciding on this
+                        # notional. A filled order becomes real notional via next cycle's
+                        # fetch_positions(); the reservation must not outlive this cycle.
+                        await self.release_portfolio_reservation(notional_base_usd)
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
             # Single Addon Guard: an explicit, persisted per-position counter.
@@ -1033,8 +1104,9 @@ class MMS4Daemon:
                     f"not fit a whole contract within budget."
                 )
             else:
-                # ── Portfolio Margin Guard: block addon if global cap would be exceeded ──
-                pmg = self.check_portfolio_margin_guard(
+                # ── Portfolio Margin Guard: reserve + block addon if global cap would
+                # be exceeded (see reserve_portfolio_margin for the race it closes). ──
+                pmg = await self.reserve_portfolio_margin(
                     live_positions, notional_addon_usd, target_symbol
                 )
                 if not pmg["allowed"]:
@@ -1071,6 +1143,8 @@ class MMS4Daemon:
                         outcome = f"ERROR_{signal.signal_type}"
                         details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
                         logger.error(details, exc_info=True)
+                    finally:
+                        await self.release_portfolio_reservation(notional_addon_usd)
 
         # 4. Log cycle outcome for specific symbol
         self.logger_db.log_cycle(
@@ -1242,6 +1316,7 @@ class MMS4Daemon:
             "base_sl_pct": self.base_sl_pct,
             "addon_sl_pct": self.addon_sl_pct,
             "total_max_portfolio_margin_usd": self.total_max_portfolio_margin_usd,
+            "portfolio_margin_reserved_usd": round(self._reserved_notional_usd, 2),
             "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
             "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
             "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
