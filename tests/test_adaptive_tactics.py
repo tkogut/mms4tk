@@ -79,6 +79,7 @@ def test_strategy_profile_api(client):
     """Test GET and POST endpoints for StrategyProfile with X-MMS4-API-KEY auth."""
     # Reset strategy profile
     state_manager.update_strategy_profile(StrategyProfile())
+    os.environ["MMS4_API_KEY"] = "test-api-auth-key-unit-test"
 
     # 1. GET current profile
     response = client.get("/api/v1/strategy/profile")

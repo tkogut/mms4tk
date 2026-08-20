@@ -600,13 +600,14 @@ class OKXExecutor:
         """Fetch full unified account balances and USD portfolio breakdown matching OKX UI."""
         if not self.has_credentials or self.exchange is None:
             return {
-                "free": {"USDC": 10000.0},
-                "total": {"USDC": 10000.0},
+                "free": {"USDC": 0.0},
+                "total": {"USDC": 0.0},
                 "portfolio_usd": {
-                    "total_usd": 10000.0,
+                    "total_usd": 0.0,
                     "funding_usd": 0.0,
-                    "trading_usd": 10000.0,
-                    "earn_usd": 0.0
+                    "trading_usd": 0.0,
+                    "earn_usd": 0.0,
+                    "available_usd": 0.0
                 },
                 "mock": True
             }
