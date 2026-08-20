@@ -43,10 +43,15 @@ def client(monkeypatch):
     async def _empty_list(*args, **kwargs):
         return []
 
+    async def _mock_dict(*args, **kwargs):
+        return {"id": "mock_order_123", "status": "executed", "mock": True}
+
     monkeypatch.setattr(shared_executor, "initialize", _noop)
     monkeypatch.setattr(shared_executor, "close", _noop)
     monkeypatch.setattr(shared_executor, "fetch_candles", _empty_list)
     monkeypatch.setattr(shared_executor, "fetch_positions", _empty_list)
+    monkeypatch.setattr(shared_executor, "execute_order", _mock_dict)
+    monkeypatch.setattr(shared_executor, "cancel_all_orders", _noop)
 
     with TestClient(app) as test_client:
         yield test_client
