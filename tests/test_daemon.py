@@ -2,6 +2,7 @@ import asyncio
 import os
 import pytest
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.state_manager import MMS4StateManager, MMS4State
@@ -23,6 +24,11 @@ def test_daemon_lifecycle(tmp_path: Path):
     async def _async_test():
         db = LoggerDB(db_path=str(tmp_path / "lifecycle_logs.db"))
         executor = OKXExecutor()
+        executor.fetch_candles = AsyncMock(return_value=[
+            Candle(timestamp=1000, open=63000, high=63100, low=62900, close=63000, volume=10),
+            Candle(timestamp=2000, open=63000, high=63050, low=62950, close=63000, volume=15),
+        ])
+        executor.fetch_positions = AsyncMock(return_value=[])
         state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
         daemon = MMS4Daemon(
             executor=executor,
