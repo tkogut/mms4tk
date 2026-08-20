@@ -1,34 +1,10 @@
 import pytest
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
-from mms4tk.api import app, configured_symbols_store, executor
+from mms4tk.api import app, configured_symbols_store
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def _no_real_okx_verification(monkeypatch):
-    """
-    GET /api/v1/symbols and /api/v1/symbols/verify call the shared `executor`'s
-    verify_symbol_with_okx(), which — regardless of configured OKX credentials —
-    makes real, unauthenticated ccxt ticker requests against OKX for every
-    candidate symbol spelling. In a sandbox with no network egress that hangs
-    until ccxt's retry/timeout chain resolves, once per not-yet-cached symbol.
-    Stub it so these tests exercise route wiring and the verification cache, not
-    live exchange connectivity.
-    """
-    async def _fake_verify(symbol: str, *args, **kwargs):
-        return {
-            "symbol": symbol,
-            "okx_verified": True,
-            "autotrade_permitted": True,
-            "okx_status": "AUTOTRADE_READY",
-            "last_price": 100.0,
-            "reason": "stubbed for test — no live OKX call",
-        }
-
-    monkeypatch.setattr(executor, "verify_symbol_with_okx", _fake_verify)
 
 
 def test_per_symbol_state_isolation():
