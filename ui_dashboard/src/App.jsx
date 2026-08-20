@@ -17,7 +17,7 @@ export default function App() {
   const [openPositions, setOpenPositions] = useState([]);
   const [daemonData, setDaemonData] = useState(null);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.30.3');
+  const [appVersion, setAppVersion] = useState('0.30.4');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
@@ -60,10 +60,15 @@ export default function App() {
         setOpenPositions(data.positions || []);
       }
 
-      // 5. Fetch daemon status — per-symbol sizing plan, risk state and addon ledger
-      const daemonRes = await fetch('/api/v1/daemon/status');
+      // 5. Fetch daemon status & settings (ensures adaptive mode & risk parameters are fully synced)
+      const [daemonRes, settingsRes] = await Promise.all([
+        fetch('/api/v1/daemon/status'),
+        fetch('/api/v1/settings')
+      ]);
       if (daemonRes.ok) {
-        setDaemonData(await daemonRes.json());
+        const dData = await daemonRes.json();
+        const sData = settingsRes.ok ? await settingsRes.json() : {};
+        setDaemonData({ ...dData, ...sData });
       }
 
       // 6. Fetch kanban
@@ -93,7 +98,7 @@ export default function App() {
 
       const currentKey = newSettings.api_key || apiKey || 'test-api-auth-key-unit-test';
 
-      await fetch('/api/v1/settings/update', {
+      const res = await fetch('/api/v1/settings/update', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -101,9 +106,15 @@ export default function App() {
         },
         body: JSON.stringify(newSettings)
       });
-      fetchDashboardData();
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData.detail || (res.status === 401 ? 'Błąd autoryzacji: Nieprawidłowy MMS4 API Key' : `Błąd serwera (${res.status})`);
+        throw new Error(errMsg);
+      }
+      await fetchDashboardData();
     } catch (err) {
       console.error('[App] Failed to update settings:', err);
+      throw err;
     }
   };
 

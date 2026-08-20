@@ -175,6 +175,13 @@ class DaemonStatusResponse(BaseModel):
     addon_allocation: Optional[float] = None
     # Per-symbol resolved sizing (margin, notional, size multiplier) for the current state.
     allocation_plan: Optional[Dict[str, Any]] = None
+    total_max_portfolio_margin_usd: Optional[float] = None
+    portfolio_margin_reserved_usd: Optional[float] = None
+    engine_mode: Optional[str] = "CLASSIC"
+    adaptive_vr_high: Optional[float] = 1.6
+    adaptive_vr_low: Optional[float] = 0.8
+    time_lock_start: Optional[str] = "13:30"
+    time_lock_end: Optional[str] = "14:30"
 
 
 class CalculateRequest(BaseModel):
@@ -876,6 +883,11 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="time_lock_end must be in HH:MM format (00:00 - 23:59)")
         os.environ["MMS4_TIME_LOCK_END"] = t_end
         env_updates["MMS4_TIME_LOCK_END"] = t_end
+
+    if req.api_key is not None and req.api_key.strip():
+        new_k = req.api_key.strip()
+        os.environ["MMS4_API_KEY"] = new_k
+        env_updates["MMS4_API_KEY"] = new_k
 
     if env_updates:
         persist_env_config(env_updates)
