@@ -4,6 +4,17 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.2] - 2026-08-20
+
+### 🛡️ Mock Mode & OKX Balance Display Fix
+- 💰 **Precyzyjne Wskaźniki Mock Mode**:
+  - W `okx_executor.py` zmieniono atrapę `fetch_balance()` z fikcyjnego `$10000.0` na `$0.00` przy braku kluczy API OKX.
+  - W `api.py` dodano pole `is_mock` do modelu `PnLResponse` (`/api/v1/stats/pnl`), informujące interfejs użytkownika o pracy w trybie symulacji bez kluczy OKX.
+  - W `MonitoringTab.jsx` dodano wyraźny badge `[MOCK]` oraz opis `Tryb symulacji (brak kluczy API w .env)` przy braku aktywnych danych giełdowych.
+- 🧪 **Testy Jednostkowe**: Poprawiono izolację zmiennej środowiskowej `MMS4_API_KEY` w teście autoryzacji `test_strategy_profile_api`.
+
+---
+
 ## 🚀 [0.30.1] - 2026-08-19
 
 ### 📝 Dokumentacja Techniczna & API Reference Sync

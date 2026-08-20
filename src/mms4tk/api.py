@@ -122,6 +122,7 @@ class PnLResponse(BaseModel):
     average_rr: float = Field(default=0.0, description="Average Risk to Reward ratio")
     free_balance: float = Field(default=0.0, description="Free available USDC balance")
     btc_balance: float = Field(default=0.0, description="BTC asset balance")
+    is_mock: bool = Field(default=False, description="True if OKX API is operating in mock mode without live credentials")
 
 
 class EmergencyKillallResponse(BaseModel):
@@ -297,8 +298,10 @@ async def get_pnl() -> Dict[str, Any]:
 
     free_usdc = 0.0
     btc_bal = 0.0
+    is_mock = False
     try:
         bal_data = await executor.fetch_balance()
+        is_mock = bool(bal_data.get("mock", False))
         free_usdc = float(bal_data.get("free", {}).get("USDC", 0.0))
         btc_bal = float(bal_data.get("total", {}).get("BTC", 0.0))
     except Exception as err:
@@ -316,7 +319,8 @@ async def get_pnl() -> Dict[str, Any]:
         "max_drawdown_usd": kpi.get("max_drawdown_usd", 0.0),
         "average_rr": kpi.get("average_rr", 0.0),
         "free_balance": free_usdc,
-        "btc_balance": btc_bal
+        "btc_balance": btc_bal,
+        "is_mock": is_mock
     }
 
 

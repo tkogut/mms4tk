@@ -192,12 +192,23 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between text-slate-400 mb-2">
             <span className="text-xs font-medium">Wolny Dostępny Depozyt (OKX)</span>
-            <Wallet className="w-4 h-4 text-emerald-400" />
+            <div className="flex items-center gap-1.5">
+              {statsData?.is_mock && (
+                <span className="text-[10px] font-mono bg-amber-950/80 border border-amber-500/40 text-amber-300 px-1.5 py-0.5 rounded font-bold">
+                  MOCK
+                </span>
+              )}
+              <Wallet className={`w-4 h-4 ${statsData?.is_mock ? 'text-amber-400' : 'text-emerald-400'}`} />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-gray-100 font-mono">
-            ${freeUsdc}
+          <div className="text-2xl font-bold text-gray-100 font-mono flex items-baseline gap-2">
+            <span>${freeUsdc}</span>
           </div>
-          <div className="text-xs text-slate-400 mt-1">Czysty wolny margin wg OKX API (availBal)</div>
+          <div className="text-xs text-slate-400 mt-1">
+            {statsData?.is_mock
+              ? 'Tryb symulacji (brak kluczy API w .env)'
+              : 'Czysty wolny margin wg OKX API (availBal)'}
+          </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
