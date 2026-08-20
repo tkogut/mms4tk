@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.4] - 2026-08-20
+
+### ⚙️ Settings Persistence & Mobile View Overhaul
+- 🛡️ **Adaptive Engine Status Sync**: Extended `DaemonStatusResponse` schema with `engine_mode`, `adaptive_vr_high`, `adaptive_vr_low`, `time_lock_start`, `time_lock_end`, and `total_max_portfolio_margin_usd` so Pydantic serialization preserves active engine configuration.
+- 🔄 **ConcurrentUser Settings Fetch**: `App.jsx` now polls `/api/v1/daemon/status` and `/api/v1/settings` simultaneously to keep local state strictly synchronized with backend persistence.
+- 📱 **Mobile UI Fixes for Smartphone**: Fixed overflowing engine mode switch in `SettingsTab.jsx` with responsive flex column wrap (`flex-col sm:flex-row`), full-width adaptive select on mobile, responsive risk profile cards, and explicit error alert banner for failed API key authorization.
+
+---
+
 ## 🚀 [0.30.3] - 2026-08-20
 
 ### 🧪 Test Sandbox & Offline Network Fixture Hardening

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sliders, Lock, Key, Save, Shield, PieChart, CheckCircle2, Zap, Clock, Activity, AlertTriangle } from 'lucide-react';
+import { Sliders, Lock, Key, Save, Shield, CheckCircle2, Zap, Clock, AlertTriangle } from 'lucide-react';
 
 export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, daemonData }) {
   const [riskProfile, setRiskProfile] = useState('MODERATE');
@@ -28,11 +28,20 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
     }
   }, [daemonData]);
 
+  // Keep currentApiKey in sync if apiKey prop changes
+  useEffect(() => {
+    if (apiKey) {
+      setCurrentApiKey(apiKey);
+    }
+  }, [apiKey]);
+
   // Password change state
   const [newPassword, setNewPassword] = useState('');
   const [passwordMsg, setPasswordMsg] = useState('');
 
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   // Leverage brackets per risk_profile
   const getLeverageRange = () => {
@@ -53,25 +62,34 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
     else if (profile === 'AGGRESSIVE') setLeverage(10.0);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (onUpdateSettings) {
-      onUpdateSettings({
-        risk_profile: riskProfile,
-        leverage: parseFloat(leverage),
-        stop_loss_pct: parseFloat(stopLoss),
-        scout_mode: isScoutMode,
-        api_key: currentApiKey,
-        engine_mode: engineMode,
-        adaptive_vr_high: parseFloat(vrHigh),
-        adaptive_vr_low: parseFloat(vrLow),
-        time_lock_start: timeLockStart,
-        time_lock_end: timeLockEnd,
-        total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap)
-      });
+    setErrorMsg('');
+    setSavedSuccess(false);
+    setIsSaving(true);
+    try {
+      if (onUpdateSettings) {
+        await onUpdateSettings({
+          risk_profile: riskProfile,
+          leverage: parseFloat(leverage),
+          stop_loss_pct: parseFloat(stopLoss),
+          scout_mode: isScoutMode,
+          api_key: currentApiKey,
+          engine_mode: engineMode,
+          adaptive_vr_high: parseFloat(vrHigh),
+          adaptive_vr_low: parseFloat(vrLow),
+          time_lock_start: timeLockStart,
+          time_lock_end: timeLockEnd,
+          total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap)
+        });
+      }
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 4000);
+    } catch (err) {
+      setErrorMsg(err.message || 'Błąd zapisu ustawień. Sprawdź MMS4 REST API Key.');
+    } finally {
+      setIsSaving(false);
     }
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
   };
 
   const handlePasswordChange = async (e) => {
@@ -104,13 +122,13 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   return (
     <div className="max-w-3xl space-y-6">
       {/* Strategy Parameters Form */}
-      <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-6">
+      <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-6 shadow-lg space-y-6">
         <div className="flex items-center gap-3 pb-4 border-b border-slate-800">
-          <div className="p-2.5 bg-blue-500/10 text-blue-400 rounded-lg">
+          <div className="p-2.5 bg-blue-500/10 text-blue-400 rounded-lg shrink-0">
             <Sliders className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-gray-100">Profil Ryzyka & Dźwignia Strategii</h3>
+            <h3 className="text-base sm:text-lg font-bold text-gray-100">Profil Ryzyka & Dźwignia Strategii</h3>
             <p className="text-xs text-slate-400">Powiązanie poziomu ryzyka (CONSERVATIVE, MODERATE, AGGRESSIVE) z zakresem dźwigni (1x, 3x, 10x)</p>
           </div>
         </div>
@@ -120,7 +138,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           <label className="block text-xs font-semibold text-slate-300 mb-3">
             Wybierz Profil Ryzyka (Risk Profile):
           </label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
             <button
               type="button"
               onClick={() => handleRiskChange('CONSERVATIVE')}
@@ -216,7 +234,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
             <button
               type="button"
               onClick={() => setIsScoutMode(!isScoutMode)}
-              className={`w-11 h-5 flex items-center rounded-full p-0.5 transition-colors ${
+              className={`w-11 h-5 flex items-center rounded-full p-0.5 transition-colors shrink-0 ${
                 isScoutMode ? 'bg-amber-500 justify-end' : 'bg-slate-800 justify-start'
               }`}
             >
@@ -227,9 +245,9 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
 
         {/* ── Portfolio Margin Guard (Circuit Breaker) ── */}
         <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-lg space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4 text-emerald-400" />
+              <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
               <span className="text-xs font-semibold text-slate-200">Portfolio Margin Guard ($ USD):</span>
             </div>
             <span className="text-[10px] text-slate-400">Globalny limit portfela (0 = wyłączony)</span>
@@ -246,14 +264,14 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
         </div>
 
         {/* ── Hybrydowy Silnik Adaptacyjny (Adaptive Engine Card) ── */}
-        <div className="p-5 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/40 border border-indigo-500/30 rounded-xl space-y-4 shadow-inner">
-          <div className="flex items-center justify-between pb-3 border-b border-indigo-500/20">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg border border-indigo-500/20">
+        <div className="p-4 sm:p-5 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/40 border border-indigo-500/30 rounded-xl space-y-4 shadow-inner">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-indigo-500/20">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg border border-indigo-500/20 shrink-0 mt-0.5 sm:mt-0">
                 <Zap className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-gray-100 flex items-center gap-2">
+                <h4 className="text-sm font-bold text-gray-100 flex flex-wrap items-center gap-2">
                   <span>Hybrydowy Silnik Adaptacyjny</span>
                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
                     engineMode === 'ADAPTIVE'
@@ -267,11 +285,11 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
               </div>
             </div>
 
-            {/* Engine Mode Switch */}
+            {/* Engine Mode Switch - Responsive on mobile */}
             <select
               value={engineMode}
               onChange={(e) => setEngineMode(e.target.value)}
-              className="px-3 py-1.5 bg-slate-900 border border-indigo-500/40 rounded-lg text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-400 font-mono cursor-pointer"
+              className="w-full sm:w-auto px-3 py-2 sm:py-1.5 bg-slate-900 border border-indigo-500/40 rounded-lg text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-400 font-mono cursor-pointer shrink-0"
             >
               <option value="CLASSIC">CLASSIC (Standardowy)</option>
               <option value="ADAPTIVE">ADAPTIVE (Hybrydowy)</option>
@@ -320,7 +338,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
               {/* Time Lock Hours */}
               <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg space-y-2">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-300">
-                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                  <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                   <span>Okno Blokady Sesyjnej US Open (Godziny UTC):</span>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -362,12 +380,12 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
         {/* API Authentication Key */}
         <div className="pt-2 border-t border-slate-800">
           <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
-            <Key className="w-4 h-4 text-blue-400" />
+            <Key className="w-4 h-4 text-blue-400 shrink-0" />
             <span>MMS4 REST API Key</span>
           </label>
           <input
             type="password"
-            placeholder="Wprowadź MMS4_API_KEY do zapisu..."
+            placeholder="Wprowadź MMS4_API_KEY do autoryzacji..."
             value={currentApiKey}
             onChange={(e) => setCurrentApiKey(e.target.value)}
             className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
@@ -375,26 +393,34 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
         </div>
 
         {/* Save Strategy Settings Button */}
-        <div className="flex items-center justify-between pt-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
           {savedSuccess && (
-            <span className="text-xs font-semibold text-emerald-400">
-              ✓ Ustawienia strategii i silnika adaptacyjnego zapisane!
+            <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>✓ Ustawienia strategii i silnika adaptacyjnego zapisane!</span>
+            </span>
+          )}
+          {errorMsg && (
+            <span className="text-xs font-semibold text-rose-400 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
             </span>
           )}
           <button
             type="submit"
-            className="ml-auto flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors shadow-md shadow-blue-500/20"
+            disabled={isSaving}
+            className="sm:ml-auto w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-colors shadow-md shadow-blue-500/20"
           >
             <Save className="w-4 h-4" />
-            <span>Zapisz Parametry</span>
+            <span>{isSaving ? 'Zapisywanie...' : 'Zapisz Parametry'}</span>
           </button>
         </div>
       </form>
 
       {/* Password Change Form Card */}
-      <form onSubmit={handlePasswordChange} className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
+      <form onSubmit={handlePasswordChange} className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-6 shadow-lg space-y-4">
         <div className="flex items-center gap-3 pb-3 border-b border-slate-800">
-          <div className="p-2.5 bg-amber-500/10 text-amber-400 rounded-lg">
+          <div className="p-2.5 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
             <Lock className="w-5 h-5" />
           </div>
           <div>
@@ -417,7 +443,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           />
         </div>
 
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
           {passwordMsg && (
             <span className={`text-xs font-semibold ${passwordMsg.includes('✓') ? 'text-emerald-400' : 'text-amber-400'}`}>
               {passwordMsg}
@@ -425,7 +451,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           )}
           <button
             type="submit"
-            className="ml-auto flex items-center gap-2 px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors shadow-md"
+            className="sm:ml-auto w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors shadow-md"
           >
             <Lock className="w-4 h-4" />
             <span>Zmień Hasło</span>
