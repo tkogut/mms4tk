@@ -526,12 +526,13 @@ class MMS4Daemon:
 
         # 2. Refresh snapshots for positions that are still open
         for side, p in live_by_side.items():
+            entry_px = _pos_entry_price(p)
             try:
                 self.logger_db.save_position_snapshot(
                     symbol=target_symbol,
                     side=side,
                     contracts=_pos_contracts(p),
-                    entry_price=_pos_entry_price(p),
+                    entry_price=entry_px,
                     last_price=float(current_price or 0.0),
                 )
             except Exception as e:
@@ -667,6 +668,44 @@ class MMS4Daemon:
         # NONE cycle look like a "long" intent, so an open short counted as no match and
         # the addon guard was cleared on nearly every cycle.
         own_positions: Dict[str, Dict[str, Any]] = {}
+        for p in live_positions:
+            if normalize_symbol(p.get("symbol", "")) != normalize_symbol(target_symbol):
+                continue
+            if _pos_contracts(p) <= 0:
+                continue
+            own_positions[p.get("side", "")] = p
+
+        # ── Self-Healing Stop Loss Guard ──
+        # Every cycle, ensure every open position for this symbol has an active conditional SL order on OKX.
+        if getattr(self.executor, "has_credentials", False) and getattr(self.executor, "exchange", None) is not None and not is_maintenance_locked():
+            for p_side, p in own_positions.items():
+                entry_px = _pos_entry_price(p)
+                if entry_px > 0 and p_side in ["long", "short"]:
+                    try:
+                        target_inst = p.get("info", {}).get("instId") or target_symbol
+                        sl_pct = self.addon_sl_pct if self._addon_count(target_symbol, p_side, entry_px) > 0 else self.base_sl_pct
+                        pending_algos = await self.executor.exchange.private_get_trade_orders_algo_pending({
+                            "instId": target_inst,
+                            "ordType": "conditional"
+                        })
+                        has_active_sl = any(
+                            a.get("posSide") == p_side or not a.get("posSide")
+                            for a in (pending_algos.get("data", []) if isinstance(pending_algos, dict) else [])
+                        )
+                        if not has_active_sl:
+                            logger.warning(f"🛡️ Self-Healing SL Guard: Open position {target_symbol} ({p_side}) missing SL algo. Attaching now...")
+                            await self.executor.attach_stop_loss(
+                                symbol=target_inst,
+                                side=p_side,
+                                entry_price=entry_px,
+                                stop_loss_pct=sl_pct,
+                                pos_side=p_side
+                            )
+                    except Exception as sl_heal_err:
+                        logger.debug(f"SL self-healing check for {target_symbol}/{p_side}: {sl_heal_err}")
+
+        # Refresh own_positions with the logic needed for signal matching
+        own_positions = {}
         for p in live_positions:
             if normalize_symbol(p.get("symbol", "")) != normalize_symbol(target_symbol):
                 continue
