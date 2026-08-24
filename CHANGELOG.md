@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.5] - 2026-08-24
+
+### 🔔 Real-time Position Open Alerts & Digest Schedule Refinement
+- 🚀 **Immediate Telegram Open Alerts**: Updated `mms4tk_event_dispatcher.py` to route `POSITION_OPENED`, `STOP_LOSS`, `TAKE_PROFIT`, and `STALE_POSITION_FORCE_CLOSE` directly to Telegram via Hermes CLI.
+- ⏱️ **1-Minute Dispatcher Cron**: Configured `mms4tk Event Dispatcher` in Hermes scheduler to run every minute (`* * * * *`) for real-time notification delivery.
+- 📊 **4-Hour Offset Digest Schedule**: Shifted `mms4tk_multi_symbol_digest.py` to run every 4 hours offset from H4 analysis (`30 2,6,10,14,18,22 * * *` at 02:30, 06:30, 10:30, 14:30, 18:30, 22:30).
+
+---
+
 ## 🚀 [0.30.4] - 2026-08-20
 
 ### ⚙️ Settings Persistence & Mobile View Overhaul

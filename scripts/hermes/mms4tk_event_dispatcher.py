@@ -153,16 +153,30 @@ def main():
         mark_dispatched(event_id, task_id)
         dispatched_count += 1
 
-        # Send Telegram alert via hermes send --to telegram for actionable/alert events
-        if event_type in ["SCOUT_MODE_ACTIVATED", "HITL_REVIEW", "RISK_ALERT"] or is_actionable:
+        # Send Telegram alert via hermes send --to telegram for trade and system events
+        # Note: MULTI_SYMBOL_DIGEST is handled by its dedicated digest cron job
+        should_send_telegram = (
+            event_type in [
+                "POSITION_OPENED",
+                "STOP_LOSS",
+                "TAKE_PROFIT",
+                "STALE_POSITION_FORCE_CLOSE",
+                "SCOUT_MODE_ACTIVATED",
+                "HITL_REVIEW",
+                "RISK_ALERT",
+            ]
+            or is_actionable
+        )
+
+        if should_send_telegram:
             try:
                 alert_msg = f"{event_title}\n\n{event_body}"
                 hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
                 cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
                 subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                print("  💬 Telegram push notification sent")
+                print(f"  💬 Telegram push notification sent for {event_type}")
                 import time
-                time.sleep(3.0)  # Pacing to respect Telegram rate limit
+                time.sleep(2.0)  # Pacing to respect Telegram rate limit
             except Exception as ne:
                 print(f"  ⚠️ Telegram notification skipped: {ne}")
 

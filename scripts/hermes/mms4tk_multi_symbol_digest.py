@@ -2,12 +2,12 @@
 """
 mms4tk Multi-Symbol Digest Cron Job for Hermes Agent
 
-Runs as Hermes cron job once every hour (0 * * * *).
+Runs as Hermes cron job once every 4 hours offset from H4 (30 2,6,10,14,18,22 * * *).
 Fetches active trading symbols and live open positions from mms4tk API
 and generates a unified multi-symbol swarm report for Hermes Kanban / Telegram.
 
 Install via:
-    hermes cron create "0 * * * *" \
+    hermes cron create "30 2,6,10,14,18,22 * * *" \
         --name "mms4tk Multi-Symbol Digest" \
         --script mms4tk_multi_symbol_digest.py \
         --no-agent \
