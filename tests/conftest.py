@@ -145,3 +145,47 @@ def _no_real_okx_network(request, monkeypatch):
         return
     for name, fake in _PATCHED_METHODS.items():
         monkeypatch.setattr(OKXExecutor, name, fake)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_system_settings():
+    """Ensure clean default environment and database settings for every test."""
+    import os
+    from mms4tk.api import logger_db as api_logger_db, daemon as api_daemon
+    
+    default_env = {
+        "MMS4_ENGINE_MODE": "CLASSIC",
+        "MMS4_ADAPTIVE_VR_HIGH": "1.6",
+        "MMS4_ADAPTIVE_VR_LOW": "0.8",
+        "MMS4_TIME_LOCK_START": "13:30",
+        "MMS4_TIME_LOCK_END": "14:30",
+    }
+    
+    # Snapshot before test
+    for k, v in default_env.items():
+        os.environ[k] = v
+    if api_logger_db:
+        api_logger_db.set_settings_bulk({
+            "engine_mode": "CLASSIC",
+            "adaptive_vr_high": "1.6",
+            "adaptive_vr_low": "0.8",
+            "time_lock_start": "13:30",
+            "time_lock_end": "14:30",
+        }, updated_by="test_isolation_init")
+    api_daemon.total_max_portfolio_margin_usd = 0.0
+
+    yield
+
+    # Restore after test
+    for k, v in default_env.items():
+        os.environ[k] = v
+    if api_logger_db:
+        api_logger_db.set_settings_bulk({
+            "engine_mode": "CLASSIC",
+            "adaptive_vr_high": "1.6",
+            "adaptive_vr_low": "0.8",
+            "time_lock_start": "13:30",
+            "time_lock_end": "14:30",
+        }, updated_by="test_isolation_cleanup")
+    api_daemon.total_max_portfolio_margin_usd = 0.0
+

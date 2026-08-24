@@ -146,6 +146,14 @@ class LoggerDB:
                     updated_at TEXT NOT NULL
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT DEFAULT 'system'
+                )
+            """)
             conn.commit()
 
     def upsert_closed_trade(
@@ -611,4 +619,54 @@ class LoggerDB:
                     "timeframe": str(d["timeframe"])
                 }
         return result
+
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Fetch single setting value from system_settings table."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if row is not None:
+                return str(row["value"])
+        return default
+
+    def get_all_settings(self) -> Dict[str, str]:
+        """Fetch all system_settings as a key-value dictionary."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM system_settings")
+            return {row["key"]: str(row["value"]) for row in cursor.fetchall()}
+
+    def set_setting(self, key: str, value: Any, updated_by: str = "system") -> None:
+        """Upsert a single system setting."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO system_settings (key, value, updated_at, updated_by)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value=excluded.value,
+                    updated_at=excluded.updated_at,
+                    updated_by=excluded.updated_by
+            """, (str(key), str(value), now_str, str(updated_by)))
+            conn.commit()
+
+    def set_settings_bulk(self, settings: Dict[str, Any], updated_by: str = "system") -> None:
+        """Upsert multiple system settings in a single transaction."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for k, v in settings.items():
+                cursor.execute("""
+                    INSERT INTO system_settings (key, value, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value=excluded.value,
+                        updated_at=excluded.updated_at,
+                        updated_by=excluded.updated_by
+                """, (str(k), str(v), now_str, str(updated_by)))
+            conn.commit()
+
+
 

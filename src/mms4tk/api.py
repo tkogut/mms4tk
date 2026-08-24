@@ -812,6 +812,37 @@ def persist_env_config(updates: Dict[str, Any]) -> None:
 
 
 
+def sync_settings_from_db() -> Dict[str, Any]:
+    """Sync all runtime settings from SQLite system_settings table to runtime state and os.environ."""
+    settings = {}
+    try:
+        if logger_db:
+            settings = logger_db.get_all_settings()
+            for k, v in settings.items():
+                env_key = f"MMS4_{k.upper()}" if not k.upper().startswith("MMS4_") else k.upper()
+                os.environ[env_key] = str(v)
+                os.environ[k.upper()] = str(v)
+                
+            # Apply to daemon and state_manager if already initialized
+            if "engine_mode" in settings:
+                os.environ["MMS4_ENGINE_MODE"] = str(settings["engine_mode"])
+            if "adaptive_vr_high" in settings:
+                os.environ["MMS4_ADAPTIVE_VR_HIGH"] = str(settings["adaptive_vr_high"])
+            if "adaptive_vr_low" in settings:
+                os.environ["MMS4_ADAPTIVE_VR_LOW"] = str(settings["adaptive_vr_low"])
+            if "time_lock_start" in settings:
+                os.environ["MMS4_TIME_LOCK_START"] = str(settings["time_lock_start"])
+            if "time_lock_end" in settings:
+                os.environ["MMS4_TIME_LOCK_END"] = str(settings["time_lock_end"])
+    except Exception as e:
+        logger.warning(f"Failed to sync settings from SQLite DB: {e}")
+    return settings
+
+
+# Sync settings from SQLite DB at module import
+sync_settings_from_db()
+
+
 class SettingsUpdateRequest(BaseModel):
     leverage: Optional[float] = None
     stop_loss_pct: Optional[float] = None
@@ -831,55 +862,61 @@ class SettingsUpdateRequest(BaseModel):
 
 @app.get("/api/v1/settings", tags=["Settings"])
 async def get_settings() -> Dict[str, Any]:
-    """Get all current strategy, risk profile, and adaptive engine settings."""
+    """Get all current strategy, risk profile, and adaptive engine settings from SQLite database."""
+    db_settings = logger_db.get_all_settings() if logger_db else {}
     return {
-        "leverage": state_manager.leverage,
+        "leverage": float(db_settings.get("leverage", state_manager.leverage)),
         "scout_mode": state_manager.scout_mode,
-        "capital_split_ratio": daemon.base_allocation,
-        "max_margin_usd": daemon.max_margin_usd,
-        "stop_loss_pct": round(daemon.base_sl_pct * 100, 2),
-        "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
-        "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
-        "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
-        "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
-        "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
-        "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
+        "capital_split_ratio": float(db_settings.get("base_allocation", daemon.base_allocation)),
+        "max_margin_usd": float(db_settings.get("max_margin_usd", daemon.max_margin_usd)),
+        "stop_loss_pct": round(float(db_settings.get("base_sl_pct", daemon.base_sl_pct)) * 100, 2),
+        "total_max_portfolio_margin_usd": float(db_settings.get("total_max_portfolio_margin_usd", daemon.total_max_portfolio_margin_usd)),
+        "engine_mode": db_settings.get("engine_mode", os.getenv("MMS4_ENGINE_MODE", "CLASSIC")),
+        "adaptive_vr_high": float(db_settings.get("adaptive_vr_high", os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6"))),
+        "adaptive_vr_low": float(db_settings.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
+        "time_lock_start": db_settings.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
+        "time_lock_end": db_settings.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
     }
 
 
 @app.post("/api/v1/settings/update", tags=["Settings"], dependencies=[Depends(verify_api_key)])
 async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
-    """Update runtime strategy parameters, leverage, SL %, risk profile, and adaptive engine settings."""
+    """Update runtime strategy parameters, leverage, SL %, risk profile, and adaptive engine settings in SQLite DB."""
+    db_updates: Dict[str, Any] = {}
     env_updates: Dict[str, Any] = {}
 
     if req.leverage is not None:
         state_manager.leverage = req.leverage  # setter clamps to [1.0, 10.0]
+        db_updates["leverage"] = str(state_manager.leverage)
     if req.scout_mode is not None:
         state_manager.scout_mode = bool(req.scout_mode)
+        db_updates["scout_mode"] = str(state_manager.scout_mode)
     if req.capital_split_ratio is not None:
         daemon.base_allocation = float(req.capital_split_ratio)
         daemon.addon_allocation = round(1.0 - daemon.base_allocation, 4)
+        db_updates["base_allocation"] = str(daemon.base_allocation)
+        db_updates["addon_allocation"] = str(daemon.addon_allocation)
         env_updates["MMS4_BASE_ALLOCATION"] = str(daemon.base_allocation)
         env_updates["MMS4_ADDON_ALLOCATION"] = str(daemon.addon_allocation)
     if req.max_margin_usd is not None:
         daemon.max_margin_usd = float(req.max_margin_usd)
         daemon.base_trade_usd = round(daemon.max_margin_usd * daemon.base_allocation, 2)
         daemon.addon_trade_usd = round(daemon.max_margin_usd * daemon.addon_allocation, 2)
+        db_updates["max_margin_usd"] = str(daemon.max_margin_usd)
         env_updates["MMS4_MAX_MARGIN_USD"] = str(daemon.max_margin_usd)
     if req.stop_loss_pct is not None:
         daemon.base_sl_pct = float(req.stop_loss_pct) / 100.0 if req.stop_loss_pct > 0.5 else float(req.stop_loss_pct)
+        db_updates["base_sl_pct"] = str(daemon.base_sl_pct)
         env_updates["MMS4_BASE_SL_PCT"] = str(daemon.base_sl_pct)
     if req.total_max_portfolio_margin_usd is not None:
         cap_val = float(req.total_max_portfolio_margin_usd)
-        # A negative cap would silently disable the guard (check_portfolio_margin_guard
-        # treats any cap <= 0 as "off"), which reads as "guard active at $0" to whoever
-        # set it — reject instead of accepting a value that means the opposite.
         if cap_val < 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="total_max_portfolio_margin_usd must be >= 0 (0 disables the guard)"
             )
         daemon.total_max_portfolio_margin_usd = cap_val
+        db_updates["total_max_portfolio_margin_usd"] = str(cap_val)
         env_updates["MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD"] = str(cap_val)
 
     # Validate and apply 5 Adaptive Engine settings
@@ -888,28 +925,20 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         if mode_clean not in ["CLASSIC", "ADAPTIVE"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="engine_mode must be 'CLASSIC' or 'ADAPTIVE'")
         os.environ["MMS4_ENGINE_MODE"] = mode_clean
+        db_updates["engine_mode"] = mode_clean
         env_updates["MMS4_ENGINE_MODE"] = mode_clean
 
-    # adaptive_vr_high/low are validated TOGETHER, against the value that will actually
-    # be in effect after this request (falling back to the current env for whichever
-    # one wasn't sent) — a low >= high combo collapses or inverts the "normal"
-    # VR band the two thresholds are supposed to bracket. Nothing is written to
-    # os.environ until BOTH individual and cross-field checks pass, so a bad combo
-    # can't leave one threshold updated and the other stale (no partial apply).
     if req.adaptive_vr_high is not None or req.adaptive_vr_low is not None:
-        if req.adaptive_vr_high is not None:
-            vr_h = float(req.adaptive_vr_high)
-            if vr_h <= 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_high must be > 0")
-        else:
-            vr_h = float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6"))
+        current_vr_h = float(logger_db.get_setting("adaptive_vr_high", os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6"))) if logger_db else 1.6
+        current_vr_l = float(logger_db.get_setting("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))) if logger_db else 0.8
 
-        if req.adaptive_vr_low is not None:
-            vr_l = float(req.adaptive_vr_low)
-            if vr_l <= 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_low must be > 0")
-        else:
-            vr_l = float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))
+        vr_h = float(req.adaptive_vr_high) if req.adaptive_vr_high is not None else current_vr_h
+        if req.adaptive_vr_high is not None and vr_h <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_high must be > 0")
+
+        vr_l = float(req.adaptive_vr_low) if req.adaptive_vr_low is not None else current_vr_l
+        if req.adaptive_vr_low is not None and vr_l <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="adaptive_vr_low must be > 0")
 
         if vr_l >= vr_h:
             raise HTTPException(
@@ -919,9 +948,11 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
 
         if req.adaptive_vr_high is not None:
             os.environ["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
+            db_updates["adaptive_vr_high"] = str(vr_h)
             env_updates["MMS4_ADAPTIVE_VR_HIGH"] = str(vr_h)
         if req.adaptive_vr_low is not None:
             os.environ["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
+            db_updates["adaptive_vr_low"] = str(vr_l)
             env_updates["MMS4_ADAPTIVE_VR_LOW"] = str(vr_l)
 
     if req.time_lock_start is not None:
@@ -933,6 +964,7 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         except Exception:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="time_lock_start must be in HH:MM format (00:00 - 23:59)")
         os.environ["MMS4_TIME_LOCK_START"] = t_start
+        db_updates["time_lock_start"] = t_start
         env_updates["MMS4_TIME_LOCK_START"] = t_start
 
     if req.time_lock_end is not None:
@@ -944,6 +976,7 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         except Exception:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="time_lock_end must be in HH:MM format (00:00 - 23:59)")
         os.environ["MMS4_TIME_LOCK_END"] = t_end
+        db_updates["time_lock_end"] = t_end
         env_updates["MMS4_TIME_LOCK_END"] = t_end
 
     if req.api_key is not None and req.api_key.strip():
@@ -951,22 +984,29 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         os.environ["MMS4_API_KEY"] = new_k
         env_updates["MMS4_API_KEY"] = new_k
 
+    # Persist to SQLite system_settings table (SSOT)
+    if db_updates and logger_db:
+        logger_db.set_settings_bulk(db_updates, updated_by="api_dashboard")
+
+    # Secondary backup persistence to volume JSON / .env
     if env_updates:
         persist_env_config(env_updates)
 
     state_manager.save_state(reason="Settings update via Web Dashboard")
+    db_current = logger_db.get_all_settings() if logger_db else {}
     return {
         "status": "success",
         "leverage": state_manager.leverage,
         "state": state_manager.current_state.value,
         "scout_mode": state_manager.scout_mode,
-        "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
-        "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
-        "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
-        "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
-        "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
+        "engine_mode": db_current.get("engine_mode", os.getenv("MMS4_ENGINE_MODE", "CLASSIC")),
+        "adaptive_vr_high": float(db_current.get("adaptive_vr_high", os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6"))),
+        "adaptive_vr_low": float(db_current.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
+        "time_lock_start": db_current.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
+        "time_lock_end": db_current.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
         "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
     }
+
 
 
 class PasswordChangeRequest(BaseModel):
