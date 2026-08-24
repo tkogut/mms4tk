@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.0] - 2026-08-24
+
+### 🛡️ Portfolio Margin Guard Quick Presets
+- 🛡️ **Quick Preset Buttons**: Added interactive `[MAX OKX]` (100% available free margin from OKX API), `[SUMA PAR]` (sum of active symbol allocations), and `[Wyłącz (0)]` buttons directly inside the Portfolio Margin Guard card in Settings.
+- 📐 **Responsive UI Layout**: Optimized buttons for both desktop and mobile viewports with real-time numeric badges.
+
+---
+
 ## 🚀 [0.32.0] - 2026-08-24
 
 ### 🗄️ Unified SQLite System Settings (Single Source of Truth)
