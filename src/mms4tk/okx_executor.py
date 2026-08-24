@@ -671,6 +671,24 @@ class OKXExecutor:
         except Exception:
             sl_px_str = f"{sl_price:.2f}"
 
+        # Cancel any previous pending conditional SL orders for this instId so the new SL applies cleanly
+        try:
+            pending = await self.exchange.private_get_trade_orders_algo_pending({
+                "instId": target_symbol,
+                "ordType": "conditional"
+            })
+            if isinstance(pending, dict) and "data" in pending:
+                algo_ids_to_cancel = [
+                    {"algoId": item["algoId"], "instId": target_symbol}
+                    for item in pending["data"]
+                    if item.get("posSide") == pos_s or not item.get("posSide")
+                ]
+                if algo_ids_to_cancel:
+                    await self.exchange.private_post_trade_cancel_algos(algo_ids_to_cancel)
+                    logger.info(f"Cancelled {len(algo_ids_to_cancel)} previous SL algo orders for {target_symbol}")
+        except Exception as cancel_err:
+            logger.debug(f"Pre-SL cancellation check for {target_symbol}: {cancel_err}")
+
         try:
             res = await self.exchange.private_post_trade_order_algo({
                 "instId": target_symbol,
