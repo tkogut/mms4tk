@@ -16,18 +16,16 @@ def client():
 @pytest.fixture
 def restore_adaptive_settings():
     """
-    POST /api/v1/settings/update mutates process-wide os.environ AND the shared
-    `daemon` singleton directly (that's the point — a live-reload endpoint). Left
-    unrestored, a test that flips MMS4_ENGINE_MODE to ADAPTIVE or sets a custom
-    portfolio cap leaks that into every test running afterward in the same pytest
-    session, since default IndicatorParams()/daemon state reads env at construction
-    time. Snapshot and restore both around any test that calls this endpoint.
+    POST /api/v1/settings/update mutates process-wide os.environ, logger_db, and the shared
+    `daemon` singleton directly. Snapshot and restore both around any test that calls this endpoint.
     """
+    from mms4tk.api import logger_db as api_logger_db
     env_keys = [
         "MMS4_ENGINE_MODE", "MMS4_ADAPTIVE_VR_HIGH", "MMS4_ADAPTIVE_VR_LOW",
         "MMS4_TIME_LOCK_START", "MMS4_TIME_LOCK_END",
     ]
     saved_env = {k: os.environ.get(k) for k in env_keys}
+    saved_db = api_logger_db.get_all_settings() if api_logger_db else {}
     saved_cap = api_daemon.total_max_portfolio_margin_usd
     yield
     for k, v in saved_env.items():
@@ -35,7 +33,16 @@ def restore_adaptive_settings():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+    if api_logger_db:
+        api_logger_db.set_settings_bulk({
+            "engine_mode": saved_env.get("MMS4_ENGINE_MODE", "CLASSIC"),
+            "adaptive_vr_high": saved_env.get("MMS4_ADAPTIVE_VR_HIGH", "1.6"),
+            "adaptive_vr_low": saved_env.get("MMS4_ADAPTIVE_VR_LOW", "0.8"),
+            "time_lock_start": saved_env.get("MMS4_TIME_LOCK_START", "13:30"),
+            "time_lock_end": saved_env.get("MMS4_TIME_LOCK_END", "14:30"),
+        }, updated_by="fixture_cleanup")
     api_daemon.total_max_portfolio_margin_usd = saved_cap
+
 
 
 def test_higher_timeframe_analytics():

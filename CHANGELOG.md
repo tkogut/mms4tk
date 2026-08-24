@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.32.0] - 2026-08-24
+
+### 🗄️ Unified SQLite System Settings (Single Source of Truth)
+- 🗄️ **Relational SSOT Schema**: Introduced `system_settings` table in `.agents/swarm/logs.db` for all dynamic runtime, risk, strategy, and adaptive engine parameters.
+- ⚡ **ACID Transactional Updates**: Migrated `GET /api/v1/settings` and `POST /api/v1/settings/update` to read/write directly via `LoggerDB` with bulk transaction guarantees.
+- 🛡️ **Container Rebuild Immunity**: Cleaned up dynamic reliance on `.env` text files, guaranteeing settings are permanently preserved in SQLite across all future deployments.
+
+---
+
 ## 🚀 [0.31.1] - 2026-08-24
 
 ### 🔒 Persistent Volume Storage for Runtime Engine & Strategy Settings
