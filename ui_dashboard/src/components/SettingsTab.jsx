@@ -19,10 +19,11 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   // ── Margin & Symbol Allocations for Quick Presets ──
   const [symbolsTotalAllocation, setSymbolsTotalAllocation] = useState(0);
   const [okxFreeMargin, setOkxFreeMargin] = useState(0);
+  const isInitializedRef = React.useRef(false);
 
   useEffect(() => {
-    // Read available margin from statsData or stateData
-    const freeBal = statsData?.free_margin ?? stateData?.current_equity ?? 0;
+    // Read available margin from statsData.free_balance (OKX account) or fallback
+    const freeBal = statsData?.free_balance ?? statsData?.free_margin ?? stateData?.current_equity ?? 0;
     setOkxFreeMargin(freeBal);
 
     // Fetch active symbols total allocation
@@ -39,15 +40,16 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
       .catch(() => {});
   }, [statsData, stateData]);
 
-  // Sync state if daemonData changes
+  // Sync state only on initial load to prevent background 5s polling from overwriting user edits
   useEffect(() => {
-    if (daemonData) {
+    if (daemonData && !isInitializedRef.current) {
       if (daemonData.engine_mode) setEngineMode(daemonData.engine_mode);
       if (daemonData.adaptive_vr_high !== undefined) setVrHigh(daemonData.adaptive_vr_high);
       if (daemonData.adaptive_vr_low !== undefined) setVrLow(daemonData.adaptive_vr_low);
       if (daemonData.time_lock_start) setTimeLockStart(daemonData.time_lock_start);
       if (daemonData.time_lock_end) setTimeLockEnd(daemonData.time_lock_end);
       if (daemonData.total_max_portfolio_margin_usd !== undefined) setPortfolioMarginCap(daemonData.total_max_portfolio_margin_usd);
+      isInitializedRef.current = true;
     }
   }, [daemonData]);
 
@@ -57,6 +59,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
       setCurrentApiKey(apiKey);
     }
   }, [apiKey]);
+
 
   // Password change state
   const [newPassword, setNewPassword] = useState('');
