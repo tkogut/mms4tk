@@ -2,24 +2,26 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
-[![React Dashboard](https://img.shields.io/badge/React--UI-v0.30.1-blue.svg)](ui_dashboard/src/App.jsx)
+[![React Dashboard](https://img.shields.io/badge/React--UI-v0.33.1-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.30.1](https://img.shields.io/badge/Version-0.30.1-emerald.svg)](VERSION)
+[![Version: 0.33.1](https://img.shields.io/badge/Version-0.33.1-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **mms4tk** is a multi-symbol adaptive algorithmic trading system for **OKX Europe (EEA) X-Perps /
-Expiry Perps & Perpetual Swaps** (BTC/USDC, ETH/USDC, SOL/USDC, ICP/USDC) and Spot markets. It
+Expiry Perps & Perpetual Swaps** (BTC/USDC, ETH/USDC, SOL/USDC, XRP/USDC) and Spot markets. It
 combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React dashboard
 (`ui_dashboard`), and an autonomous LLM strategic supervisor
 ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
 
-> **v0.30.0 introduces the Hybrid Adaptive Engine (Fast-Path Supervision)** and **Portfolio Margin Guard**.
+> **v0.33.1 features the SQLite Single Source of Truth (SSOT)**, **Hybrid Adaptive Engine**, and **Portfolio Margin Guard Presets**.
+> All runtime strategy, risk parameters, and symbol allocations are persisted directly in SQLite (`logs.db`),
+> guaranteeing immunity against container rebuilds and `.env` clobbering.
 > The execution engine dynamically computes the Volatility Ratio ($VR$) to filter out high-risk addons
 > during violent breakout expansions, mandates Sweep Rejection wicks during compression, blocks shorting
-> during the US Open institutional liquidity window (13:30–14:30 UTC), and caps total portfolio notional
-> across all pairs.
+> during the US Open institutional liquidity window (13:30–14:30 UTC), and caps total portfolio margin
+> with interactive 1-click presets (`MAX OKX`, `SUMA PAR`).
 
 ---
 
@@ -27,46 +29,60 @@ combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React da
 
 ```mermaid
 flowchart TD
-    subgraph UI["1. React Dashboard (v0.30.1)"]
-        A1["Multi-Symbol Manager<br/>(allocation, Base/Add split, timeframe)"]
+    subgraph UI["1. React Dashboard (v0.33.1)"]
+        A1["Multi-Symbol Manager<br/>(per-symbol allocation USD, Base/Add ratio, timeframe)"]
         A2["Live Risk Grid<br/>(state, leverage, SIZE multiplier, resolved notional)"]
-        A3["Settings & Adaptive Engine Controls<br/>(VR High/Low, Time-Lock, Portfolio Guard)"]
+        A3["Settings & Adaptive Engine Controls<br/>(VR High/Low, Time-Lock, Portfolio Guard Presets)"]
     end
 
-    subgraph API["2. FastAPI REST Gateway"]
+    subgraph DB["2. SQLite SSOT Database (logs.db)"]
+        D_SET["system_settings table<br/>(engine_mode, VR thresholds, time-lock, leverage)"]
+        D_SYM["symbol_configurations table<br/>(symbol, is_active, allocation_usd, ratios)"]
+    end
+
+    subgraph API["3. FastAPI REST Gateway"]
         B1["GET/POST /api/v1/symbols"]
         B2["GET /api/v1/state · /stats/pnl · /positions"]
         B3["GET /api/v1/daemon/status · GET/POST /api/v1/settings"]
     end
 
-    subgraph ENGINE["3. MMS4Daemon & Fast-Path Adaptive Engine — cycle every 15s"]
+    subgraph ENGINE["4. MMS4Daemon & Fast-Path Adaptive Engine — cycle every 15s"]
         C1["Fetch OHLCV (per-symbol timeframe)"]
         C2["Stop-Loss RECONCILIATION<br/>diff live positions vs SQLite snapshot"]
         C3["TMA + ATR Bands + Volatility Ratio (VR)"]
         C4{"Adaptive Signal Gate<br/>VR trend block · VR compression sweep · US Open Time-Lock"}
-        C5["Portfolio Margin Guard<br/>(Total portfolio notional cap check)"]
-        C6["plan_allocation(symbol)<br/>margin × leverage × size multiplier"]
-        C7["Order execution<br/>(exchange minimum enforced)"]
+        C5["Portfolio Margin Guard<br/>(Total portfolio margin cap check)"]
+        C6["plan_allocation(symbol)<br/>per-symbol margin × leverage × size multiplier"]
+        C7["Order execution<br/>(OKX EEA minimum contract size enforced)"]
         C8["Inactivity Manager<br/>impulse negation · stagnation ladder · BE escape"]
         C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7
         C2 -->|position vanished beyond SL| ST["record_trade → SCOUT_MODE"]
         C7 --> C8
     end
 
-    subgraph HERMES["4. Strategic Supervisor (Hermes)"]
+    subgraph HERMES["5. Strategic Supervisor (Hermes)"]
         D1["H4 liquidity sweep · D1 ATR monitor"]
         D2["Telegram digest · Kanban alerts"]
     end
 
-    A1 & A2 & A3 --> B1 & B2 & B3
-    B1 --> C1
-    C7 --> D1 & D2
-    ST --> D1
+    UI --> API
+    API <--> DB
+    ENGINE <--> DB
+    API --> ENGINE
+    ENGINE --> HERMES
+    ST --> HERMES
 ```
 
 ---
 
 ## 🛡️ Risk Model & Adaptive Tactics
+
+### 🗄️ Unified SQLite SSOT (Container Rebuild Immune)
+
+All dynamic parameters are maintained in SQLite on a persistent Docker volume:
+- `system_settings`: Stores global trading configurations (engine mode, VR thresholds, session time-locks, default risk profiles).
+- `symbol_configurations`: Stores per-symbol allocation budgets, timeframes, and active flags.
+- **Immediate Live-Reload**: Changes made in the UI or by Hermes Agent via REST API take effect in real-time in the daemon's active 15s cycle.
 
 ### ⚡ Hybrid Adaptive Engine (Fast-Path Supervision)
 
@@ -76,15 +92,20 @@ Operating in two switchable modes (`MMS4_ENGINE_MODE`):
 
 1. **Volatility Ratio ($VR$)**:
    $$\text{VR} = \frac{\text{ATR}(14)}{\text{SMA}(\text{ATR}(100), 14) + \epsilon}, \quad \epsilon = 10^{-8}$$
-   - **High Volatility Expansion ($VR > MMS4\_ADAPTIVE\_VR\_HIGH$, default `1.6`)**: Blocks `HIGH_RISK_ADD` signals (`SKIPPED_HIGH_VOLATILITY`).
-   - **Low Volatility Compression ($VR < MMS4\_ADAPTIVE\_VR\_LOW$, default `0.8`)**: Blocks base entries without a verified **Sweep Rejection** wick ($\ge 20\%$ of candle range; `SKIPPED_COMPRESSION_NO_SWEEP`).
+   - **High Volatility Expansion ($VR > \text{adaptive\_vr\_high}$, default `1.0`)**: Blocks `HIGH_RISK_ADD` signals (`SKIPPED_HIGH_VOLATILITY`).
+   - **Low Volatility Compression ($VR < \text{adaptive\_vr\_low}$, default `0.75`)**: Blocks base entries without a verified **Sweep Rejection** wick ($\ge 20\%$ of candle range; `SKIPPED_COMPRESSION_NO_SWEEP`).
 2. **US Open Session Window Time-Lock**:
-   - In UTC window `13:30` - `14:30` (`MMS4_TIME_LOCK_START` - `MMS4_TIME_LOCK_END`), blocks `BASE_SHORT` entries (`SKIPPED_TIME_LOCK`), unless an **Extreme Sweep Rejection** (upper wick $\ge 40\%$) is present.
+   - In UTC window `13:30` - `14:30` (`time_lock_start` - `time_lock_end`), blocks `BASE_SHORT` entries (`SKIPPED_TIME_LOCK`), unless an **Extreme Sweep Rejection** (upper wick $\ge 40\%$) is present.
 
-### 🛡️ Portfolio Margin Guard (Circuit Breaker)
+### 🛡️ Portfolio Margin Guard (Circuit Breaker & Quick Presets)
 
-- `MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD`: Global ceiling on total committed position notional across **all symbols combined**.
-- When $> 0$, the daemon evaluates $\sum \text{Notional}_{\text{open}} + \text{Notional}_{\text{candidate}} \le \text{Cap} \times 1.05$. If exceeded, new entries are blocked (`PORTFOLIO_GUARD_BLOCKED_*`).
+- `total_max_portfolio_margin_usd`: Global ceiling on total committed position margin across **all symbols combined**.
+- When $> 0$, the daemon evaluates $\sum \text{Margin}_{\text{open}} + \text{Margin}_{\text{candidate}} \le \text{Cap} \times 1.05$. If exceeded, new entries are blocked (`PORTFOLIO_GUARD_BLOCKED_*`).
+- **1-Click Presets in Dashboard**:
+  - `[MAX OKX]`: Fills 100% of live available margin from OKX API (`free_balance`, e.g. ~$323 USDC).
+  - `[SUMA PAR]`: Calculates sum of active symbol allocations ($\sum \text{allocation\_usd}$, e.g. $60 USD).
+  - `[Wyłącz (0)]`: Clears the cap to disable portfolio-level blocking.
+
 
 ### Capital allocation — relational, not hardcoded
 

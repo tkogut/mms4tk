@@ -1,7 +1,17 @@
 # 📡 mms4tk REST API & Hermes Function Tools Reference
 
-**Application Version:** `v0.30.1`  
+**Application Version:** `v0.33.1`  
 This document provides technical documentation for all HTTP REST API endpoints exposed by `mms4tk` (FastAPI) and consumed by the **Hermes Agent** function-calling engine and Web Dashboard UI.
+
+---
+
+## 🗄️ Database Single Source of Truth (SSOT) Architecture
+
+Starting with **v0.32.0+**, all dynamic runtime trading, risk, strategy, and Adaptive Hybrid Engine parameters are persisted in the SQLite relational database (`logs.db` at `/app/.agents/swarm/logs.db` on persistent Docker volume):
+- **`system_settings` Table**: Stores global system parameters (`engine_mode`, `adaptive_vr_high`, `adaptive_vr_low`, `time_lock_start`, `time_lock_end`, `leverage`, `max_margin_usd`, `base_sl_pct`, `total_max_portfolio_margin_usd`).
+- **`symbol_configurations` Table**: Stores per-symbol active flags, timeframe (`1m`–`1h`), allocation budget (`allocation_usd`), and Base/Add split ratios (`base_ratio`, `add_ratio`).
+- **Container Rebuild Immunity**: Guarantees that parameter updates made via Web UI or Hermes Agent live-reload immediately and are permanently preserved across container rebuilds and server restarts.
+- **Static Secrets**: API keys, OKX credentials, and Telegram tokens remain securely injected via `.env`.
 
 ---
 
@@ -26,7 +36,7 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
     ```json
     {
       "status": "ok",
-      "version": "0.30.1"
+      "version": "0.33.1"
     }
     ```
 
@@ -41,21 +51,22 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
       "is_running": true,
       "interval_seconds": 15.0,
       "symbol": "BTC/USDC",
-      "active_symbols": ["BTC/USDC", "ETH/USDC", "SOL/USDC", "ICP/USDC"],
+      "active_symbols": ["BTC/USDC", "ETH/USDC", "SOL/USDC", "XRP/USDC"],
       "max_margin_usd": 10.0,
       "base_trade_usd": 7.0,
       "addon_trade_usd": 3.0,
       "trade_amount_usd": 10.0,
       "total_max_portfolio_margin_usd": 0.0,
-      "engine_mode": "CLASSIC",
-      "adaptive_vr_high": 1.6,
-      "adaptive_vr_low": 0.8,
+      "engine_mode": "ADAPTIVE",
+      "adaptive_vr_high": 1.0,
+      "adaptive_vr_low": 0.75,
       "time_lock_start": "13:30",
       "time_lock_end": "14:30",
-      "last_cycle_timestamp": "2026-08-19T16:35:00.000000+00:00",
+      "last_cycle_timestamp": "2026-08-24T18:03:20.036946+00:00",
       "processed_cycles": 1420
     }
     ```
+
 
 ---
 
