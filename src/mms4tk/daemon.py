@@ -278,8 +278,32 @@ class MMS4Daemon:
         leverage = float(snap["leverage"])
         size_mult = float(snap["size_multiplier"])
 
-        margin_base = self.max_margin_usd * self.base_allocation * size_mult
-        margin_addon = self.max_margin_usd * self.addon_allocation * size_mult
+        # Resolve symbol-specific budget/margin cap from dynamic configuration
+        sym_margin_usd = self.max_margin_usd
+        base_ratio = self.base_allocation
+        addon_ratio = self.addon_allocation
+
+        try:
+            from mms4tk.api import configured_symbols_store
+            sym_key = symbol.upper()
+            if "/" not in sym_key:
+                sym_key = f"{sym_key}/USDC"
+            sym_cfg = configured_symbols_store.get(sym_key) or configured_symbols_store.get(symbol) or {}
+            if isinstance(sym_cfg, dict):
+                default_env_margin = float(os.getenv("MMS4_MAX_MARGIN_USD", os.getenv("MMS4_TRADE_AMOUNT_USD", "10.0")))
+                if sym_cfg.get("allocation_usd") is not None and abs(self.max_margin_usd - default_env_margin) < 1e-6:
+                    sym_margin_usd = float(sym_cfg["allocation_usd"])
+                elif sym_cfg.get("budget_usd") is not None and abs(self.max_margin_usd - default_env_margin) < 1e-6:
+                    sym_margin_usd = float(sym_cfg["budget_usd"])
+                
+                if sym_cfg.get("base_ratio") is not None:
+                    base_ratio = float(sym_cfg["base_ratio"]) / 100.0
+                    addon_ratio = float(sym_cfg.get("add_ratio", 100 - sym_cfg["base_ratio"])) / 100.0
+        except Exception:
+            pass
+
+        margin_base = sym_margin_usd * base_ratio * size_mult
+        margin_addon = sym_margin_usd * addon_ratio * size_mult
 
         return {
             "state": snap["state"],
@@ -289,8 +313,8 @@ class MMS4Daemon:
             "margin_addon_usd": round(margin_addon, 8),
             "notional_base_usd": round(margin_base * leverage, 8),
             "notional_addon_usd": round(margin_addon * leverage, 8),
-            "margin_cap_usd": round(self.max_margin_usd * size_mult, 8),
-            "notional_cap_usd": round(self.max_margin_usd * size_mult * leverage, 8),
+            "margin_cap_usd": round(sym_margin_usd * size_mult, 8),
+            "notional_cap_usd": round(sym_margin_usd * size_mult * leverage, 8),
             "notional_reduction_factor": snap["notional_reduction_factor"],
         }
 
