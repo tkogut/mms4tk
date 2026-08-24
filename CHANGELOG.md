@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.6] - 2026-08-24
+
+### 🛡️ OKX Stop Loss Execution Hardening & Duplicate Dispatch Fix
+- 🛡️ **Independent Conditional SL Algo Orders**: Replaced buggy attached SL market parameters (`params["stopLoss"]` which failed with OKX error 51053 on short positions) with explicit `private_post_trade_order_algo` calls (`closeFraction="1"`), ensuring 100% reliable Stop Loss placement for all positions.
+- 🧹 **Webhook Event Queue Cleanup**: Fixed historical batch re-dispatching in Hermes event dispatcher and eliminated duplicate event notifications.
+
+---
+
 ## 🚀 [0.30.5] - 2026-08-24
 
 ### 🔔 Real-time Position Open Alerts & Digest Schedule Refinement
