@@ -45,8 +45,33 @@ def get_api_base_url() -> str:
     return candidates[0] if candidates else "http://antigravity_core:8000"
 
 
+def get_api_key() -> str:
+    """Retrieve MMS4_API_KEY from environment or standard config files."""
+    key = os.environ.get("MMS4_API_KEY", "")
+    if key:
+        return key
+    candidate_paths = [
+        "/docker/mms4tk/.env",
+        "/opt/data/.env",
+        "/root/.env",
+        "/app/.env",
+        os.path.expanduser("~/.env"),
+    ]
+    for path in candidate_paths:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("MMS4_API_KEY="):
+                            return line.split("=", 1)[1].strip("\"' ")
+            except Exception:
+                continue
+    return ""
+
+
 MMS4TK_BASE = get_api_base_url()
-MMS4TK_API_KEY = os.environ.get("MMS4_API_KEY", "")
+MMS4TK_API_KEY = get_api_key()
 
 
 def fetch_api(endpoint: str):
