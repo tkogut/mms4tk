@@ -494,10 +494,10 @@ class MMS4Daemon:
                     HermesWebhookClient.send_telegram(
                         title=f"🛑 STOP-LOSS: {target_symbol} {side.upper()}",
                         body=(
-                            f"Pozycja zamknięta przez giełdę.\n"
+                            f"Pozycja zamknięta przez Stop-Loss na giełdzie.\n"
                             f"- Wejście: `${entry_price:,.4f}`\n"
                             f"- Wyjście: `${exit_price:,.4f}`\n"
-                            f"- Wynik: `{pnl_pct*100:+.2f}%`\n"
+                            f"- Wynik: `{pnl_pct*100:+.2f}%` (${pnl_usd:+.2f} USD)\n"
                             f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
                         ),
                         priority=2,
@@ -505,6 +505,24 @@ class MMS4Daemon:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to send stop-loss notification: {e}", exc_info=True)
+            else:
+                try:
+                    from mms4tk.hermes_webhook import HermesWebhookClient
+                    pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
+                    HermesWebhookClient.send_telegram(
+                        title=f"🔔 ZAMKNIĘCIE POZYCJI: {target_symbol} {side.upper()}",
+                        body=(
+                            f"Pozycja zamknięta na OKX (Manual/TP).\n"
+                            f"- Wejście: `${entry_price:,.4f}`\n"
+                            f"- Wyjście: `${exit_price:,.4f}`\n"
+                            f"- Wynik: {pnl_icon} `{pnl_pct*100:+.2f}%` (${pnl_usd:+.2f} USD)\n"
+                            f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
+                        ),
+                        priority=2,
+                        dedupe_key=f"CLOSE_{target_symbol}_{side}_{int(entry_price)}",
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send close notification: {e}", exc_info=True)
 
         # 2. Refresh snapshots for positions that are still open
         for side, p in live_by_side.items():

@@ -98,10 +98,32 @@ class OKXTradeSyncWorker:
             await self.executor.initialize()
             
             # Query closed orders history from OKX via CCXT
-            # instType=FUTURES for EEA X-Perps, fallback to SPOT/SWAP
+            # Combines recent orders history (last 7 days) and archive (older history)
             params = {"instType": "FUTURES"}
-            raw_orders = await self.executor.exchange.private_get_trade_orders_history_archive(params)
-            orders_data = raw_orders.get("data", []) if isinstance(raw_orders, dict) else []
+            orders_data: List[Dict[str, Any]] = []
+            seen_ord_ids = set()
+
+            try:
+                recent_orders = await self.executor.exchange.private_get_trade_orders_history(params)
+                if isinstance(recent_orders, dict) and "data" in recent_orders:
+                    for ord_item in recent_orders["data"]:
+                        oid = ord_item.get("ordId") or ord_item.get("clOrdId")
+                        if oid and oid not in seen_ord_ids:
+                            seen_ord_ids.add(oid)
+                            orders_data.append(ord_item)
+            except Exception as r_err:
+                logger.warning(f"Failed to fetch recent orders history from OKX: {r_err}")
+
+            try:
+                archive_orders = await self.executor.exchange.private_get_trade_orders_history_archive(params)
+                if isinstance(archive_orders, dict) and "data" in archive_orders:
+                    for ord_item in archive_orders["data"]:
+                        oid = ord_item.get("ordId") or ord_item.get("clOrdId")
+                        if oid and oid not in seen_ord_ids:
+                            seen_ord_ids.add(oid)
+                            orders_data.append(ord_item)
+            except Exception as a_err:
+                logger.warning(f"Failed to fetch archive orders history from OKX: {a_err}")
 
             # 1. Normalize the raw fills, oldest first, so opens can be paired with closes.
             fills: List[Dict[str, Any]] = []
