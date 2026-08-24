@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.1] - 2026-08-24
+
+### 🐛 Fix Settings Input Polling Clashing & OKX Live Balance Field
+- 🐛 **Input Stability**: Prevented 5-second background polling from overwriting user inputs and preset selections in `SettingsTab`.
+- 💰 **Accurate OKX Balance Readout**: Corrected field lookup to `statsData.free_balance`, accurately displaying live Available Margin (~$323.48 USDC) on the `[MAX OKX]` preset badge.
+
+---
+
 ## 🚀 [0.33.0] - 2026-08-24
 
 ### 🛡️ Portfolio Margin Guard Quick Presets
