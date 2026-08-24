@@ -16,6 +16,29 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   const [timeLockEnd, setTimeLockEnd] = useState(daemonData?.time_lock_end || '14:30');
   const [portfolioMarginCap, setPortfolioMarginCap] = useState(daemonData?.total_max_portfolio_margin_usd ?? 0);
 
+  // ── Margin & Symbol Allocations for Quick Presets ──
+  const [symbolsTotalAllocation, setSymbolsTotalAllocation] = useState(0);
+  const [okxFreeMargin, setOkxFreeMargin] = useState(0);
+
+  useEffect(() => {
+    // Read available margin from statsData or stateData
+    const freeBal = statsData?.free_margin ?? stateData?.current_equity ?? 0;
+    setOkxFreeMargin(freeBal);
+
+    // Fetch active symbols total allocation
+    fetch('/api/v1/symbols')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.symbols) {
+          const total = data.symbols
+            .filter(s => s.is_active)
+            .reduce((sum, s) => sum + (parseFloat(s.allocation_usd) || 0), 0);
+          setSymbolsTotalAllocation(total);
+        }
+      })
+      .catch(() => {});
+  }, [statsData, stateData]);
+
   // Sync state if daemonData changes
   useEffect(() => {
     if (daemonData) {
@@ -244,7 +267,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
         </div>
 
         {/* ── Portfolio Margin Guard (Circuit Breaker) ── */}
-        <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-lg space-y-2">
+        <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-lg space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <div className="flex items-center gap-2">
               <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -252,15 +275,53 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
             </div>
             <span className="text-[10px] text-slate-400">Globalny limit portfela (0 = wyłączony)</span>
           </div>
-          <input
-            type="number"
-            step="10"
-            min="0"
-            value={portfolioMarginCap}
-            onChange={(e) => setPortfolioMarginCap(e.target.value)}
-            placeholder="0 = wyłączony"
-            className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
-          />
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <input
+              type="number"
+              step="10"
+              min="0"
+              value={portfolioMarginCap}
+              onChange={(e) => setPortfolioMarginCap(e.target.value)}
+              placeholder="0 = wyłączony"
+              className="flex-1 px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
+            />
+            
+            {/* Quick Preset Buttons */}
+            <div className="flex items-center gap-1.5 shrink-0 flex-wrap sm:flex-nowrap">
+              <button
+                type="button"
+                onClick={() => setPortfolioMarginCap(okxFreeMargin > 0 ? Math.floor(okxFreeMargin) : 100)}
+                className="px-2.5 py-2 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/40 text-emerald-300 rounded-lg text-[11px] font-semibold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
+                title="Ustaw maksymalny dostępny depozyt z OKX API"
+              >
+                <span>MAX OKX:</span>
+                <span className="font-mono font-bold">${okxFreeMargin > 0 ? okxFreeMargin.toFixed(0) : '0'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPortfolioMarginCap(symbolsTotalAllocation > 0 ? Math.round(symbolsTotalAllocation) : 50)}
+                className="px-2.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 border border-blue-500/40 text-blue-300 rounded-lg text-[11px] font-semibold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
+                title="Ustaw limit równy sumie alokacji wszystkich aktywnych par"
+              >
+                <span>SUMA PAR:</span>
+                <span className="font-mono font-bold">${symbolsTotalAllocation > 0 ? symbolsTotalAllocation.toFixed(0) : '0'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPortfolioMarginCap(0)}
+                className="px-2 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
+                title="Wyłącz limit (0)"
+              >
+                Wyłącz (0)
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500">
+            Zabezpiecza przed overleveragingiem – blokuje nowe zlecenia, gdy łączny wykorzystany depozyt na OKX przekroczy ten próg.
+          </p>
         </div>
 
         {/* ── Hybrydowy Silnik Adaptacyjny (Adaptive Engine Card) ── */}
