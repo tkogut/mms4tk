@@ -734,20 +734,50 @@ def _persist_env_line_rhs(existing_rhs: str, new_value: Any) -> str:
     return f"{safe_val}{comment_suffix}"
 
 
+PERSISTENT_SETTINGS_PATHS = ["/app/.agents/swarm/settings.json", ".agents/swarm/settings.json"]
+
+
+def load_persistent_settings() -> Dict[str, Any]:
+    """Load runtime settings from persistent volume storage and sync to os.environ."""
+    settings = {}
+    for p in PERSISTENT_SETTINGS_PATHS:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        settings.update(data)
+                        for k, v in data.items():
+                            os.environ[k] = str(v)
+            except Exception as e:
+                logger.warning(f"Failed to load persistent settings from {p}: {e}")
+    return settings
+
+
+# Automatically load persistent runtime settings on module import
+load_persistent_settings()
+
+
 def persist_env_config(updates: Dict[str, Any]) -> None:
     """
-    Safely persist key-value pairs to .env files without destroying other settings.
-
-    Writes to every candidate path that already exists, not just one, because the
-    same settings-update call can run from more than one working directory depending
-    on how the process was launched:
-      - ".env"      — repo root, when running directly on the host (dev, CLI).
-      - "/app/.env" — the container's WORKDIR in the Docker image (see Dockerfile /
-        docker-compose.yml), when running inside the deployed container.
-      - "../.env"   — one level up, when the CWD is a subdirectory (e.g. ui_dashboard/)
-        that shares the repo's top-level .env.
-    A path that doesn't exist is skipped, so this never creates a stray .env file.
+    Safely persist key-value pairs to .env files and persistent volume settings.json.
+    Guarantees settings survive docker rebuilds and container recreations.
     """
+    # 1. Persist to persistent volume JSON storage
+    for p in PERSISTENT_SETTINGS_PATHS:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            current = {}
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    current = json.load(f) or {}
+            current.update(updates)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(current, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to persist settings JSON to {p}: {e}")
+
+    # 2. Persist to .env files
     env_paths = [".env", "/app/.env", "../.env"]
     for env_path in env_paths:
         if os.path.exists(env_path):
@@ -768,9 +798,6 @@ def persist_env_config(updates: Dict[str, Any]) -> None:
                         else:
                             lines.append(line)
 
-                # A file whose last line lacks a trailing newline (common after a
-                # manual edit) would otherwise glue an appended key onto it —
-                # e.g. 'KEY=valNEW_KEY=x' — so normalize before appending anything.
                 if lines and not lines[-1].endswith("\n"):
                     lines[-1] = lines[-1] + "\n"
 
@@ -782,6 +809,7 @@ def persist_env_config(updates: Dict[str, Any]) -> None:
                     f.writelines(lines)
             except Exception as e:
                 logger.warning(f"Failed to persist env updates to {env_path}: {e}")
+
 
 
 class SettingsUpdateRequest(BaseModel):

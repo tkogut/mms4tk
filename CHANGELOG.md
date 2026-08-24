@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.31.1] - 2026-08-24
+
+### 🔒 Persistent Volume Storage for Runtime Engine & Strategy Settings
+- 🔒 **Volume-Persistent Runtime Settings**: Saved all dynamic settings (`engine_mode`, `adaptive_vr_high`, `adaptive_vr_low`, `time_lock`) to persistent volume JSON storage (`settings.json`).
+- 🛡️ **Rebuild Immunity**: Guaranteed that Docker rebuilds and container recreations never reset the Adaptive Engine mode to Classic.
+
+---
+
 ## 🚀 [0.31.0] - 2026-08-24
 
 ### 🎯 Dynamic Per-Symbol Budget & Margin Allocation Sizing
