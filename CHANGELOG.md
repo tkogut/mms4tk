@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.31.0] - 2026-08-24
+
+### 🎯 Dynamic Per-Symbol Budget & Margin Allocation Sizing
+- 🎯 **Dynamic Per-Symbol Allocation**: Updated `daemon.py` `plan_allocation` to read the exact `allocation_usd`, `base_ratio`, and `add_ratio` configured per symbol in `configured_symbols_store` rather than falling back to global scalar.
+- 📐 **True Multi-Pair Granular Sizing**: Fully honors individual capital budgets (e.g. $20 for BTC, $10 for ETH/SOL) for both Base and Add-on orders.
+
+---
+
 ## 🚀 [0.30.9] - 2026-08-24
 
 ### 🛡️ Self-Healing Stop Loss Protection & Pre-Cancellation Safety

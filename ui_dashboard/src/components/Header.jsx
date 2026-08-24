@@ -1,7 +1,7 @@
 import React from 'react';
 import { Cpu, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
 
-export function Header({ version = "0.30.9", isConnected, stateData, daemonData, onRefresh, onToggleMaintenance }) {
+export function Header({ version = "0.31.0", isConnected, stateData, daemonData, onRefresh, onToggleMaintenance }) {
   const isScoutMode = stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false;
   const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
   const isMaintenance = Boolean(daemonData?.maintenance_mode);
@@ -39,7 +39,7 @@ export function Header({ version = "0.30.9", isConnected, stateData, daemonData,
           <p className="text-xs text-slate-400 flex items-center justify-center sm:justify-start gap-2 mt-0.5">
             <span>VPS Autotrading Engine & Strategy Supervisor</span>
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
-              <span>v{version || '0.30.9'}</span>
+              <span>v{version || '0.31.0'}</span>
               <button
                 onClick={handleForceRefresh}
                 title="Wymuś czyszczenie cache PWA i odśwież wersję"
