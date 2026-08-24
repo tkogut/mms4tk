@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.8] - 2026-08-24
+
+### 🔔 Real-time Manual and Reconciled Position Close Notifications
+- 🔔 **Instant Close Alerting**: Added real-time Telegram notification for all reconciled position closes (both manual closes and exchange limit/TP closes) in `daemon.py`.
+- 🔄 **Real-Time Recent Orders Sync**: Updated `trade_sync.py` to query OKX `private_get_trade_orders_history` (recent 7 days fills) alongside archive, ensuring immediately closed trades appear in database within seconds.
+- 📦 **Monitored Scripts Repository Sync**: Added `mms4tk_position_close_monitor.py` to version control with robust API key discovery.
+
+---
+
 ## 🚀 [0.30.7] - 2026-08-24
 
 ### 🔒 Trading Maintenance Lock & Developer Safety Kill-Switch
