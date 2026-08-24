@@ -545,26 +545,8 @@ class OKXExecutor:
             params = {}
             if not is_spot:
                 params["tdMode"] = "cross"
-                params["posSide"] = "short" if side_lower in ["sell", "short"] else "long"
-
-            if not is_spot and stop_loss_pct > 0:
-                current_price = price
-                if not current_price or current_price <= 0:
-                    try:
-                        ticker = await self.exchange.fetch_ticker(target_symbol)
-                        current_price = float(ticker.get("last") or ticker.get("close") or 0.0)
-                    except Exception as tick_err:
-                        logger.warning(f"Could not fetch ticker price for SL calculation on {target_symbol}: {tick_err}")
-                
-                if current_price and current_price > 0:
-                    if side_lower == "buy":
-                        sl_price = current_price * (1.0 - stop_loss_pct)
-                    else:
-                        sl_price = current_price * (1.0 + stop_loss_pct)
-                    try:
-                        params["stopLoss"] = {"triggerPrice": self.exchange.price_to_precision(target_symbol, sl_price)}
-                    except Exception:
-                        params["stopLoss"] = {"triggerPrice": str(round(sl_price, 1))}
+                pos_side = "short" if side_lower in ["sell", "short"] else "long"
+                params["posSide"] = pos_side
 
             order = await self.exchange.create_order(
                 symbol=target_symbol,
@@ -573,11 +555,85 @@ class OKXExecutor:
                 amount=final_amount,
                 params=params
             )
-            logger.info(f"Successfully executed OKX order {order.get('id')} for {target_symbol}")
+            logger.info(f"Successfully executed OKX market order {order.get('id')} for {target_symbol}")
+
+            # Attach conditional Stop Loss algo order if requested
+            if not is_spot and stop_loss_pct > 0:
+                current_price = price
+                if not current_price or current_price <= 0:
+                    current_price = float(order.get("average") or order.get("price") or 0.0)
+                if not current_price or current_price <= 0:
+                    try:
+                        ticker = await self.exchange.fetch_ticker(target_symbol)
+                        current_price = float(ticker.get("last") or ticker.get("close") or 0.0)
+                    except Exception as tick_err:
+                        logger.warning(f"Could not fetch ticker price for SL calculation on {target_symbol}: {tick_err}")
+
+                if current_price and current_price > 0:
+                    pos_side = "short" if side_lower in ["sell", "short"] else "long"
+                    await self.attach_stop_loss(
+                        symbol=target_symbol,
+                        side=side_lower,
+                        entry_price=current_price,
+                        stop_loss_pct=stop_loss_pct,
+                        pos_side=pos_side
+                    )
+
             return order
         except Exception as e:
             logger.error(f"Error executing order on OKX for {target_symbol}: {type(e).__name__}: {str(e)}")
             raise
+
+    async def attach_stop_loss(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        stop_loss_pct: float = 0.02,
+        pos_side: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Attach a conditional Stop Loss algo order on OKX for a position.
+        Uses private_post_trade_order_algo with closeFraction='1' to protect the entire position.
+        """
+        if not self.has_credentials or self.exchange is None:
+            return {"status": "mock_sl_attached"}
+
+        target_symbol = symbol
+        if "XPERP" not in symbol and ":" not in symbol:
+            eea_xperp = await self.discover_eea_xperp_symbol(symbol)
+            if eea_xperp:
+                target_symbol = eea_xperp
+
+        pos_s = pos_side or ("short" if side.lower() in ["sell", "short"] else "long")
+        order_s = "buy" if pos_s == "short" else "sell"
+
+        if pos_s == "short":
+            sl_price = entry_price * (1.0 + stop_loss_pct)
+        else:
+            sl_price = entry_price * (1.0 - stop_loss_pct)
+
+        try:
+            sl_px_str = self.exchange.price_to_precision(target_symbol, sl_price)
+        except Exception:
+            sl_px_str = f"{sl_price:.2f}"
+
+        try:
+            res = await self.exchange.private_post_trade_order_algo({
+                "instId": target_symbol,
+                "tdMode": "cross",
+                "side": order_s,
+                "posSide": pos_s,
+                "ordType": "conditional",
+                "slTriggerPx": sl_px_str,
+                "slOrdPx": "-1",
+                "closeFraction": "1",
+            })
+            logger.info(f"Attached OKX SL algo order for {target_symbol} ({pos_s}) at ${sl_px_str}: {res.get('data')}")
+            return res
+        except Exception as e:
+            logger.error(f"Failed to attach SL algo order on OKX for {target_symbol}: {e}")
+            return {"error": str(e)}
 
     async def set_hedge_mode(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """
