@@ -11,3 +11,9 @@
   - `MINOR` (+0.1.0) for new features, new endpoints, or UI additions (e.g. `0.5.0` -> `0.6.0`).
   - `MAJOR` (+1.0.0) for breaking architectural changes (e.g. `0.5.0` -> `1.0.0`).
 - **Forbidden**: Under no circumstances should mismatched, stale version strings, or un-bumped commits remain in the codebase.
+
+## 🛡️ MANDATORY ZERO-LOSS MAINTENANCE DIRECTIVE:
+- **Automatic Lock**: Before running diagnostic tests, rebuilding, modifying executor code, or investigating live exchange behavior, agents MUST automatically engage Maintenance Mode (`python3 scripts/maintenance.py --enable` or `POST /api/v1/daemon/maintenance/enable`).
+- **Safety Guarantee**: Live orders on OKX remain 100% blocked until work is completed and verified.
+- **Unlock Protocol**: Maintenance lock may only be released (`python3 scripts/maintenance.py --disable`) after tests pass and the operator is notified.
+

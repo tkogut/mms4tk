@@ -50,6 +50,11 @@ Every agent session operates under the Triad model. Switching roles requires a f
   - `MINOR` (+0.1.0) for new features, API endpoints, or UI additions.
   - `MAJOR` (+1.0.0) for breaking architecture changes.
 
+### G-03: Zero-Loss Maintenance Lock Protocol
+- **Automatic Pre-Flight Lock**: Before running diagnostic tests, rebuilds, modifying executor/daemon code, or investigating live exchange behavior, agents MUST automatically engage Maintenance Mode (`python3 scripts/maintenance.py --enable`).
+- **Post-Deploy Unlock**: The lock is only released after deployment passes verification and the operator is informed.
+
+
 ---
 
 ## 3. REMOTE BROWSER & "PROOF OF LIFE"
