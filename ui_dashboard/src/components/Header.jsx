@@ -1,9 +1,10 @@
 import React from 'react';
 import { Cpu, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
 
-export function Header({ version = "0.30.6", isConnected, stateData, onRefresh }) {
+export function Header({ version = "0.30.7", isConnected, stateData, daemonData, onRefresh, onToggleMaintenance }) {
   const isScoutMode = stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false;
   const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
+  const isMaintenance = Boolean(daemonData?.maintenance_mode);
 
   const handleForceRefresh = async () => {
     try {
@@ -38,7 +39,7 @@ export function Header({ version = "0.30.6", isConnected, stateData, onRefresh }
           <p className="text-xs text-slate-400 flex items-center justify-center sm:justify-start gap-2 mt-0.5">
             <span>VPS Autotrading Engine & Strategy Supervisor</span>
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 text-emerald-400 font-mono text-[10px] rounded-full border border-emerald-500/30">
-              <span>v{version || '0.29.0'}</span>
+              <span>v{version || '0.30.7'}</span>
               <button
                 onClick={handleForceRefresh}
                 title="Wymuś czyszczenie cache PWA i odśwież wersję"
@@ -52,6 +53,19 @@ export function Header({ version = "0.30.6", isConnected, stateData, onRefresh }
       </div>
 
       <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3">
+        {/* Blokada Serwisowa Handlu */}
+        <button
+          onClick={onToggleMaintenance}
+          title={isMaintenance ? "Kliknij, aby ODBLOKOWAĆ handel na żywo na OKX" : "Kliknij, aby ZABLOKOWAĆ realny handel (Tryb Serwisowy / Dry-Run)"}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm ${
+            isMaintenance
+              ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 animate-pulse hover:bg-amber-500/30'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-amber-400 hover:border-amber-500/40'
+          }`}
+        >
+          <span>{isMaintenance ? '🔒 BLOKADA SERWISOWA' : '🛡️ BLOKADA HANDLU'}</span>
+        </button>
+
         {/* Tryb Operacyjny Bota */}
         <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 shadow-sm">
           <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider hidden sm:inline">Tryb:</div>

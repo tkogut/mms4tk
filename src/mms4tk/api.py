@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from mms4tk.logger_db import LoggerDB
 from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
-from mms4tk.okx_executor import OKXExecutor
+from mms4tk.okx_executor import OKXExecutor, is_maintenance_locked, set_maintenance_lock
 from mms4tk.analytics import Candle, IndicatorParams, SignalResult, TMAIndicator, MMS4SignalEngine, HigherTimeframeAnalytics
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.hermes_webhook import HermesWebhookClient, HermesWebhookEvent
@@ -182,6 +182,7 @@ class DaemonStatusResponse(BaseModel):
     adaptive_vr_low: Optional[float] = 0.8
     time_lock_start: Optional[str] = "13:30"
     time_lock_end: Optional[str] = "14:30"
+    maintenance_mode: Optional[bool] = False
 
 
 class CalculateRequest(BaseModel):
@@ -210,6 +211,39 @@ async def get_health() -> Dict[str, str]:
 async def get_daemon_status() -> Dict[str, Any]:
     """Get background daemon status and execution metrics."""
     return daemon.get_status()
+
+
+@app.get("/api/v1/daemon/maintenance/status", tags=["Daemon"])
+async def get_maintenance_status() -> Dict[str, Any]:
+    """Check if Maintenance Mode is active (all live order execution blocked)."""
+    locked = is_maintenance_locked()
+    return {
+        "maintenance_mode": locked,
+        "status": "locked" if locked else "active_trading",
+        "description": "Trading is BLOCKED on OKX" if locked else "Live trading is ACTIVE"
+    }
+
+
+@app.post("/api/v1/daemon/maintenance/enable", tags=["Daemon"])
+async def enable_maintenance_mode(reason: str = "Developer Maintenance") -> Dict[str, Any]:
+    """Enable Maintenance Mode — instantly blocks all real orders on OKX."""
+    success = set_maintenance_lock(True, reason=reason)
+    return {
+        "success": success,
+        "maintenance_mode": True,
+        "message": f"🔒 Maintenance Mode ENABLED. Real orders on OKX are BLOCKED. Reason: {reason}"
+    }
+
+
+@app.post("/api/v1/daemon/maintenance/disable", tags=["Daemon"])
+async def disable_maintenance_mode() -> Dict[str, Any]:
+    """Disable Maintenance Mode — resumes normal live order execution on OKX."""
+    success = set_maintenance_lock(False)
+    return {
+        "success": success,
+        "maintenance_mode": False,
+        "message": "🔓 Maintenance Mode DISABLED. Live trading on OKX is RESUMED."
+    }
 
 
 @app.get("/api/v1/state", response_model=StateResponse, tags=["State"])

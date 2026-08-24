@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 from mms4tk.state_manager import (
     MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION,
 )
-from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional
+from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional, is_maintenance_locked
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
@@ -888,7 +888,11 @@ class MMS4Daemon:
                 "reconciliation": reconciliation_events,
             }
 
-        if signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
+        if is_maintenance_locked():
+            outcome = f"SKIPPED_MAINTENANCE_MODE"
+            details = f"⛔ Trading blocked: Maintenance Mode is ACTIVE. Signal {signal.signal_type} for {target_symbol} skipped."
+            logger.warning(details)
+        elif signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
             if matching_pos is not None and existing_contracts > 0:
                 outcome = f"SKIPPED_{signal.signal_type}"
                 details = f"Base position ({target_pos_side.upper()}) already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
@@ -1299,6 +1303,7 @@ class MMS4Daemon:
             active_syms = [self.symbol]
         return {
             "is_running": self._is_running,
+            "maintenance_mode": is_maintenance_locked(),
             "interval_seconds": self.interval_seconds,
             "symbol": self.symbol,
             "active_symbols": active_syms,

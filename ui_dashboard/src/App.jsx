@@ -17,7 +17,7 @@ export default function App() {
   const [openPositions, setOpenPositions] = useState([]);
   const [daemonData, setDaemonData] = useState(null);
   const [isConnected, setIsConnected] = useState(true);
-  const [appVersion, setAppVersion] = useState('0.30.6');
+  const [appVersion, setAppVersion] = useState('0.30.7');
   const [apiKey, setApiKey] = useState(localStorage.getItem('mms4_api_key') || '');
 
   const { isInstallable, isInstalled, handleInstall } = usePWA();
@@ -118,6 +118,25 @@ export default function App() {
     }
   };
 
+  const handleToggleMaintenance = async () => {
+    const isLocked = Boolean(daemonData?.maintenance_mode);
+    const action = isLocked ? 'disable' : 'enable';
+    const confirmMsg = isLocked
+      ? 'Czy na pewno chcesz ODBLOKOWAĆ handel na żywo na OKX?'
+      : 'Czy na pewno chcesz ZABLOKOWAĆ realny handel na OKX (Tryb Serwisowy / Dry-Run)?';
+    
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await fetch(`/api/v1/daemon/maintenance/${action}`, { method: 'POST' });
+      if (res.ok) {
+        await fetchDashboardData();
+      }
+    } catch (err) {
+      console.error('Failed to toggle maintenance mode:', err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#090d16] text-gray-100 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto">
       {/* Native PWA Banner */}
@@ -130,7 +149,9 @@ export default function App() {
         version={appVersion} 
         isConnected={isConnected} 
         stateData={stateData} 
+        daemonData={daemonData}
         onRefresh={fetchDashboardData} 
+        onToggleMaintenance={handleToggleMaintenance}
       />
 
       {/* Navigation Tabs */}

@@ -38,6 +38,44 @@ FALLBACK_MIN_NOTIONAL_USD = float(os.getenv("MMS4_MIN_NOTIONAL_USD", "7.0"))
 # How far a rounded contract count may exceed the target allocation before it is rejected.
 SIZING_TOLERANCE = float(os.getenv("MMS4_SIZING_TOLERANCE", "0.10"))
 
+MAINTENANCE_LOCK_PATHS = [
+    "/app/.agents/swarm/MAINTENANCE_LOCK",
+    "/tmp/MMS4_MAINTENANCE_LOCK",
+    os.path.expanduser("~/.mms4_maintenance_lock"),
+]
+
+
+def is_maintenance_locked() -> bool:
+    """
+    Returns True if live trading is blocked due to Maintenance Mode.
+    Checks environment variable MMS4_MAINTENANCE_MODE or existence of lock file.
+    """
+    if os.getenv("MMS4_MAINTENANCE_MODE", "false").lower() in ["true", "1", "yes", "on"]:
+        return True
+    return any(os.path.exists(p) for p in MAINTENANCE_LOCK_PATHS)
+
+
+def set_maintenance_lock(enable: bool, reason: str = "Developer Maintenance") -> bool:
+    """
+    Enable or disable Maintenance Mode by writing or deleting the lock file.
+    """
+    lock_path = "/app/.agents/swarm/MAINTENANCE_LOCK" if os.path.exists("/app/.agents/swarm") else "/tmp/MMS4_MAINTENANCE_LOCK"
+    try:
+        if enable:
+            os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+            with open(lock_path, "w", encoding="utf-8") as f:
+                f.write(f"LOCKED at {datetime.now(timezone.utc).isoformat()} - Reason: {reason}\n")
+            logger.warning(f"🔒 MAINTENANCE MODE ENABLED: Lock file written at {lock_path} (Reason: {reason})")
+        else:
+            for p in MAINTENANCE_LOCK_PATHS:
+                if os.path.exists(p):
+                    os.remove(p)
+                    logger.info(f"🔓 MAINTENANCE MODE DISABLED: Removed lock file at {p}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to set maintenance lock ({enable}): {e}")
+        return False
+
 
 def normalize_symbol(symbol: str) -> str:
     """
@@ -515,6 +553,21 @@ class OKXExecutor:
                 f"Recalculated contract amount for {target_symbol}: "
                 f"original_amount={amount} -> contract_amount={final_amount} (${est_usd:.2f} USD)"
             )
+
+        if is_maintenance_locked():
+            logger.warning(
+                f"⛔ MAINTENANCE MODE: Blocked real order on OKX for {target_symbol} ({side_lower} amount={final_amount})"
+            )
+            return {
+                "id": f"maintenance_blocked_{int(time.time()*1000)}",
+                "symbol": target_symbol,
+                "side": side_lower,
+                "amount": final_amount,
+                "leverage": leverage,
+                "stop_loss_pct": stop_loss_pct,
+                "status": "blocked_by_maintenance_mode",
+                "mock": True
+            }
 
         if not self.has_credentials or self.exchange is None:
             logger.info(f"Mock Order Execution: symbol={target_symbol}, side={side}, amount={final_amount}, leverage={leverage}x, SL={stop_loss_pct*100}%")

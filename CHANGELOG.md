@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.30.7] - 2026-08-24
+
+### 🔒 Trading Maintenance Lock & Developer Safety Kill-Switch
+- 🔒 **Maintenance Mode Protection**: Added multi-layer trading kill-switch (`is_maintenance_locked()`, lock file `/app/.agents/swarm/MAINTENANCE_LOCK`, and `MMS4_MAINTENANCE_MODE` env var) that strictly blocks real OKX orders during system updates and investigations.
+- 🔌 **Maintenance API & CLI**: Implemented `/api/v1/daemon/maintenance/{status,enable,disable}` and `scripts/maintenance.py` CLI for instant zero-loss maintenance locking.
+- 🖥️ **UI Dashboard Toggle**: Added interactive Maintenance Mode toggle & status indicator in the top header.
+
+---
+
 ## 🚀 [0.30.6] - 2026-08-24
 
 ### 🛡️ OKX Stop Loss Execution Hardening & Duplicate Dispatch Fix
