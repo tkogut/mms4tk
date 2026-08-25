@@ -59,15 +59,46 @@ latest_signal: Optional[SignalResult] = None
 
 
 async def verify_api_key(x_mms4_api_key: Optional[str] = Header(None, alias="X-MMS4-API-KEY")) -> str:
-    """Verify X-MMS4-API-KEY header against MMS4_API_KEY env var."""
+    """Verify X-MMS4-API-KEY against the operator key, or the agent key when configured."""
     expected_key = os.getenv("MMS4_API_KEY")
+    # The agent may hold its own credential (MMS4_HERMES_API_KEY). Both authenticate;
+    # they differ only in the identity resolve_caller_identity() derives from them,
+    # which is what the Manual Override lock keys on.
+    hermes_key = os.getenv("MMS4_HERMES_API_KEY")
+    accepted = {k for k in (expected_key, hermes_key, "test-api-auth-key-unit-test") if k}
     if expected_key:
-        if not x_mms4_api_key or (x_mms4_api_key != expected_key and x_mms4_api_key != "test-api-auth-key-unit-test"):
+        if not x_mms4_api_key or x_mms4_api_key not in accepted:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unauthorized: Invalid or missing X-MMS4-API-KEY header"
             )
     return x_mms4_api_key or ""
+
+
+def resolve_caller_identity(
+    x_mms4_api_key: Optional[str] = Header(None, alias="X-MMS4-API-KEY"),
+) -> str:
+    """
+    Who is calling: "ui" (operator) or "hermes" (AI agent)?
+
+    Derived from the presented CREDENTIAL, never from the request body. A caller-supplied
+    "source" field is self-declared and therefore worthless as an authorization signal —
+    an agent holding a valid key can put any value in it.
+
+    Set MMS4_HERMES_API_KEY to a distinct key for the agent to make this cryptographic.
+    Without it the two callers are genuinely indistinguishable (they share one key), so
+    the Manual Override lock degrades to advisory; is_lock_enforceable() reports that
+    honestly rather than implying a guarantee that does not exist.
+    """
+    hermes_key = os.getenv("MMS4_HERMES_API_KEY")
+    if hermes_key and x_mms4_api_key and x_mms4_api_key == hermes_key:
+        return "hermes"
+    return "ui"
+
+
+def is_lock_enforceable() -> bool:
+    """True when the operator/agent split is backed by separate credentials."""
+    return bool(os.getenv("MMS4_HERMES_API_KEY"))
 
 
 @asynccontextmanager
@@ -864,8 +895,10 @@ class SettingsUpdateRequest(BaseModel):
     # ── Regime-Switching Take Profit ──
     tp_mode: Optional[str] = Field(default=None, description="CLASSIC | DYNAMIC_MIDLINE")
     tp_auto_regime: Optional[bool] = Field(default=None, description="True = AI Auto-Regime (Hermes manages tp_mode), False = Manual Override")
-    # Source tag: 'ui' for dashboard, 'hermes' for AI agent — controls kłódka enforcement
-    _source: str = "ui"
+    # NOTE: there is deliberately no "source" field here. A leading-underscore field is a
+    # Pydantic v2 PRIVATE attribute — never populated from the request body — so the
+    # previous `_source` was always "ui" and the lock branch below was dead code. Caller
+    # identity now comes from resolve_caller_identity(), i.e. from the credential.
 
 
 @app.get("/api/v1/settings", tags=["Settings"])
@@ -890,7 +923,7 @@ async def get_settings() -> Dict[str, Any]:
 
 
 @app.post("/api/v1/settings/update", tags=["Settings"], dependencies=[Depends(verify_api_key)])
-async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
+async def update_settings(req: SettingsUpdateRequest, caller: str = Depends(resolve_caller_identity)) -> Dict[str, Any]:
     """Update runtime strategy parameters, leverage, SL %, risk profile, and adaptive engine settings in SQLite DB."""
     db_updates: Dict[str, Any] = {}
     env_updates: Dict[str, Any] = {}
@@ -1005,11 +1038,11 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="tp_mode must be 'CLASSIC' or 'DYNAMIC_MIDLINE'"
             )
-        # Kłódka enforcement: if tp_auto_regime is OFF (Manual Override active),
-        # reject tp_mode changes from Hermes/AI agent (source != 'ui')
-        source = getattr(req, "_source", "ui")
+        # Kłódka enforcement: with Manual Override active (tp_auto_regime OFF), reject
+        # tp_mode changes coming from the AI agent. Identity comes from the credential
+        # (resolve_caller_identity), not from the payload.
         current_auto = logger_db.get_setting("tp_auto_regime", "false") if logger_db else "false"
-        if source == "hermes" and current_auto.lower() != "true":
+        if caller == "hermes" and current_auto.lower() != "true":
             logger.warning(
                 f"🔒 Kłódka (Manual Override): Hermes tried to set tp_mode={tp_mode_clean} "
                 f"but tp_auto_regime is OFF. Change rejected. Operator has priority."
@@ -1050,7 +1083,10 @@ class TPRegimeRequest(BaseModel):
 
 
 @app.post("/api/v1/settings/tp_regime", tags=["Settings"], dependencies=[Depends(verify_api_key)])
-async def set_tp_regime(req: TPRegimeRequest) -> Dict[str, Any]:
+async def set_tp_regime(
+    req: TPRegimeRequest,
+    caller: str = Depends(resolve_caller_identity),
+) -> Dict[str, Any]:
     """
     Set Take Profit regime mode ('CLASSIC' | 'DYNAMIC_MIDLINE').
     Enforces Manual Override (Kłódka): If tp_auto_regime is OFF, AI agent (Hermes) requests are rejected.
@@ -1065,9 +1101,19 @@ async def set_tp_regime(req: TPRegimeRequest) -> Dict[str, Any]:
     current_auto = logger_db.get_setting("tp_auto_regime", "false") if logger_db else "false"
     is_auto_on = current_auto.lower() == "true"
 
-    if req.source.lower() == "hermes" and not is_auto_on:
+    # req.source is caller-declared and kept only as a log annotation; the lock keys on
+    # `caller`, resolved from the credential. Explicit null must not crash the endpoint.
+    declared = (req.source or "unspecified").lower()
+    if not is_lock_enforceable():
         logger.warning(
-            f"🔒 Kłódka (Manual Override): Hermes tried to switch TP mode to {tp_mode_clean}, "
+            "🔓 Manual Override lock is ADVISORY: MMS4_HERMES_API_KEY is not set, so the "
+            "operator and the agent share one credential and cannot be told apart. "
+            "Set a distinct agent key to make the lock enforceable."
+        )
+
+    if caller == "hermes" and not is_auto_on:
+        logger.warning(
+            f"🔒 Kłódka (Manual Override): agent tried to switch TP mode to {tp_mode_clean}, "
             f"but tp_auto_regime is OFF. Request rejected. Manual override active."
         )
         return {
@@ -1078,9 +1124,12 @@ async def set_tp_regime(req: TPRegimeRequest) -> Dict[str, Any]:
         }
 
     if logger_db:
-        logger_db.set_setting("tp_mode", tp_mode_clean, updated_by=req.source)
+        logger_db.set_setting("tp_mode", tp_mode_clean, updated_by=caller)
 
-    logger.info(f"Take Profit regime switched to {tp_mode_clean} by {req.source}. Reason: {req.reason}")
+    logger.info(
+        f"Take Profit regime switched to {tp_mode_clean} by {caller} "
+        f"(declared source: {declared}). Reason: {req.reason}"
+    )
     return {
         "status": "success",
         "message": f"Take Profit regime set to {tp_mode_clean}",
