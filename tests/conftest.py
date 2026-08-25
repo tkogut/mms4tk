@@ -17,8 +17,23 @@ protect the rest. A class-level patch protects all of them — including instanc
 BEFORE the fixture runs, because attribute lookup on an instance falls through to the
 class when there is no instance-level override.
 """
+import os
+import tempfile
 import time
 from typing import Any, Dict, List, Optional
+
+# ---------------------------------------------------------------------------
+# Point the whole test session at a throwaway SQLite file BEFORE any mms4tk
+# module is imported. logger_db resolves DEFAULT_DB_PATH at import time, and
+# mms4tk.api builds a module-level LoggerDB() singleton from it — so without
+# this, tests write live trading settings straight into the production SSOT
+# (.agents/swarm/logs.db). Verified in practice: a test-suite run left
+# tp_mode/tp_auto_regime rows tagged 'test_cleanup' in the real database, which
+# on the VPS would silently drop a running DYNAMIC_MIDLINE regime to CLASSIC.
+# ---------------------------------------------------------------------------
+os.environ.setdefault(
+    "MMS4_DB_PATH", os.path.join(tempfile.mkdtemp(prefix="mms4tk-tests-"), "logs.db")
+)
 
 import pytest
 
@@ -150,7 +165,6 @@ def _no_real_okx_network(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_system_settings():
     """Ensure clean default environment and database settings for every test."""
-    import os
     from mms4tk.api import logger_db as api_logger_db, daemon as api_daemon
     
     default_env = {
@@ -171,6 +185,8 @@ def _isolate_system_settings():
             "adaptive_vr_low": "0.8",
             "time_lock_start": "13:30",
             "time_lock_end": "14:30",
+            "tp_mode": "CLASSIC",
+            "tp_auto_regime": "false",
         }, updated_by="test_isolation_init")
     api_daemon.total_max_portfolio_margin_usd = 0.0
 
@@ -186,6 +202,8 @@ def _isolate_system_settings():
             "adaptive_vr_low": "0.8",
             "time_lock_start": "13:30",
             "time_lock_end": "14:30",
+            "tp_mode": "CLASSIC",
+            "tp_auto_regime": "false",
         }, updated_by="test_isolation_cleanup")
     api_daemon.total_max_portfolio_margin_usd = 0.0
 
