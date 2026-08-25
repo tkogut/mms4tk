@@ -122,6 +122,15 @@ class LoggerDB:
                 )
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS midline_tp_taken (
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    taken_at TEXT NOT NULL,
+                    price REAL NOT NULL DEFAULT 0.0,
+                    PRIMARY KEY (symbol, side)
+                )
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_snapshots (
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
@@ -558,6 +567,57 @@ class LoggerDB:
         """Return the full addon ledger (dashboard/API introspection)."""
         with self._get_connection() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM position_addons ORDER BY symbol, side")]
+
+    # ── Midline TP1 ledger (DYNAMIC_MIDLINE scale-out) ──────────────────
+
+    def is_midline_tp_taken(self, symbol: str, side: str) -> bool:
+        """
+        Has the 50% midline scale-out already fired for this open position?
+
+        Persisted rather than held in memory: a daemon restart with the position still
+        open, or a transient fetch_positions() failure that clears in-memory state, would
+        otherwise let the same position be halved again — the midline trigger is a level
+        test, not a crossing test, so it re-fires on the very next cycle.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM midline_tp_taken WHERE symbol = ? AND side = ?",
+                (symbol, side.lower())
+            ).fetchone()
+        return row is not None
+
+    def record_midline_tp(self, symbol: str, side: str, price: float = 0.0) -> None:
+        """Mark the midline scale-out as done for this position."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO midline_tp_taken (symbol, side, taken_at, price)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(symbol, side) DO UPDATE SET
+                    taken_at = excluded.taken_at,
+                    price = excluded.price
+                """,
+                (symbol, side.lower(), timestamp, float(price))
+            )
+            conn.commit()
+
+    def clear_midline_tp(self, symbol: str, side: Optional[str] = None) -> None:
+        """Clear the marker once the position is fully closed, flipped or reconciled."""
+        with self._get_connection() as conn:
+            if side is None:
+                conn.execute("DELETE FROM midline_tp_taken WHERE symbol = ?", (symbol,))
+            else:
+                conn.execute(
+                    "DELETE FROM midline_tp_taken WHERE symbol = ? AND side = ?",
+                    (symbol, side.lower())
+                )
+            conn.commit()
+
+    def get_all_midline_tp(self) -> List[Dict[str, Any]]:
+        """Full midline TP ledger, for dashboard/API introspection."""
+        with self._get_connection() as conn:
+            return [dict(r) for r in conn.execute("SELECT * FROM midline_tp_taken ORDER BY symbol, side")]
 
     # ── Position snapshots (stop-loss reconciliation) ───────────────────
 
