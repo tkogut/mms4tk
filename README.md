@@ -2,10 +2,10 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
-[![React Dashboard](https://img.shields.io/badge/React--UI-v0.34.0-blue.svg)](ui_dashboard/src/App.jsx)
+[![React Dashboard](https://img.shields.io/badge/React--UI-v0.33.1-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.34.0](https://img.shields.io/badge/Version-0.34.0-emerald.svg)](VERSION)
+[![Version: 0.33.1](https://img.shields.io/badge/Version-0.33.1-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -15,12 +15,12 @@ combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React da
 (`ui_dashboard`), and an autonomous LLM strategic supervisor
 ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
 
-> **v0.34.0 features Take Profit Regime-Switching (`DYNAMIC_MIDLINE` & `CLASSIC`) with Manual Override (Kłódka)**, **SQLite Single Source of Truth (SSOT)**, **Hybrid Adaptive Engine**, and **Portfolio Margin Guard Presets**.
-> All runtime strategy, risk parameters, TP regime modes, and symbol allocations are persisted directly in SQLite (`logs.db`),
+> **v0.33.1 features the SQLite Single Source of Truth (SSOT)**, **Hybrid Adaptive Engine**, and **Portfolio Margin Guard Presets**.
+> All runtime strategy, risk parameters, and symbol allocations are persisted directly in SQLite (`logs.db`),
 > guaranteeing immunity against container rebuilds and `.env` clobbering.
 > The execution engine dynamically computes the Volatility Ratio ($VR$) to filter out high-risk addons
 > during violent breakout expansions, mandates Sweep Rejection wicks during compression, blocks shorting
-> during the US Open institutional liquidity window (13:30–14:30 UTC), executes 50% TP1 scale-outs on TMA mid-line touch in consolidation regimes, and caps total portfolio margin
+> during the US Open institutional liquidity window (13:30–14:30 UTC), and caps total portfolio margin
 > with interactive 1-click presets (`MAX OKX`, `SUMA PAR`).
 
 ---
@@ -29,10 +29,10 @@ combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React da
 
 ```mermaid
 flowchart TD
-    subgraph UI["1. React Dashboard (v0.34.0)"]
+    subgraph UI["1. React Dashboard (v0.33.1)"]
         A1["Multi-Symbol Manager<br/>(per-symbol allocation USD, Base/Add ratio, timeframe)"]
         A2["Live Risk Grid<br/>(state, leverage, SIZE multiplier, resolved notional)"]
-        A3["Settings & TP Regime Controls<br/>(TP Mode, AI Auto-Regime Toggle, VR, Time-Lock, Presets)"]
+        A3["Settings & Adaptive Engine Controls<br/>(VR High/Low, Time-Lock, Portfolio Guard Presets)"]
     end
 
     subgraph DB["2. SQLite SSOT Database (logs.db)"]

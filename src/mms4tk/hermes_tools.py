@@ -273,33 +273,6 @@ class HermesToolGenerator:
                         "required": ["decision"]
                     }
                 }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "mms4_set_tp_regime",
-                    "description": "Switch Take Profit regime mode ('CLASSIC' | 'DYNAMIC_MIDLINE'). Enforces Manual Override: if tp_auto_regime is OFF, request is rejected with warning.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "tp_mode": {
-                                "type": "string",
-                                "enum": ["CLASSIC", "DYNAMIC_MIDLINE"],
-                                "description": "Target Take Profit regime mode"
-                            },
-                            "reason": {
-                                "type": "string",
-                                "default": "Hermes market regime analysis",
-                                "description": "Analytical rationale for switching TP regime"
-                            },
-                            "x_mms4_api_key": {
-                                "type": "string",
-                                "description": "Authentication key for X-MMS4-API-KEY header."
-                            }
-                        },
-                        "required": ["tp_mode"]
-                    }
-                }
             }
         ]
 
