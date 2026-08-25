@@ -182,6 +182,8 @@ class DaemonStatusResponse(BaseModel):
     adaptive_vr_low: Optional[float] = 0.8
     time_lock_start: Optional[str] = "13:30"
     time_lock_end: Optional[str] = "14:30"
+    tp_mode: Optional[str] = "CLASSIC"
+    tp_auto_regime: Optional[bool] = False
     maintenance_mode: Optional[bool] = False
 
 
@@ -859,6 +861,12 @@ class SettingsUpdateRequest(BaseModel):
     time_lock_start: Optional[str] = Field(default=None, description="Time Lock Start in HH:MM (default 13:30)")
     time_lock_end: Optional[str] = Field(default=None, description="Time Lock End in HH:MM (default 14:30)")
 
+    # ── Regime-Switching Take Profit ──
+    tp_mode: Optional[str] = Field(default=None, description="CLASSIC | DYNAMIC_MIDLINE")
+    tp_auto_regime: Optional[bool] = Field(default=None, description="True = AI Auto-Regime (Hermes manages tp_mode), False = Manual Override")
+    # Source tag: 'ui' for dashboard, 'hermes' for AI agent — controls kłódka enforcement
+    _source: str = "ui"
+
 
 @app.get("/api/v1/settings", tags=["Settings"])
 async def get_settings() -> Dict[str, Any]:
@@ -876,6 +884,8 @@ async def get_settings() -> Dict[str, Any]:
         "adaptive_vr_low": float(db_settings.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
         "time_lock_start": db_settings.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_settings.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
+        "tp_mode": db_settings.get("tp_mode", "CLASSIC"),
+        "tp_auto_regime": db_settings.get("tp_auto_regime", "false").lower() == "true",
     }
 
 
@@ -984,6 +994,29 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         os.environ["MMS4_API_KEY"] = new_k
         env_updates["MMS4_API_KEY"] = new_k
 
+    # ── Regime-Switching Take Profit with Manual Override (Kłódka) ──
+    if req.tp_auto_regime is not None:
+        db_updates["tp_auto_regime"] = "true" if req.tp_auto_regime else "false"
+
+    if req.tp_mode is not None:
+        tp_mode_clean = str(req.tp_mode).strip().upper()
+        if tp_mode_clean not in ["CLASSIC", "DYNAMIC_MIDLINE"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tp_mode must be 'CLASSIC' or 'DYNAMIC_MIDLINE'"
+            )
+        # Kłódka enforcement: if tp_auto_regime is OFF (Manual Override active),
+        # reject tp_mode changes from Hermes/AI agent (source != 'ui')
+        source = getattr(req, "_source", "ui")
+        current_auto = logger_db.get_setting("tp_auto_regime", "false") if logger_db else "false"
+        if source == "hermes" and current_auto.lower() != "true":
+            logger.warning(
+                f"🔒 Kłódka (Manual Override): Hermes tried to set tp_mode={tp_mode_clean} "
+                f"but tp_auto_regime is OFF. Change rejected. Operator has priority."
+            )
+        else:
+            db_updates["tp_mode"] = tp_mode_clean
+
     # Persist to SQLite system_settings table (SSOT)
     if db_updates and logger_db:
         logger_db.set_settings_bulk(db_updates, updated_by="api_dashboard")
@@ -1005,8 +1038,55 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         "time_lock_start": db_current.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_current.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
         "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
+        "tp_mode": db_current.get("tp_mode", "CLASSIC"),
+        "tp_auto_regime": db_current.get("tp_auto_regime", "false").lower() == "true",
     }
 
+
+class TPRegimeRequest(BaseModel):
+    tp_mode: str = Field(description="Take profit mode: 'CLASSIC' | 'DYNAMIC_MIDLINE'")
+    reason: Optional[str] = Field(default="", description="Reason for regime switch")
+    source: Optional[str] = Field(default="hermes", description="'hermes' for AI agent, 'ui' for operator")
+
+
+@app.post("/api/v1/settings/tp_regime", tags=["Settings"], dependencies=[Depends(verify_api_key)])
+async def set_tp_regime(req: TPRegimeRequest) -> Dict[str, Any]:
+    """
+    Set Take Profit regime mode ('CLASSIC' | 'DYNAMIC_MIDLINE').
+    Enforces Manual Override (Kłódka): If tp_auto_regime is OFF, AI agent (Hermes) requests are rejected.
+    """
+    tp_mode_clean = str(req.tp_mode).strip().upper()
+    if tp_mode_clean not in ["CLASSIC", "DYNAMIC_MIDLINE"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tp_mode must be 'CLASSIC' or 'DYNAMIC_MIDLINE'"
+        )
+
+    current_auto = logger_db.get_setting("tp_auto_regime", "false") if logger_db else "false"
+    is_auto_on = current_auto.lower() == "true"
+
+    if req.source.lower() == "hermes" and not is_auto_on:
+        logger.warning(
+            f"🔒 Kłódka (Manual Override): Hermes tried to switch TP mode to {tp_mode_clean}, "
+            f"but tp_auto_regime is OFF. Request rejected. Manual override active."
+        )
+        return {
+            "status": "rejected",
+            "message": "Manual Override active (tp_auto_regime is OFF). AI regime changes are blocked.",
+            "tp_mode": logger_db.get_setting("tp_mode", "CLASSIC") if logger_db else "CLASSIC",
+            "tp_auto_regime": False
+        }
+
+    if logger_db:
+        logger_db.set_setting("tp_mode", tp_mode_clean, updated_by=req.source)
+
+    logger.info(f"Take Profit regime switched to {tp_mode_clean} by {req.source}. Reason: {req.reason}")
+    return {
+        "status": "success",
+        "message": f"Take Profit regime set to {tp_mode_clean}",
+        "tp_mode": tp_mode_clean,
+        "tp_auto_regime": is_auto_on
+    }
 
 
 class PasswordChangeRequest(BaseModel):
