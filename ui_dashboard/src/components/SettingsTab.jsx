@@ -59,6 +59,16 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
     }
   }, [daemonData]);
 
+  // While Auto-Regime is on, the AI owns tp_mode — keep mirroring it from the backend
+  // even after initialization. The one-shot sync above would otherwise leave a stale
+  // value on screen, and saving any unrelated field would post it back and silently
+  // override the regime the AI had chosen.
+  useEffect(() => {
+    if (daemonData?.tp_auto_regime && daemonData.tp_mode) {
+      setTpMode(daemonData.tp_mode);
+    }
+  }, [daemonData?.tp_auto_regime, daemonData?.tp_mode]);
+
   // Keep currentApiKey in sync if apiKey prop changes
   useEffect(() => {
     if (apiKey) {
@@ -113,7 +123,9 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           time_lock_start: timeLockStart,
           time_lock_end: timeLockEnd,
           total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap),
-          tp_mode: tpMode,
+          // tp_mode is omitted while Auto-Regime is on: the control is disabled in the
+          // UI, so sending it could only ever push a stale value over the AI's choice.
+          ...(tpAutoRegime ? {} : { tp_mode: tpMode }),
           tp_auto_regime: tpAutoRegime
         });
       }
