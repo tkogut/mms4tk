@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sliders, Lock, Key, Save, Shield, CheckCircle2, Zap, Clock, AlertTriangle } from 'lucide-react';
+import { Sliders, Lock, Key, Save, Shield, CheckCircle2, Zap, Clock, AlertTriangle, Target, Bot } from 'lucide-react';
 
 export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, daemonData }) {
   const [riskProfile, setRiskProfile] = useState('MODERATE');
@@ -15,6 +15,10 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   const [timeLockStart, setTimeLockStart] = useState(daemonData?.time_lock_start || '13:30');
   const [timeLockEnd, setTimeLockEnd] = useState(daemonData?.time_lock_end || '14:30');
   const [portfolioMarginCap, setPortfolioMarginCap] = useState(daemonData?.total_max_portfolio_margin_usd ?? 0);
+
+  // ── Regime-Switching Take Profit State ──
+  const [tpMode, setTpMode] = useState(daemonData?.tp_mode || 'CLASSIC');
+  const [tpAutoRegime, setTpAutoRegime] = useState(daemonData?.tp_auto_regime || false);
 
   // ── Margin & Symbol Allocations for Quick Presets ──
   const [symbolsTotalAllocation, setSymbolsTotalAllocation] = useState(0);
@@ -49,6 +53,8 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
       if (daemonData.time_lock_start) setTimeLockStart(daemonData.time_lock_start);
       if (daemonData.time_lock_end) setTimeLockEnd(daemonData.time_lock_end);
       if (daemonData.total_max_portfolio_margin_usd !== undefined) setPortfolioMarginCap(daemonData.total_max_portfolio_margin_usd);
+      if (daemonData.tp_mode) setTpMode(daemonData.tp_mode);
+      if (daemonData.tp_auto_regime !== undefined) setTpAutoRegime(daemonData.tp_auto_regime);
       isInitializedRef.current = true;
     }
   }, [daemonData]);
@@ -106,7 +112,9 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           adaptive_vr_low: parseFloat(vrLow),
           time_lock_start: timeLockStart,
           time_lock_end: timeLockEnd,
-          total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap)
+          total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap),
+          tp_mode: tpMode,
+          tp_auto_regime: tpAutoRegime
         });
       }
       setSavedSuccess(true);
@@ -439,6 +447,109 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
               Tryb CLASSIC aktywny: kalkulacje VR i blokady czasowe US Open są pomijane (Standardowa strategia MMS v4).
             </div>
           )}
+        </div>
+
+        {/* ── Zarządzanie Reżimem Take Profit (Regime-Switching TP Card) ── */}
+        <div className="p-4 sm:p-5 bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950/30 border border-emerald-500/30 rounded-xl space-y-4 shadow-inner">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-emerald-500/20">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20 shrink-0 mt-0.5 sm:mt-0">
+                <Target className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-gray-100 flex flex-wrap items-center gap-2">
+                  <span>Reżim Take Profit (Regime-Switching)</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
+                    tpAutoRegime
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {tpAutoRegime ? '🤖 AI AUTO-REGIME' : '🔒 MANUAL OVERRIDE'}
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold bg-slate-800 text-emerald-300 border border-emerald-500/30">
+                    {tpMode}
+                  </span>
+                </h4>
+                <p className="text-[11px] text-slate-400">Strategia realizacji zysków: Pełne wyjście na bandzie vs 50% Scale-Out na linii środkowej TMA (μ)</p>
+              </div>
+            </div>
+
+            {/* AI Auto-Regime Toggle */}
+            <div className="flex items-center gap-2.5 bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 self-start sm:self-auto">
+              <div className="text-right">
+                <span className="block text-[11px] font-semibold text-slate-200">AI Auto-Regime</span>
+                <span className="block text-[9px] text-slate-400">Hermes H4/D1</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTpAutoRegime(!tpAutoRegime)}
+                className={`w-11 h-5 flex items-center rounded-full p-0.5 transition-colors shrink-0 ${
+                  tpAutoRegime ? 'bg-purple-600 justify-end' : 'bg-slate-800 justify-start'
+                }`}
+                title={tpAutoRegime ? 'Kliknij, aby włączyć Manual Override (Kłódkę)' : 'Kliknij, aby przekazać kontrolę AI'}
+              >
+                <span className="w-3.5 h-3.5 rounded-full bg-white shadow-md" />
+              </button>
+            </div>
+          </div>
+
+          {/* TP Mode Selector */}
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <span>Wybrany Tryb Take Profit:</span>
+                {tpAutoRegime && (
+                  <span className="text-[10px] text-purple-400 font-mono flex items-center gap-1">
+                    <Bot className="w-3 h-3 inline" /> Zarządzane przez AI (Kłódka aktywna)
+                  </span>
+                )}
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  disabled={tpAutoRegime}
+                  onClick={() => setTpMode('CLASSIC')}
+                  className={`px-3 py-2 rounded-lg border text-left sm:text-center text-xs font-semibold transition-all cursor-pointer ${
+                    tpMode === 'CLASSIC'
+                      ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300 shadow-sm font-bold'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                  } ${tpAutoRegime ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <div className="font-mono">CLASSIC</div>
+                  <div className="text-[10px] text-slate-400">100% na bandzie przeciwległej</div>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={tpAutoRegime}
+                  onClick={() => setTpMode('DYNAMIC_MIDLINE')}
+                  className={`px-3 py-2 rounded-lg border text-left sm:text-center text-xs font-semibold transition-all cursor-pointer ${
+                    tpMode === 'DYNAMIC_MIDLINE'
+                      ? 'bg-indigo-950/80 border-indigo-500/60 text-indigo-300 shadow-sm font-bold'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                  } ${tpAutoRegime ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <div className="font-mono">DYNAMIC_MIDLINE</div>
+                  <div className="text-[10px] text-slate-400">50% TP na μ + 50% na bandzie</div>
+                </button>
+              </div>
+            </div>
+
+            {/* Explanation card */}
+            <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-lg text-xs space-y-1.5">
+              <div className="text-slate-300 font-medium">
+                {tpMode === 'DYNAMIC_MIDLINE' ? (
+                  <span>🎯 <strong className="text-indigo-300">DYNAMIC_MIDLINE</strong>: Przy dotknięciu linii środkowej TMA (μ) bot natychmiast zamyka 50% pozycji (Scale-Out). Pozostałe 50% pozycji biegnie do przeciwległej bandy TMA lub twardego Stop Loss (-2.0%).</span>
+                ) : (
+                  <span>📐 <strong className="text-emerald-300">CLASSIC</strong>: Pozycja zamykana jest w całości (100%) wyłącznie przy uderzeniu w przeciwległą bandę TMA (MMS v4 Pure Mean-Reversion).</span>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-500 border-t border-slate-800/60 pt-1.5">
+                🛡️ <strong>Reguła Kapitałowa</strong>: Brak przesuwania SL na Break-Even! Jeżeli po realizacji TP1 rynek zawróci i wybije SL, State Machine bezwzględnie redukuje lewar do SCOUT_MODE (x0.1).
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* API Authentication Key */}

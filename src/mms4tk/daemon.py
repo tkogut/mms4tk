@@ -116,6 +116,7 @@ class MMS4Daemon:
         self.last_signal: Optional[SignalResult] = None
         self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager()
         self._last_candle_ts: Dict[str, int] = {}  # per-symbol: timestamp of last known closed candle
+        self._midline_tp_taken: Dict[str, bool] = {}  # per-symbol_side: tracks if 50% TP1 scale-out was already executed
 
         # Stop-loss percentages used when opening; reconciliation compares the exit price
         # against these to decide whether a vanished position was a stop-out.
@@ -353,6 +354,12 @@ class MMS4Daemon:
         keeps it from re-issuing the same no-op DELETE 5 760 times a day per side.
         """
         key = (symbol, (side or "").lower())
+        if side:
+            self._midline_tp_taken.pop(f"{symbol}_{side.lower()}", None)
+        else:
+            self._midline_tp_taken.pop(f"{symbol}_long", None)
+            self._midline_tp_taken.pop(f"{symbol}_short", None)
+
         if key in self._addons_known_clear:
             return
         try:
@@ -773,16 +780,22 @@ class MMS4Daemon:
         # and executes protective Split/Close actions autonomously.
         # ────────────────────────────────────────────────────────────────
         try:
-            # Compute current ATR from CLOSED candles only — candles[-1] is still forming,
+            # Compute current ATR and TMA mid-line from CLOSED candles only — candles[-1] is still forming,
             # so including it makes the stagnation threshold repaint within the candle.
             current_atr = 0.0
+            current_tma_mid = 0.0
             closed_candles = candles[:-1] if len(candles) > 1 else candles
             if len(closed_candles) >= 20:
                 tma_df = TMAIndicator.calculate(closed_candles, IndicatorParams())
-                if not tma_df.empty and "atr" in tma_df.columns:
-                    last_valid_atr = tma_df["atr"].dropna()
-                    if len(last_valid_atr) > 0:
-                        current_atr = float(last_valid_atr.iloc[-1])
+                if not tma_df.empty:
+                    if "atr" in tma_df.columns:
+                        last_valid_atr = tma_df["atr"].dropna()
+                        if len(last_valid_atr) > 0:
+                            current_atr = float(last_valid_atr.iloc[-1])
+                    if "tma" in tma_df.columns:
+                        last_valid_tma = tma_df["tma"].dropna()
+                        if len(last_valid_tma) > 0:
+                            current_tma_mid = float(last_valid_tma.iloc[-1])
 
             # Load per-symbol inactivity config from symbols store
             try:
@@ -938,6 +951,97 @@ class MMS4Daemon:
         except Exception as inact_err:
             logger.error(f"Inactivity Manager error for {target_symbol}: {inact_err}")
 
+        # ────────────────────────────────────────────────────────────────
+        # DYNAMIC MIDLINE TAKE PROFIT (MMS4 Regime-Switching TP1)
+        # In DYNAMIC_MIDLINE mode, when an open position reaches the TMA mid-line (μ),
+        # execute a 50% scale-out (Take Profit 1) to lock in profits while leaving
+        # the remaining 50% to run to the opposite TMA band.
+        # CRITICAL: No moving SL to Break-Even! No state transition until full cycle close or SL.
+        # ────────────────────────────────────────────────────────────────
+        try:
+            current_tp_mode = (
+                self.logger_db.get_setting("tp_mode", "CLASSIC") if self.logger_db else "CLASSIC"
+            ).upper()
+            if (
+                current_tp_mode == "DYNAMIC_MIDLINE"
+                and active_pos is not None
+                and _pos_contracts(active_pos) > 0
+                and active_side in ["long", "short"]
+                and current_tma_mid > 0
+                and signal.price > 0
+            ):
+                tp_key = f"{target_symbol}_{active_side}"
+                if not self._midline_tp_taken.get(tp_key, False):
+                    hit_midline = False
+                    if active_side == "short" and signal.price <= current_tma_mid:
+                        hit_midline = True
+                    elif active_side == "long" and signal.price >= current_tma_mid:
+                        hit_midline = True
+
+                    if hit_midline:
+                        logger.info(
+                            f"🎯 DYNAMIC_MIDLINE TP1 Triggered for {target_symbol} {active_side.upper()}: "
+                            f"Price=${signal.price:,.4f} crossed TMA Midline=${current_tma_mid:,.4f}. "
+                            f"Executing 50% Scale-Out..."
+                        )
+                        reduce_result = await self.executor.reduce_position(
+                            symbol=target_symbol,
+                            side=active_side,
+                            reduction_pct=0.50,
+                            reason="DYNAMIC_MIDLINE_TP1"
+                        )
+                        status = (reduce_result or {}).get("status", "")
+                        if status != "not_divisible":
+                            self._midline_tp_taken[tp_key] = True
+                            outcome = "DYNAMIC_MIDLINE_TP1"
+                            details = (
+                                f"Take Profit 1 (Midline): Scaled out 50% of {active_side.upper()} "
+                                f"at ${signal.price:,.4f} (TMA Mid=${current_tma_mid:,.4f}). Remaining 50% running."
+                            )
+                            # Emit Telegram notification
+                            try:
+                                from mms4tk.hermes_webhook import HermesWebhookClient
+                                pnl_pct = (
+                                    (active_entry_price - signal.price) / active_entry_price
+                                    if active_side == "short"
+                                    else (signal.price - active_entry_price) / active_entry_price
+                                ) if active_entry_price > 0 else 0.0
+                                HermesWebhookClient.send_telegram(
+                                    title=f"🎯 TAKE PROFIT 1 (Midline): {target_symbol} {active_side.upper()}",
+                                    body=(
+                                        f"Zrealizowano Take Profit 1 (50% Scale-Out na linii środkowej TMA μ).\n"
+                                        f"- Wejście: `${active_entry_price:,.4f}`\n"
+                                        f"- Wyjście TP1: `${signal.price:,.4f}` (TMA Mid: `${current_tma_mid:,.4f}`)\n"
+                                        f"- Szacowany PnL TP1: `{pnl_pct*100:+.2f}%`\n"
+                                        f"- Pozostałe 50% pozycji biegnie do przeciwległej bandy TMA."
+                                    ),
+                                    priority=1,
+                                    dedupe_key=f"TP1_MID_{target_symbol}_{active_side}_{int(signal.price)}",
+                                )
+                            except Exception as tp_notify_err:
+                                logger.warning(f"Failed to send TP1 Telegram notification: {tp_notify_err}")
+
+                            self.logger_db.log_cycle(
+                                symbol=target_symbol,
+                                signal_type="DYNAMIC_MIDLINE_TP1",
+                                state=sym_state.value,
+                                leverage=sym_leverage,
+                                price=signal.price,
+                                outcome=outcome,
+                                details=details,
+                            )
+                            return {
+                                "symbol": target_symbol,
+                                "timestamp": now_iso,
+                                "signal_type": "DYNAMIC_MIDLINE_TP1",
+                                "outcome": outcome,
+                                "state": sym_state.value,
+                                "leverage": sym_leverage,
+                                "order": None,
+                                "reconciliation": reconciliation_events,
+                            }
+        except Exception as tp_err:
+            logger.error(f"Dynamic Midline TP error for {target_symbol}: {tp_err}")
 
         # ────────────────────────────────────────────────────────────────
         # HARD SIGNAL GATE
@@ -1408,6 +1512,8 @@ class MMS4Daemon:
             "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
             "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
             "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
+            "tp_mode": self.logger_db.get_setting("tp_mode", "CLASSIC") if self.logger_db else "CLASSIC",
+            "tp_auto_regime": (self.logger_db.get_setting("tp_auto_regime", "false") if self.logger_db else "false").lower() == "true",
         }
 
     def _safe_addon_ledger(self) -> List[Dict[str, Any]]:

@@ -4,6 +4,17 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.34.0] - 2026-08-25
+
+### 🎯 Take Profit Regime-Switching & Manual Override (Kłódka)
+- 🎯 **DYNAMIC_MIDLINE Take Profit Mode**: Implemented 50% Scale-Out (Take Profit 1) executed automatically when price touches or crosses the TMA mid-line ($\mu$). The remaining 50% runs to the opposite TMA band.
+- 🔒 **Logical Lock (Manual Override / Kłódka)**: Added operator override protection in SQLite SSOT (`system_settings.tp_auto_regime`). When Auto-Regime is OFF, AI agent (Hermes) regime modification attempts are blocked, giving operator 100% priority.
+- 🤖 **Hermes Tooling & Endpoint**: Added `mms4_set_tp_regime` function tool and `POST /api/v1/settings/tp_regime` endpoint with strict lock checking.
+- 🛡️ **Capital & State Machine Integrity**: SL is strictly never moved to Break-Even. If a position takes partial TP1 and the remaining 50% later hits Stop Loss ($\ge 2.0\%$), the State Machine reliably transitions to `SCOUT_MODE` (leverage x0.1 sizing).
+- 🎨 **React Dashboard Control**: Added dedicated "Take Profit Regime Management" card in Settings tab with AI Auto-Regime toggle, dynamic mode selectors, and live status badges.
+
+---
+
 ## 🚀 [0.33.1] - 2026-08-24
 
 ### 🐛 Fix Settings Input Polling Clashing & OKX Live Balance Field
