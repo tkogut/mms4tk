@@ -116,7 +116,10 @@ class MMS4Daemon:
         self.last_signal: Optional[SignalResult] = None
         self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager()
         self._last_candle_ts: Dict[str, int] = {}  # per-symbol: timestamp of last known closed candle
-        self._midline_tp_taken: Dict[str, bool] = {}  # per-symbol_side: tracks if 50% TP1 scale-out was already executed
+        # Write-through cache over the persisted midline_tp_taken table. The DB is the
+        # source of truth: an in-memory-only flag was lost on restart and on any cycle
+        # that transiently saw no positions, letting the same position be halved again.
+        self._midline_tp_taken: Dict[str, bool] = {}
 
         # Stop-loss percentages used when opening; reconciliation compares the exit price
         # against these to decide whether a vanished position was a stop-out.
@@ -359,6 +362,10 @@ class MMS4Daemon:
         else:
             self._midline_tp_taken.pop(f"{symbol}_long", None)
             self._midline_tp_taken.pop(f"{symbol}_short", None)
+        try:
+            self.logger_db.clear_midline_tp(symbol, side)
+        except Exception as e:
+            logger.warning(f"Could not clear midline TP marker for {symbol}/{side}: {e}")
 
         if key in self._addons_known_clear:
             return
@@ -367,6 +374,32 @@ class MMS4Daemon:
             self._addons_known_clear.add(key)
         except Exception as e:
             logger.warning(f"Addon ledger clear failed for {symbol}: {e}")
+
+    # ── Midline TP1 ledger (persisted; see logger_db.midline_tp_taken) ──
+
+    def _is_midline_tp_taken(self, symbol: str, side: str) -> bool:
+        """True when the 50% midline scale-out already fired for this open position."""
+        key = f"{symbol}_{side.lower()}"
+        if self._midline_tp_taken.get(key, False):
+            return True
+        try:
+            taken = self.logger_db.is_midline_tp_taken(symbol, side)
+        except Exception as e:
+            # Fail CLOSED: an unreadable ledger must not be read as "not taken yet",
+            # which would cut another 50% off a position that was already halved.
+            logger.warning(f"Midline TP ledger read failed for {symbol}/{side}: {e}; assuming taken")
+            return True
+        if taken:
+            self._midline_tp_taken[key] = True
+        return taken
+
+    def _record_midline_tp(self, symbol: str, side: str, price: float) -> None:
+        """Persist the midline scale-out so a restart cannot repeat it."""
+        self._midline_tp_taken[f"{symbol}_{side.lower()}"] = True
+        try:
+            self.logger_db.record_midline_tp(symbol, side, price)
+        except Exception as e:
+            logger.error(f"Midline TP ledger write FAILED for {symbol}/{side}: {e}")
 
     @property
     def _addon_executed_symbols(self) -> set:
@@ -779,11 +812,19 @@ class MMS4Daemon:
         # Runs every cycle: tracks active positions, detects stagnation,
         # and executes protective Split/Close actions autonomously.
         # ────────────────────────────────────────────────────────────────
+        # Initialized ABOVE the try: the Dynamic Midline TP block below reads these, and
+        # an exception anywhere inside the Inactivity try (e.g. TMAIndicator.calculate on
+        # malformed candles) previously left them undefined — the TP block then raised
+        # NameError into its own broad except and TP1 silently stopped firing.
+        current_tma_mid: float = 0.0
+        active_pos: Optional[Dict[str, Any]] = None
+        active_side: str = ""
+        active_entry_price: float = 0.0
+
         try:
             # Compute current ATR and TMA mid-line from CLOSED candles only — candles[-1] is still forming,
             # so including it makes the stagnation threshold repaint within the candle.
             current_atr = 0.0
-            current_tma_mid = 0.0
             closed_candles = candles[:-1] if len(candles) > 1 else candles
             if len(closed_candles) >= 20:
                 tma_df = TMAIndicator.calculate(closed_candles, IndicatorParams())
@@ -818,8 +859,6 @@ class MMS4Daemon:
             # Independent of the signal direction: a position must be supervised even on
             # cycles where the engine produced no signal at all.
             active_pos = matching_pos or opposite_pos or next(iter(own_positions.values()), None)
-            active_side = ""
-            active_entry_price = 0.0
             if active_pos is not None:
                 if _pos_contracts(active_pos) > 0:
                     active_side = _pos_side(active_pos)
@@ -971,7 +1010,7 @@ class MMS4Daemon:
                 and signal.price > 0
             ):
                 tp_key = f"{target_symbol}_{active_side}"
-                if not self._midline_tp_taken.get(tp_key, False):
+                if not self._is_midline_tp_taken(target_symbol, active_side):
                     hit_midline = False
                     if active_side == "short" and signal.price <= current_tma_mid:
                         hit_midline = True
@@ -990,9 +1029,15 @@ class MMS4Daemon:
                             reduction_pct=0.50,
                             reason="DYNAMIC_MIDLINE_TP1"
                         )
-                        status = (reduce_result or {}).get("status", "")
-                        if status != "not_divisible":
-                            self._midline_tp_taken[tp_key] = True
+                        # Only a CONFIRMED reduction counts as TP1. Excluding just
+                        # "not_divisible" let "no_position" / "error" / "rejected" through:
+                        # when the position vanished between fetch_positions() and the
+                        # reduce (SL fill, manual close, race), the daemon still latched
+                        # the flag, logged a TP1 row and sent a Telegram quoting a PnL for
+                        # an order that was never placed. _close_succeeded is the predicate
+                        # already used by the take-profit flip for exactly this question.
+                        if self._close_succeeded(reduce_result):
+                            self._record_midline_tp(target_symbol, active_side, signal.price)
                             outcome = "DYNAMIC_MIDLINE_TP1"
                             details = (
                                 f"Take Profit 1 (Midline): Scaled out 50% of {active_side.upper()} "
@@ -1016,7 +1061,10 @@ class MMS4Daemon:
                                         f"- Pozostałe 50% pozycji biegnie do przeciwległej bandy TMA."
                                     ),
                                     priority=1,
-                                    dedupe_key=f"TP1_MID_{target_symbol}_{active_side}_{int(signal.price)}",
+                                    # Full price, not int(): for a sub-$1 instrument int(price) is always 0,
+                                    # so every TP1 alert shared one key and all but the first
+                                    # were suppressed.
+                                    dedupe_key=f"TP1_MID_{target_symbol}_{active_side}_{signal.price:.8f}",
                                 )
                             except Exception as tp_notify_err:
                                 logger.warning(f"Failed to send TP1 Telegram notification: {tp_notify_err}")
@@ -1040,8 +1088,30 @@ class MMS4Daemon:
                                 "order": None,
                                 "reconciliation": reconciliation_events,
                             }
+                        else:
+                            # TP1 did NOT execute. Leave _midline_tp_taken unset so a later
+                            # cycle can retry, and make the miss visible — silently skipping
+                            # here would hide a take-profit that never happened.
+                            fail_status = (reduce_result or {}).get("status", "unknown")
+                            logger.warning(
+                                f"⚠ DYNAMIC_MIDLINE TP1 NOT executed for {target_symbol} "
+                                f"{active_side.upper()}: reduce_position returned "
+                                f"'{fail_status}'. Flag not latched; will retry next cycle."
+                            )
+                            self.logger_db.log_cycle(
+                                symbol=target_symbol,
+                                signal_type="DYNAMIC_MIDLINE_TP1",
+                                state=sym_state.value,
+                                leverage=sym_leverage,
+                                price=signal.price,
+                                outcome="DYNAMIC_MIDLINE_TP1_FAILED",
+                                details=(
+                                    f"Midline TP1 attempt returned '{fail_status}' — no reduction "
+                                    f"was performed. Position left intact."
+                                ),
+                            )
         except Exception as tp_err:
-            logger.error(f"Dynamic Midline TP error for {target_symbol}: {tp_err}")
+            logger.error(f"Dynamic Midline TP error for {target_symbol}: {tp_err}", exc_info=True)
 
         # ────────────────────────────────────────────────────────────────
         # HARD SIGNAL GATE
