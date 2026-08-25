@@ -1,14 +1,14 @@
 # 📡 mms4tk REST API & Hermes Function Tools Reference
 
-**Application Version:** `v0.34.0`  
+**Application Version:** `v0.33.1`  
 This document provides technical documentation for all HTTP REST API endpoints exposed by `mms4tk` (FastAPI) and consumed by the **Hermes Agent** function-calling engine and Web Dashboard UI.
 
 ---
 
 ## 🗄️ Database Single Source of Truth (SSOT) Architecture
 
-Starting with **v0.32.0+**, all dynamic runtime trading, risk, strategy, TP regime modes, and Adaptive Hybrid Engine parameters are persisted in the SQLite relational database (`logs.db` at `/app/.agents/swarm/logs.db` on persistent Docker volume):
-- **`system_settings` Table**: Stores global system parameters (`tp_mode`, `tp_auto_regime`, `engine_mode`, `adaptive_vr_high`, `adaptive_vr_low`, `time_lock_start`, `time_lock_end`, `leverage`, `max_margin_usd`, `base_sl_pct`, `total_max_portfolio_margin_usd`).
+Starting with **v0.32.0+**, all dynamic runtime trading, risk, strategy, and Adaptive Hybrid Engine parameters are persisted in the SQLite relational database (`logs.db` at `/app/.agents/swarm/logs.db` on persistent Docker volume):
+- **`system_settings` Table**: Stores global system parameters (`engine_mode`, `adaptive_vr_high`, `adaptive_vr_low`, `time_lock_start`, `time_lock_end`, `leverage`, `max_margin_usd`, `base_sl_pct`, `total_max_portfolio_margin_usd`).
 - **`symbol_configurations` Table**: Stores per-symbol active flags, timeframe (`1m`–`1h`), allocation budget (`allocation_usd`), and Base/Add split ratios (`base_ratio`, `add_ratio`).
 - **Container Rebuild Immunity**: Guarantees that parameter updates made via Web UI or Hermes Agent live-reload immediately and are permanently preserved across container rebuilds and server restarts.
 - **Static Secrets**: API keys, OKX credentials, and Telegram tokens remain securely injected via `.env`.
@@ -36,7 +36,7 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
     ```json
     {
       "status": "ok",
-      "version": "0.34.0"
+      "version": "0.33.1"
     }
     ```
 
@@ -182,10 +182,10 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
 
 ---
 
-### 7. Settings & Take Profit Regime Configuration
+### 7. Settings & Adaptive Hybrid Engine Configuration
 - **`GET /api/v1/settings`**
   - **Auth**: Public
-  - **Description**: Returns all runtime risk parameters, TP regime mode, portfolio cap, and Adaptive Engine configuration from SQLite SSOT.
+  - **Description**: Returns all runtime risk parameters, portfolio cap, and Adaptive Engine configuration.
   - **Response**:
     ```json
     {
@@ -199,15 +199,13 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
       "adaptive_vr_high": 1.6,
       "adaptive_vr_low": 0.8,
       "time_lock_start": "13:30",
-      "time_lock_end": "14:30",
-      "tp_mode": "DYNAMIC_MIDLINE",
-      "tp_auto_regime": false
+      "time_lock_end": "14:30"
     }
     ```
 
 - **`POST /api/v1/settings/update`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
-  - **Description**: Updates strategy parameters, TP mode, leverage (1x–10x), Stop Loss %, portfolio cap, and Adaptive Engine settings in SQLite SSOT.
+  - **Description**: Updates strategy parameters, leverage (1x–10x), Stop Loss %, portfolio cap, and Adaptive Engine settings in memory and persists them to `.env`.
   - **Request Body**:
     ```json
     {
@@ -221,25 +219,10 @@ Unauthenticated mutating requests will return `401 Unauthorized`.
       "adaptive_vr_high": 1.6,
       "adaptive_vr_low": 0.8,
       "time_lock_start": "13:30",
-      "time_lock_end": "14:30",
-      "tp_mode": "DYNAMIC_MIDLINE",
-      "tp_auto_regime": false
+      "time_lock_end": "14:30"
     }
     ```
   - **Response**: Status object with all updated parameters.
-
-- **`POST /api/v1/settings/tp_regime`**
-  - **Auth**: Required (`X-MMS4-API-KEY`)
-  - **Description**: Switches Take Profit regime mode (`CLASSIC` | `DYNAMIC_MIDLINE`). Enforces Manual Override (Kłódka): when `tp_auto_regime` is `false`, AI agent requests are rejected.
-  - **Request Body**:
-    ```json
-    {
-      "tp_mode": "DYNAMIC_MIDLINE",
-      "reason": "Hermes consolidation regime analysis",
-      "source": "hermes"
-    }
-    ```
-  - **Response**: Status object indicating success or rejection.
 
 - **`POST /api/v1/settings/change_password`**
   - **Auth**: Required (`X-MMS4-API-KEY`)
