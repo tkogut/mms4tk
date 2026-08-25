@@ -1,0 +1,16 @@
+{
+  "conversation_id": "tp-regime-hardening-20260820",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/api.py",
+    "src/mms4tk/daemon.py",
+    "src/mms4tk/logger_db.py",
+    "tests/conftest.py",
+    "tests/test_tp_regime.py",
+    "ui_dashboard/src/components/SettingsTab.jsx"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-08-25T15:32:59Z",
+  "notes": "Fixes 4xHIGH + 3xMEDIUM + 1xLOW from v0.34.0 code review. Credential-based TP lock, no phantom TP1, persisted midline marker, test DB isolation, UI no longer reverts AI regime. 158 passed."
+}
