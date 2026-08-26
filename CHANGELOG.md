@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.2] - 2026-08-26
+
+### 🛡️ SSOT Allocation Hierarchy & Environment Cleanup (PLAN-003)
+- ⚖️ **Single Source of Truth Allocation**: Fixed `plan_allocation()` hierarchy to always prioritize per-symbol dynamic configuration (`allocation_usd` / `budget_usd`) over global margin cap without obsolete environment checks.
+- 🗄️ **SQLite SSOT for Engine Settings**: Updated `get_status()` in daemon to query runtime snapshot directly from `LoggerDB.get_all_settings()`.
+- 🧹 **.env Runtime Parameter Cleanup**: Removed runtime parameters (`MMS4_MAX_MARGIN_USD`, `MMS4_BASE_SL_PCT`, `MMS4_BASE_ALLOCATION`, `MMS4_ADDON_ALLOCATION`, `MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD`) from `.env` updates in `update_settings()`, preserving SQLite as the absolute SSOT.
+- 🧪 **Unit Test Suite**: Added 5 comprehensive tests in `tests/test_allocation_ssot.py` verifying allocation precedence, fallback, zero guards, and dynamic mutation safety.
+
+---
+
 ## 🚀 [0.33.1] - 2026-08-24
 
 ### 🐛 Fix Settings Input Polling Clashing & OKX Live Balance Field
