@@ -896,18 +896,14 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         daemon.addon_allocation = round(1.0 - daemon.base_allocation, 4)
         db_updates["base_allocation"] = str(daemon.base_allocation)
         db_updates["addon_allocation"] = str(daemon.addon_allocation)
-        env_updates["MMS4_BASE_ALLOCATION"] = str(daemon.base_allocation)
-        env_updates["MMS4_ADDON_ALLOCATION"] = str(daemon.addon_allocation)
     if req.max_margin_usd is not None:
         daemon.max_margin_usd = float(req.max_margin_usd)
         daemon.base_trade_usd = round(daemon.max_margin_usd * daemon.base_allocation, 2)
         daemon.addon_trade_usd = round(daemon.max_margin_usd * daemon.addon_allocation, 2)
         db_updates["max_margin_usd"] = str(daemon.max_margin_usd)
-        env_updates["MMS4_MAX_MARGIN_USD"] = str(daemon.max_margin_usd)
     if req.stop_loss_pct is not None:
         daemon.base_sl_pct = float(req.stop_loss_pct) / 100.0 if req.stop_loss_pct > 0.5 else float(req.stop_loss_pct)
         db_updates["base_sl_pct"] = str(daemon.base_sl_pct)
-        env_updates["MMS4_BASE_SL_PCT"] = str(daemon.base_sl_pct)
     if req.total_max_portfolio_margin_usd is not None:
         cap_val = float(req.total_max_portfolio_margin_usd)
         if cap_val < 0:
@@ -917,7 +913,6 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
             )
         daemon.total_max_portfolio_margin_usd = cap_val
         db_updates["total_max_portfolio_margin_usd"] = str(cap_val)
-        env_updates["MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD"] = str(cap_val)
 
     # Validate and apply 5 Adaptive Engine settings
     if req.engine_mode is not None:

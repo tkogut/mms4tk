@@ -151,7 +151,8 @@ def _no_real_okx_network(request, monkeypatch):
 def _isolate_system_settings():
     """Ensure clean default environment and database settings for every test."""
     import os
-    from mms4tk.api import logger_db as api_logger_db, daemon as api_daemon
+    from mms4tk.api import logger_db as api_logger_db, daemon as api_daemon, configured_symbols_store
+    from mms4tk.okx_executor import set_maintenance_lock
     
     default_env = {
         "MMS4_ENGINE_MODE": "CLASSIC",
@@ -159,11 +160,14 @@ def _isolate_system_settings():
         "MMS4_ADAPTIVE_VR_LOW": "0.8",
         "MMS4_TIME_LOCK_START": "13:30",
         "MMS4_TIME_LOCK_END": "14:30",
+        "MMS4_MAINTENANCE_MODE": "false",
     }
     
     # Snapshot before test
     for k, v in default_env.items():
         os.environ[k] = v
+    syms_snapshot = {k: dict(v) if isinstance(v, dict) else v for k, v in configured_symbols_store.items()}
+    set_maintenance_lock(False)
     if api_logger_db:
         api_logger_db.set_settings_bulk({
             "engine_mode": "CLASSIC",
@@ -179,6 +183,9 @@ def _isolate_system_settings():
     # Restore after test
     for k, v in default_env.items():
         os.environ[k] = v
+    set_maintenance_lock(False)
+    configured_symbols_store.clear()
+    configured_symbols_store.update({k: dict(v) if isinstance(v, dict) else v for k, v in syms_snapshot.items()})
     if api_logger_db:
         api_logger_db.set_settings_bulk({
             "engine_mode": "CLASSIC",
