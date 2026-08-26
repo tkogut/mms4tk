@@ -290,10 +290,9 @@ class MMS4Daemon:
                 sym_key = f"{sym_key}/USDC"
             sym_cfg = configured_symbols_store.get(sym_key) or configured_symbols_store.get(symbol) or {}
             if isinstance(sym_cfg, dict):
-                default_env_margin = float(os.getenv("MMS4_MAX_MARGIN_USD", os.getenv("MMS4_TRADE_AMOUNT_USD", "10.0")))
-                if sym_cfg.get("allocation_usd") is not None and abs(self.max_margin_usd - default_env_margin) < 1e-6:
+                if sym_cfg.get("allocation_usd") is not None and float(sym_cfg["allocation_usd"]) > 0:
                     sym_margin_usd = float(sym_cfg["allocation_usd"])
-                elif sym_cfg.get("budget_usd") is not None and abs(self.max_margin_usd - default_env_margin) < 1e-6:
+                elif sym_cfg.get("budget_usd") is not None and float(sym_cfg["budget_usd"]) > 0:
                     sym_margin_usd = float(sym_cfg["budget_usd"])
                 
                 if sym_cfg.get("base_ratio") is not None:
@@ -1382,6 +1381,13 @@ class MMS4Daemon:
             active_syms = [s for s, cfg in configured_symbols_store.items() if (isinstance(cfg, dict) and cfg.get("is_active")) or cfg is True]
         except Exception:
             active_syms = [self.symbol]
+        db_settings = {}
+        try:
+            if hasattr(self, "logger_db") and self.logger_db:
+                db_settings = self.logger_db.get_all_settings()
+        except Exception:
+            db_settings = {}
+
         return {
             "is_running": self._is_running,
             "maintenance_mode": is_maintenance_locked(),
@@ -1403,11 +1409,11 @@ class MMS4Daemon:
             "addon_sl_pct": self.addon_sl_pct,
             "total_max_portfolio_margin_usd": self.total_max_portfolio_margin_usd,
             "portfolio_margin_reserved_usd": round(self._reserved_notional_usd, 2),
-            "engine_mode": os.getenv("MMS4_ENGINE_MODE", "CLASSIC"),
-            "adaptive_vr_high": float(os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6")),
-            "adaptive_vr_low": float(os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8")),
-            "time_lock_start": os.getenv("MMS4_TIME_LOCK_START", "13:30"),
-            "time_lock_end": os.getenv("MMS4_TIME_LOCK_END", "14:30"),
+            "engine_mode": db_settings.get("engine_mode", os.getenv("MMS4_ENGINE_MODE", "CLASSIC")),
+            "adaptive_vr_high": float(db_settings.get("adaptive_vr_high", os.getenv("MMS4_ADAPTIVE_VR_HIGH", "1.6"))),
+            "adaptive_vr_low": float(db_settings.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
+            "time_lock_start": db_settings.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
+            "time_lock_end": db_settings.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
         }
 
     def _safe_addon_ledger(self) -> List[Dict[str, Any]]:

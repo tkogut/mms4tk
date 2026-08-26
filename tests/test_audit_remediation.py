@@ -629,6 +629,8 @@ def test_scout_reduction_is_scale_free(cap, db):
     never on the size of the account. Forward-testing at $10 and running at $1000 have
     to exercise identical arithmetic.
     """
+    from mms4tk.api import configured_symbols_store
+    configured_symbols_store["ETH/USDC"] = {"allocation_usd": cap, "base_ratio": 70, "add_ratio": 30}
     sm = MMS4StateManager(trading_symbol="ETH/USDC")
     d = MMS4Daemon(executor=MagicMock(spec=OKXExecutor), state_manager=sm,
                    logger_db=db, symbol="ETH/USDC", trade_amount_usd=cap)
@@ -670,6 +672,8 @@ def test_scout_axes_are_independent():
 def test_scout_sizing_flows_into_orders(db):
     """The daemon actually sizes a SCOUT entry from the reduced allocation."""
     from mms4tk.analytics import SignalResult
+    from mms4tk.api import configured_symbols_store
+    configured_symbols_store["ETH/USDC"] = {"allocation_usd": 1000.0, "base_ratio": 70, "add_ratio": 30}
 
     ex = sizing_executor()
     ex.fetch_positions = AsyncMock(return_value=[])

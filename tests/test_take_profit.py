@@ -51,6 +51,9 @@ def test_take_profit_and_flip_execution(temp_db: LoggerDB):
             Candle(timestamp=3000, open=62200, high=62300, low=62100, close=62250, volume=5),
         ])
 
+        from mms4tk.api import configured_symbols_store
+        configured_symbols_store["BTC/USDC"] = {"allocation_usd": 100.0, "is_active": True, "base_ratio": 70, "add_ratio": 30}
+
         state_mgr = MMS4StateManager(initial_state=MMS4State.SCOUT_MODE)
         assert state_mgr.current_state == MMS4State.SCOUT_MODE
 
