@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.3] - 2026-08-27
+
+### 🐛 Resolve OKX Native instId for Stop Loss Algo Orders (PLAN-004)
+- ⚙️ **Native Instrument ID Converter**: Added `to_native_inst_id()` in `OKXExecutor` to reliably translate CCXT unified symbols (e.g. `ETH/USD:USD-310404`, `BTC/USDC`) to native OKX format (`ETH-USD_UM_XPERP-310404`, `BTC-USDC-SWAP`).
+- 🛡️ **Stop Loss Algo Order Fix**: Updated `attach_stop_loss()` to pass native `instId` to OKX algo endpoints (`private_get_trade_orders_algo_pending`, `private_post_trade_cancel_algos`, `private_post_trade_order_algo`), eliminating Error 51000 ("Parameter instId error").
+- 🩺 **Self-Healing SL Guard Compatibility**: Ensured daemon self-healing stop loss queries resolve native `instId` before checking pending algos.
+- 🧪 **Unit Test Suite**: Added `tests/test_okx_sl_algo_instid.py` verifying CCXT/EEA X-Perp translations, SL order placement params, and self-healing loop execution.
+
+---
+
 ## 🚀 [0.33.2] - 2026-08-26
 
 ### 🛡️ SSOT Allocation Hierarchy & Environment Cleanup (PLAN-003)

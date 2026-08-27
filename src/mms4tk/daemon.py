@@ -707,8 +707,9 @@ class MMS4Daemon:
                     try:
                         target_inst = p.get("info", {}).get("instId") or target_symbol
                         sl_pct = self.addon_sl_pct if self._addon_count(target_symbol, p_side, entry_px) > 0 else self.base_sl_pct
+                        raw_inst_id = self.executor.to_native_inst_id(target_inst) if hasattr(self.executor, "to_native_inst_id") else target_inst
                         pending_algos = await self.executor.exchange.private_get_trade_orders_algo_pending({
-                            "instId": target_inst,
+                            "instId": raw_inst_id,
                             "ordType": "conditional"
                         })
                         has_active_sl = any(
