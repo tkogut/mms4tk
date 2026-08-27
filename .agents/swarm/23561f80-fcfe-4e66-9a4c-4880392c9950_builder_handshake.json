@@ -1,0 +1,17 @@
+{
+  "conversation_id": "23561f80-fcfe-4e66-9a4c-4880392c9950",
+  "role": "Builder",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/okx_executor.py",
+    "src/mms4tk/daemon.py",
+    "tests/test_okx_sl_algo_instid.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-08-27T15:37:30+02:00",
+  "notes": "PLAN-004 implemented: OKX Stop Loss algo orders instId resolved to native format; 155 pytest unit tests passing."
+}
