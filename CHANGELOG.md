@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.4] - 2026-08-27
+
+### 🐛 Fix Stop Loss UI Display & Daemon Synchronization (PLAN-005)
+- 🔄 **Stop Loss UI Synchronization**: Updated `SettingsTab.jsx` to correctly initialize `stopLoss` from `daemonData?.stop_loss_pct ?? stateData?.stop_loss_pct ?? 2.0` and synchronize with incoming daemon updates.
+- 🏷️ **Clarity on Base vs Addon SL**: Updated UI labels to `Bazowy Stop Loss (%):` with explicit tooltip text explaining that 2.00% applies to base position (70% allocation) while addon position maintains fixed 1.25% SL (30% allocation).
+
+---
+
 ## 🚀 [0.33.3] - 2026-08-27
 
 ### 🐛 Resolve OKX Native instId for Stop Loss Algo Orders (PLAN-004)
