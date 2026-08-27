@@ -4,7 +4,7 @@ import { Sliders, Lock, Key, Save, Shield, CheckCircle2, Zap, Clock, AlertTriang
 export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, daemonData }) {
   const [riskProfile, setRiskProfile] = useState('MODERATE');
   const [leverage, setLeverage] = useState(stateData?.leverage || 3.0);
-  const [stopLoss, setStopLoss] = useState(stateData?.stop_loss_pct || 1.25);
+  const [stopLoss, setStopLoss] = useState(daemonData?.stop_loss_pct ?? stateData?.stop_loss_pct ?? 2.0);
   const [isScoutMode, setIsScoutMode] = useState(stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false);
   const [currentApiKey, setCurrentApiKey] = useState(apiKey || '');
 
@@ -49,6 +49,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
       if (daemonData.time_lock_start) setTimeLockStart(daemonData.time_lock_start);
       if (daemonData.time_lock_end) setTimeLockEnd(daemonData.time_lock_end);
       if (daemonData.total_max_portfolio_margin_usd !== undefined) setPortfolioMarginCap(daemonData.total_max_portfolio_margin_usd);
+      if (daemonData.stop_loss_pct !== undefined) setStopLoss(daemonData.stop_loss_pct);
       isInitializedRef.current = true;
     }
   }, [daemonData]);
@@ -238,7 +239,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Próg Stop Loss (%):
+              Bazowy Stop Loss (%):
             </label>
             <input
               type="number"
@@ -249,7 +250,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
               onChange={(e) => setStopLoss(e.target.value)}
               className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
             />
-            <p className="text-[10px] text-slate-500 mt-1">Domyślnie 1.25% dla świecy wybijającej</p>
+            <p className="text-[10px] text-slate-500 mt-1">Domyślnie 2.00% dla pozycji bazowej (70% alokacji). Addon SL wynosi stałe 1.25% (30% alokacji).</p>
           </div>
 
           <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-lg flex items-center justify-between">
