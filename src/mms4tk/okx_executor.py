@@ -336,6 +336,29 @@ class OKXExecutor:
             logger.warning(f"Failed to discover EEA X-Perp instrument for {symbol}: {e}")
         return None
 
+    def to_native_inst_id(self, symbol: str) -> str:
+        """
+        Convert a CCXT unified symbol or trading pair to OKX native instId.
+        e.g. 'ETH/USD:USD-310404' -> 'ETH-USD_UM_XPERP-310404'
+             'BTC/USDC' -> 'BTC-USDC-SWAP' or 'BTC-USD_UM_XPERP-310404'
+        """
+        if not symbol:
+            return ""
+        if self.exchange and getattr(self.exchange, "markets", None) and symbol in self.exchange.markets:
+            market_info = self.exchange.market(symbol)
+            if market_info and market_info.get("id"):
+                return str(market_info["id"])
+        
+        # Fallback conversion
+        clean = symbol.split(":")[0] if ":" in symbol else symbol
+        if "/" in clean:
+            base, quote = clean.split("/", 1)
+            # Check if XPERP in symbol
+            if "XPERP" in symbol or "310404" in symbol:
+                return f"{base.upper()}-USD_UM_XPERP-310404"
+            return f"{base.upper()}-{quote.upper()}-SWAP"
+        return symbol.replace("/", "-")
+
     def min_notional_for(self, symbol: str, price: float) -> float:
         """
         Smallest order value the exchange will accept for this instrument, in USD.
@@ -671,27 +694,29 @@ class OKXExecutor:
         except Exception:
             sl_px_str = f"{sl_price:.2f}"
 
+        raw_inst_id = self.to_native_inst_id(target_symbol)
+
         # Cancel any previous pending conditional SL orders for this instId so the new SL applies cleanly
         try:
             pending = await self.exchange.private_get_trade_orders_algo_pending({
-                "instId": target_symbol,
+                "instId": raw_inst_id,
                 "ordType": "conditional"
             })
             if isinstance(pending, dict) and "data" in pending:
                 algo_ids_to_cancel = [
-                    {"algoId": item["algoId"], "instId": target_symbol}
+                    {"algoId": item["algoId"], "instId": raw_inst_id}
                     for item in pending["data"]
                     if item.get("posSide") == pos_s or not item.get("posSide")
                 ]
                 if algo_ids_to_cancel:
                     await self.exchange.private_post_trade_cancel_algos(algo_ids_to_cancel)
-                    logger.info(f"Cancelled {len(algo_ids_to_cancel)} previous SL algo orders for {target_symbol}")
+                    logger.info(f"Cancelled {len(algo_ids_to_cancel)} previous SL algo orders for {raw_inst_id}")
         except Exception as cancel_err:
-            logger.debug(f"Pre-SL cancellation check for {target_symbol}: {cancel_err}")
+            logger.debug(f"Pre-SL cancellation check for {raw_inst_id}: {cancel_err}")
 
         try:
             res = await self.exchange.private_post_trade_order_algo({
-                "instId": target_symbol,
+                "instId": raw_inst_id,
                 "tdMode": "cross",
                 "side": order_s,
                 "posSide": pos_s,
@@ -700,10 +725,10 @@ class OKXExecutor:
                 "slOrdPx": "-1",
                 "closeFraction": "1",
             })
-            logger.info(f"Attached OKX SL algo order for {target_symbol} ({pos_s}) at ${sl_px_str}: {res.get('data')}")
+            logger.info(f"Attached OKX SL algo order for {raw_inst_id} ({pos_s}) at ${sl_px_str}: {res.get('data')}")
             return res
         except Exception as e:
-            logger.error(f"Failed to attach SL algo order on OKX for {target_symbol}: {e}")
+            logger.error(f"Failed to attach SL algo order on OKX for {raw_inst_id}: {e}")
             return {"error": str(e)}
 
     async def set_hedge_mode(self, symbol: Optional[str] = None) -> Dict[str, Any]:
