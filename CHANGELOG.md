@@ -4,6 +4,18 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.35.0] - 2026-08-28
+
+### 🚦 Candle-Close Gate + Post-SL Cooldown (PLAN-008 Phase 2)
+- 🎯 **Candle-Close Gate**: `execute_symbol_cycle()` now tracks, per symbol, the last closed-candle timestamp on which a `BASE_SHORT`/`BASE_LONG`/`HIGH_RISK_ADD_*` signal was dispatched (`_last_signal_candle_ts`). A repeat evaluation of the same signal type on the same closed candle returns `CANDLE_GATE_SKIP_<type>` instead of re-evaluating the entry guards.
+- 🐛 **Root cause fixed (confirmed live, 24.08 cluster of 10-15x `EXECUTED_BASE_SHORT`)**: the only prior defense against duplicate entries was the Single Position Guard, which depends on a fresh `fetch_positions()` response. When that response lags or is transiently empty (same failure class as the earlier addon-ledger bug), the daemon re-executed the same signal every 15s cycle. The gate now suppresses this independently of exchange-state reliability.
+- 🧊 **Post-SL Cooldown**: a reconciled stop-loss (`is_stop_loss=True`) now engages `_sl_cooldown_until[symbol]` for `MMS4_SL_COOLDOWN_CANDLES` closed candles (default 3). New entries for that symbol return `COOLDOWN_ACTIVE` until the window passes — including on the very cycle the stop-loss reconciles, since cooldown state is computed after reconciliation runs.
+- 🛡️ **Safety invariant preserved**: both mechanisms gate only the entry-dispatch branches (`BASE_SHORT`/`BASE_LONG`/`HIGH_RISK_ADD_*`). Position reconciliation, self-healing stop-loss, and the Inactivity Manager still run on every 15s cycle unconditionally — verified by `test_candle_gate_does_not_block_reconciliation`.
+- 🧪 **`tests/test_candle_gate.py`** (3 tests) + **`tests/test_sl_cooldown.py`** (4 tests): duplicate-execution suppression, gate reset on a genuinely new candle, reconciliation continuing through a gate-skip cycle, cooldown engagement/persistence/expiry, and non-stop-loss closes correctly NOT engaging cooldown.
+- 📋 Phase 2 of 3 in `.agents/plans/PLAN-008-strategy-fix-trend-filter.md` (Phase 3: TMA Slope Trend Filter → v0.36.0, post-calibration).
+
+---
+
 ## 🚀 [0.34.1] - 2026-08-28
 
 ### 🔌 Live Parameter Synchronization (PLAN-008 Phase 1)
