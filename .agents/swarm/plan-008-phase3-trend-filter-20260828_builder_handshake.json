@@ -1,0 +1,19 @@
+{
+  "conversation_id": "plan-008-phase3-trend-filter-20260828",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/analytics.py",
+    "src/mms4tk/daemon.py",
+    "src/mms4tk/api.py",
+    "tests/test_trend_filter.py",
+    "tests/test_trend_filter_per_symbol_params.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-08-28T17:35:46Z",
+  "notes": "PLAN-008 Phase 3 (final): TMA slope trend filter in analytics.py, per-symbol (not global) via system_settings-backed config in daemon.py/api.py. 90-day per-symbol calibration backtest (real production classes, real OKX OHLCV) drove the design: BTC/USDC benefits broadly (14/16 grid cells), ETH/USDC does not (15/16 cells worse) -- calibration data and methodology documented in CHANGELOG. Persistence gap in symbol_configurations SQLite table fixed via system_settings qualified keys (verified surviving simulated daemon restart). 9 new tests, full suite 179/179 PASS. Bumped to v0.36.0. Closes PLAN-008. NOT deployed to VPS -- calibrated values (BTC=ON lookback=3/threshold=0.002, ETH=OFF) must be applied via API after merge+deploy."
+}
