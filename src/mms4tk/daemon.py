@@ -594,6 +594,31 @@ class MMS4Daemon:
 
         return events
 
+    def _get_indicator_params(self) -> IndicatorParams:
+        """Build IndicatorParams from live SQLite system_settings, falling back to
+        env vars (and IndicatorParams' own hardcoded defaults) for any missing key.
+
+        PLAN-008 Phase 1: previously evaluate_signals() was always called without
+        `params`, so it built a fresh env-only IndicatorParams() internally — any
+        engine_mode/adaptive_vr_*/time_lock_* mutation made via the UI (persisted to
+        SQLite system_settings) never reached the signal engine at all.
+        """
+        db_settings: Dict[str, str] = {}
+        try:
+            if self.logger_db:
+                db_settings = self.logger_db.get_all_settings()
+        except Exception as e:
+            logger.warning(f"_get_indicator_params: failed to read system_settings, using env defaults: {e}")
+
+        defaults = IndicatorParams()
+        return IndicatorParams(
+            engine_mode=str(db_settings.get("engine_mode", defaults.engine_mode)),
+            adaptive_vr_high=float(db_settings.get("adaptive_vr_high", defaults.adaptive_vr_high)),
+            adaptive_vr_low=float(db_settings.get("adaptive_vr_low", defaults.adaptive_vr_low)),
+            time_lock_start=str(db_settings.get("time_lock_start", defaults.time_lock_start)),
+            time_lock_end=str(db_settings.get("time_lock_end", defaults.time_lock_end)),
+        )
+
     async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
         """
         Executes a single market evaluation cycle for a specific trading symbol.
@@ -650,9 +675,11 @@ class MMS4Daemon:
             if not isinstance(sym_state, MMS4State):
                 sym_state = MMS4State.BASE_MODE
 
-        # Pass the symbol so gating uses THIS symbol's state, not the primary symbol's.
+        # Pass the symbol so gating uses THIS symbol's state, not the primary symbol's,
+        # and pass live SQLite-backed params so UI-configured engine_mode/adaptive_vr_*
+        # actually reach signal evaluation (PLAN-008 Phase 1).
         signal: SignalResult = self.signal_engine.evaluate_signals(
-            candles, self.state_manager, symbol=target_symbol
+            candles, self.state_manager, params=self._get_indicator_params(), symbol=target_symbol
         )
         if target_symbol == self.symbol:
             self.last_signal = signal
