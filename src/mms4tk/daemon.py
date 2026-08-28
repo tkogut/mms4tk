@@ -410,6 +410,22 @@ class MMS4Daemon:
 
     # ── Stop-loss reconciliation ────────────────────────────────────────
 
+    def _get_contract_size(self, symbol: str) -> float:
+        """Return contract size for symbol from executor markets, falling back to 0.0001 for BTC and 1.0 for others."""
+        try:
+            if getattr(self.executor, "exchange", None) and getattr(self.executor.exchange, "markets", None):
+                m = self.executor.exchange.market(symbol)
+                if m and m.get("contractSize"):
+                    return float(m["contractSize"])
+        except Exception:
+            pass
+        sym_upper = symbol.upper()
+        if "BTC" in sym_upper:
+            return 0.0001
+        if "ETH" in sym_upper:
+            return 0.001
+        return 1.0
+
     def reconcile_positions(
         self,
         target_symbol: str,
@@ -471,7 +487,8 @@ class MMS4Daemon:
             is_stop_out = loss_pct >= sl_threshold
 
             contracts = float(snap["contracts"] or 0.0)
-            pnl_usd = pnl_pct * entry_price * contracts
+            ct_size = self._get_contract_size(target_symbol)
+            pnl_usd = pnl_pct * entry_price * contracts * ct_size
 
             logger.warning(
                 f"⟲ Reconciliation: {target_symbol} {side.upper()} disappeared from OKX "
@@ -1027,6 +1044,8 @@ class MMS4Daemon:
 
                     # 2. Book the realized take-profit and transition state (SCOUT -> BASE)
                     try:
+                        ct_size = self._get_contract_size(target_symbol)
+                        pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
                         self.state_manager.record_trade(
                             trade_id=f"tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}",
                             symbol=target_symbol,
@@ -1034,7 +1053,7 @@ class MMS4Daemon:
                             entry_price=active_entry_price,
                             exit_price=signal.price,
                             amount=existing_contracts,
-                            pnl=pnl_pct * active_entry_price * existing_contracts,
+                            pnl=pnl_usd,
                             pnl_percent=pnl_pct,
                             is_take_profit=True,
                         )
