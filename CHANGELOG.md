@@ -4,6 +4,17 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.34.1] - 2026-08-28
+
+### 🔌 Live Parameter Synchronization (PLAN-008 Phase 1)
+- 🧩 **`_get_indicator_params()` in `MMS4Daemon`**: builds `IndicatorParams` from live SQLite `system_settings` (via `LoggerDB.get_all_settings()`), falling back to env vars / hardcoded defaults on any missing key or DB error.
+- 🔗 **Wired into `execute_symbol_cycle()`**: `evaluate_signals()` is now called with `params=self._get_indicator_params()` instead of implicitly building an env-only `IndicatorParams()` inside the engine.
+- 🐛 **Root cause fixed**: `engine_mode=ADAPTIVE` and `adaptive_vr_high`/`adaptive_vr_low`/`time_lock_start`/`time_lock_end` mutations saved via the dashboard (persisted to SQLite) never reached signal evaluation — the Adaptive Hybrid Engine (v0.30.0+) was never actually active in production regardless of what the UI showed, and no daemon restart was ever going to fix it.
+- 🧪 **`tests/test_params_sync.py`**: verifies defaults without DB settings, live reflection of a SQLite mutation with no restart, graceful fallback on DB failure, and that `execute_symbol_cycle()` actually passes the live params through to `evaluate_signals()`.
+- 📋 Phase 1 of 3 in `.agents/plans/PLAN-008-strategy-fix-trend-filter.md` (Phase 2: Candle-Close Gate + Post-SL Cooldown → v0.35.0; Phase 3: TMA Slope Trend Filter → v0.36.0, post-calibration).
+
+---
+
 ## 🚀 [0.33.7] - 2026-08-28
 
 ### 🐛 Fix Reconciliation & Take Profit PnL USD Calculation (PLAN-006)
