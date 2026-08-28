@@ -4,13 +4,29 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 🚀 [0.33.5] - 2026-08-28
+## 🚀 [0.33.7] - 2026-08-28
 
 ### 🐛 Fix Reconciliation & Take Profit PnL USD Calculation (PLAN-006)
 - 🧮 **Contract Size Scaling**: Added `_get_contract_size()` in `MMS4Daemon` querying market metadata with fallbacks (0.0001 for BTC, 0.001 for ETH, 1.0 default) to correctly scale position notional and USD PnL.
 - ⟲ **Reconciliation PnL Fix**: Scaled stop-loss reconciliation `pnl_usd` by contract size, preventing inflated PnL metrics when positions are closed exchange-side.
 - 🎯 **Take Profit PnL Fix**: Scaled take-profit `pnl_usd` in `execute_symbol_cycle()` by contract size before recording trades in `state_manager`.
 - 🧪 **Unit Test Suite**: Added `tests/test_reconciliation_pnl.py` verifying BTC, ETH reconciliation, and Take Profit PnL calculations.
+
+---
+
+## 🚀 [0.33.6] - 2026-08-28
+
+### 🛡️ Standalone Maintenance Mode Lock & Safe Execution Guard
+- 🔒 **Self-Contained Maintenance CLI (`scripts/maintenance.py`)**: Removed heavy external package dependency (`numpy`) so `maintenance.py --enable` and `--status` execute 100% reliably in any environment.
+- 🛡️ **Synchronized Lock Paths (`okx_executor.py`)**: Included repo-root `.agents/swarm/MAINTENANCE_LOCK` in executor paths to ensure zero-loss maintenance mode blocking works across both local and container environments.
+
+---
+
+## 🚀 [0.33.5] - 2026-08-28
+
+### ⚡ Instant Closed Trade Recording & Real-Time Trade Sync
+- ⚡ **Immediate Trade Sync on Close (`api.py`)**: Added immediate call to `trade_sync_worker.sync_closed_trades()` directly in `POST /api/v1/positions/close` and `GET /api/v1/history/trades` to eliminate delays when user manually closes a position.
+- 💾 **Direct Reconciliation Upsert (`daemon.py`)**: Added direct `logger_db.upsert_closed_trade` in `reconcile_positions()` so any closed or reduced position is guaranteed to be recorded in SQLite `closed_trades` instantaneously without waiting for background polling.
 
 ---
 

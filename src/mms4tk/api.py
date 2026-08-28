@@ -635,6 +635,10 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
 @app.get("/api/v1/history/trades", tags=["History"])
 async def get_history_trades(limit: int = 100) -> List[Dict[str, Any]]:
     """Fetch real historical closed trades from SQLite logger_db."""
+    try:
+        await trade_sync_worker.sync_closed_trades()
+    except Exception as e:
+        logger.debug(f"Trade sync on history fetch notice: {e}")
     return logger_db.get_closed_trades(limit=limit)
 
 
@@ -1356,11 +1360,16 @@ async def close_position_endpoint(req: ClosePositionRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Reconciliation failed after manual close: {e}")
 
+    try:
+        await trade_sync_worker.sync_closed_trades()
+    except Exception as e:
+        logger.warning(f"Immediate trade sync failed after manual close: {e}")
+
     return {
         "status": "success",
         "symbol": sym,
         "results": results,
-        "message": f"Zlecenie zamknięcia pozycji dla {sym} zostało wysłane do OKX."
+        "message": f"Zlecenie zamknięcia pozycji dla {sym} zostało wysłane do OKX, a wykaz transakcji zaktualizowany."
     }
 
 
