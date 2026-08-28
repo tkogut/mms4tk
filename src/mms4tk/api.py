@@ -1176,6 +1176,9 @@ class AddSymbolRequest(BaseModel):
     stale_candles_threshold: int = Field(default=12, description="Max candles of stagnation before SPLIT_50 (default 12)")
     stale_atr_threshold: float = Field(default=0.5, description="Max price deviation as fraction of ATR (default 0.5)")
     impulse_negation_enabled: bool = Field(default=True, description="Enable 50% impulse negation rule")
+    tma_trend_filter_enabled: bool = Field(default=False, description="PLAN-008 Ph3: block counter-trend BASE entries via TMA slope (per-symbol — calibration showed this helps some symbols and hurts others)")
+    tma_slope_lookback: int = Field(default=5, description="PLAN-008 Ph3: candles over which TMA slope (pct_change) is measured")
+    tma_slope_threshold: float = Field(default=0.002, description="PLAN-008 Ph3: |TMA slope| above which a counter-trend BASE entry is blocked")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -1211,6 +1214,9 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "stale_candles_threshold": config.get("stale_candles_threshold", 12),
             "stale_atr_threshold": config.get("stale_atr_threshold", 0.5),
             "impulse_negation_enabled": config.get("impulse_negation_enabled", True),
+            "tma_trend_filter_enabled": config.get("tma_trend_filter_enabled", False),
+            "tma_slope_lookback": config.get("tma_slope_lookback", 5),
+            "tma_slope_threshold": config.get("tma_slope_threshold", 0.002),
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -1252,8 +1258,31 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
         "stale_candles_threshold": int(req.stale_candles_threshold),
         "stale_atr_threshold": float(req.stale_atr_threshold),
         "impulse_negation_enabled": bool(req.impulse_negation_enabled),
+        "tma_trend_filter_enabled": bool(req.tma_trend_filter_enabled),
+        "tma_slope_lookback": int(req.tma_slope_lookback),
+        "tma_slope_threshold": float(req.tma_slope_threshold),
     }
     save_symbols_config(configured_symbols_store)
+
+    # PLAN-008 Phase 3: persist the trend-filter fields into system_settings under a
+    # per-symbol-qualified key. The `symbol_configurations` SQLite table has a fixed
+    # schema (symbol, is_active, allocation_usd, base_ratio, add_ratio, timeframe) with
+    # no column for these — writing only to configured_symbols_store/symbols.json would
+    # silently reset them to defaults on the next `load_symbols_config()` call, since
+    # that function prefers SQLite whenever it has any rows (it always does once a
+    # symbol has been added). system_settings is schema-less and already durable.
+    try:
+        logger_db.set_settings_bulk(
+            {
+                f"tma_trend_filter_enabled:{formatted_sym}": bool(req.tma_trend_filter_enabled),
+                f"tma_slope_lookback:{formatted_sym}": int(req.tma_slope_lookback),
+                f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
+            },
+            updated_by="api_dashboard",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to persist trend-filter settings for {formatted_sym}: {e}")
+
     state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")
     
     # Perform instant OKX API verification
