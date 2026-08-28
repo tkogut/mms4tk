@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.6] - 2026-08-28
+
+### 🛡️ Standalone Maintenance Mode Lock & Safe Execution Guard
+- 🔒 **Self-Contained Maintenance CLI (`scripts/maintenance.py`)**: Removed heavy external package dependency (`numpy`) so `maintenance.py --enable` and `--status` execute 100% reliably in any environment.
+- 🛡️ **Synchronized Lock Paths (`okx_executor.py`)**: Included repo-root `.agents/swarm/MAINTENANCE_LOCK` in executor paths to ensure zero-loss maintenance mode blocking works across both local and container environments.
+
+---
+
 ## 🚀 [0.33.5] - 2026-08-28
 
 ### ⚡ Instant Closed Trade Recording & Real-Time Trade Sync

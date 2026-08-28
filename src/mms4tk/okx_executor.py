@@ -39,6 +39,7 @@ FALLBACK_MIN_NOTIONAL_USD = float(os.getenv("MMS4_MIN_NOTIONAL_USD", "7.0"))
 SIZING_TOLERANCE = float(os.getenv("MMS4_SIZING_TOLERANCE", "0.10"))
 
 MAINTENANCE_LOCK_PATHS = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".agents", "swarm", "MAINTENANCE_LOCK")),
     "/app/.agents/swarm/MAINTENANCE_LOCK",
     "/tmp/MMS4_MAINTENANCE_LOCK",
     os.path.expanduser("~/.mms4_maintenance_lock"),

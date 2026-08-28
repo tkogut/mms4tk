@@ -1,7 +1,7 @@
 import React from 'react';
 import { Cpu, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
 
-export function Header({ version = "0.33.5", isConnected, stateData, daemonData, onRefresh, onToggleMaintenance }) {
+export function Header({ version = "0.33.6", isConnected, stateData, daemonData, onRefresh, onToggleMaintenance }) {
   const isScoutMode = stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false;
   const activeMode = stateData?.state || (isScoutMode ? 'SCOUT_MODE' : 'BASE_MODE');
   const isMaintenance = Boolean(daemonData?.maintenance_mode);
