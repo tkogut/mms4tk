@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.33.5] - 2026-08-28
+
+### ⚡ Instant Closed Trade Recording & Real-Time Trade Sync
+- ⚡ **Immediate Trade Sync on Close (`api.py`)**: Added immediate call to `trade_sync_worker.sync_closed_trades()` directly in `POST /api/v1/positions/close` and `GET /api/v1/history/trades` to eliminate delays when user manually closes a position.
+- 💾 **Direct Reconciliation Upsert (`daemon.py`)**: Added direct `logger_db.upsert_closed_trade` in `reconcile_positions()` so any closed or reduced position is guaranteed to be recorded in SQLite `closed_trades` instantaneously without waiting for background polling.
+
+---
+
 ## 🚀 [0.33.4] - 2026-08-27
 
 ### 🐛 Fix Stop Loss UI Display & Daemon Synchronization (PLAN-005)

@@ -480,8 +480,9 @@ class MMS4Daemon:
             )
 
             try:
+                trade_id_str = f"recon_{target_symbol}_{side}_{int(time.time()*1000)}"
                 self.state_manager.record_trade(
-                    trade_id=f"recon_{target_symbol}_{side}_{int(time.time()*1000)}",
+                    trade_id=trade_id_str,
                     symbol=target_symbol,
                     side=side,
                     entry_price=entry_price,
@@ -492,6 +493,19 @@ class MMS4Daemon:
                     is_stop_loss=is_stop_out,
                     is_take_profit=False,
                     sl_percent=max(loss_pct, 0.0),
+                )
+                self.logger_db.upsert_closed_trade(
+                    trade_id=trade_id_str,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    symbol=target_symbol,
+                    side=side.upper(),
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    amount=contracts,
+                    pnl_usd=pnl_usd,
+                    pnl_pct=pnl_pct,
+                    is_win=pnl_usd > 0,
+                    leverage=float(snap.get("leverage", 1.0)) if snap else 1.0
                 )
             except Exception as e:
                 logger.error(f"Failed to record reconciled trade for {target_symbol}: {e}")
