@@ -2,6 +2,7 @@ import os
 import logging
 import time
 import math
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -100,6 +101,16 @@ def normalize_symbol(symbol: str) -> str:
         return ""
     base = parts[0]
     return base.strip().upper()
+
+
+def _timeframe_to_ms(timeframe: str) -> int:
+    """Milliseconds per candle for a ccxt-style timeframe string ('1m','15m','1h','4h','1d')."""
+    unit = timeframe[-1].lower()
+    value = int(timeframe[:-1])
+    unit_ms = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}.get(unit)
+    if unit_ms is None:
+        raise ValueError(f"Unsupported timeframe unit: {timeframe!r}")
+    return value * unit_ms
 
 
 def _generate_mock_candles(count: int = 100, base_price: float = 50000.0) -> List[Candle]:
@@ -298,6 +309,96 @@ class OKXExecutor:
 
         logger.error(f"Error fetching candles from OKX for {target_symbol}: {type(last_error).__name__}: {str(last_error)}. Falling back to mock candles.")
         return _generate_mock_candles(count=limit)
+
+    async def fetch_candles_paginated(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+        days: int = 90,
+        logger_db: Optional[Any] = None,
+    ) -> List[Candle]:
+        """PLAN-010 §4.1a: fetch `days` of OHLCV history, walking OKX's public API in
+        `limit=300`-candle batches (a single `fetch_ohlcv` call is capped at ~300
+        candles — ~12.5 days at 1h resolution — nowhere near enough for the 90-180 day
+        recalibration window). Ports the pagination loop proven in the PLAN-008 Phase 3
+        calibration scratchpad (`fetch_ohlcv_90d.py`) into production code.
+
+        `logger_db`, if given, is used as a local cache (`ohlcv_cache` table): only the
+        missing tail since the last cached candle is fetched from OKX, not the whole
+        window every call — recalibration can be triggered repeatedly without
+        re-fetching days of history OKX already gave us. No API credentials are needed
+        for this path — public market data, safe to call even under the maintenance
+        lock (it never touches order execution).
+
+        Source is the spot/swap OHLCV series for `symbol` (ccxt notation, e.g.
+        "BTC/USDC") — a proxy for the actually-traded XPERP instrument's price, which
+        has no equivalent deep public OHLCV history via ccxt. The two track closely,
+        but this MUST stay a documented assumption wherever a calibration result is
+        shown, never presented as the exact traded price series.
+        """
+        cached: List[Dict[str, Any]] = []
+        if logger_db is not None:
+            try:
+                cached = logger_db.get_cached_ohlcv(symbol, timeframe)
+            except Exception as e:
+                logger.warning(f"fetch_candles_paginated: cache read failed for {symbol}: {e}")
+
+        interval_ms = _timeframe_to_ms(timeframe)
+        want_since = int((time.time() - days * 86400) * 1000)
+        if cached and cached[0]["timestamp"] <= want_since:
+            # Cache already covers the full requested window from its earliest point;
+            # only the tail (newest candles) may be missing.
+            since = cached[-1]["timestamp"] + interval_ms
+        else:
+            since = want_since
+
+        now_ms = int(time.time() * 1000)
+        fetched: List[Dict[str, Any]] = []
+        ex = self.exchange or ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+        try:
+            seen_ts = {c["timestamp"] for c in cached}
+            while since < now_ms:
+                batch = await ex.fetch_ohlcv(symbol, timeframe=timeframe.lower(), since=since, limit=300)
+                if not batch:
+                    break
+                new = [c for c in batch if c[0] not in seen_ts]
+                if not new and len(batch) < 2:
+                    break
+                for c in new:
+                    seen_ts.add(c[0])
+                    fetched.append({
+                        "timestamp": int(c[0]), "open": float(c[1]), "high": float(c[2]),
+                        "low": float(c[3]), "close": float(c[4]), "volume": float(c[5]) if len(c) > 5 else 0.0,
+                    })
+                since = batch[-1][0] + interval_ms
+                if len(batch) < 2:
+                    break
+                await asyncio.sleep(ex.rateLimit / 1000.0)
+        except Exception as e:
+            logger.error(f"fetch_candles_paginated: OKX fetch failed for {symbol}: {type(e).__name__}: {e}")
+            if not cached:
+                raise
+        finally:
+            if self.exchange is None:
+                await ex.close()
+
+        if logger_db is not None and fetched:
+            try:
+                logger_db.upsert_ohlcv_batch(symbol, timeframe, fetched)
+            except Exception as e:
+                logger.warning(f"fetch_candles_paginated: cache write failed for {symbol}: {e}")
+
+        merged = {c["timestamp"]: c for c in cached}
+        for c in fetched:
+            merged[c["timestamp"]] = c
+        all_candles = sorted(merged.values(), key=lambda c: c["timestamp"])
+        all_candles = [c for c in all_candles if c["timestamp"] >= want_since]
+
+        return [
+            Candle(timestamp=c["timestamp"], open=c["open"], high=c["high"],
+                   low=c["low"], close=c["close"], volume=c["volume"])
+            for c in all_candles
+        ]
 
     async def discover_eea_xperp_symbol(self, symbol: str = "BTC") -> Optional[str]:
         """
