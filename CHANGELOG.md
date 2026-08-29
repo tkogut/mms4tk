@@ -4,6 +4,19 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.39.0] - 2026-08-29
+
+### 🔁 Trend Filter Recalibration Mechanism — Phase 3: Symbols UI (PLAN-010)
+- 🆕 **`GET /api/v1/symbols/{symbol}/recalibrate/history`**: read-only, most-recent-first list of past calibration runs for a symbol (job_id/status/verdict/timestamps, no full result blob) — backs the "historia kalibracji" panel. Not explicitly speced in Phase 2 but required by §5.2.3; added here alongside the UI that consumes it.
+- 🎛️ **`SymbolCard` new "FILTR TRENDU (TMA SLOPE)" section** (`ui_dashboard/src/components/SymbolsTab.jsx`): enabled/disabled state, current lookback/threshold when enabled, a "brak potwierdzenia (VERDICT)" badge whenever the last calibration wasn't `VALIDATED`, and a progress bar (`clean_trade_count`/`eligibility_threshold`) gating the "🔬 Rekalibruj" button.
+- 🔒 **Disable-only manual toggle (deliberate deviation from a literal read of §5.1)**: the WŁ/WYŁ toggle can turn the filter OFF freely, but NOT back ON — re-enabling with unvalidated schema defaults (lookback=5, threshold=0.002) via a bare click would reintroduce the exact ungrounded-parameter problem this whole mechanism exists to prevent. Turning it on only happens through a validated recalibration's "✅ Zastosuj nowe parametry", which sets real params and `enabled=true` atomically via the existing `POST /api/v1/symbols/update` path.
+- 🔄 **Recalibration flow**: "🔬 Rekalibruj" → `POST /recalibrate` (202 + job_id) → modal opens immediately in a polling state (`GET /recalibrate/status/{job_id}` every 2.5s) → renders both train/test directions' R:R/pnl once done. `verdict == VALIDATED` shows a separate "✅ Zastosuj nowe parametry" button; any other verdict renders no apply affordance at all (cannot be applied by mistake). Closing the modal early only stops this component's polling — the job keeps running server-side and shows up in history once finished.
+- ⚠️ **Deviation from plan §5.3 (explicit, user-approved)**: `ui_dashboard` has no JS test framework (no Jest/Vitest/RTL) — adding one was out of scope for this feature. The two component-test requirements (apply button absent on `OVERFIT_REJECTED`; 🔬 disabled below threshold with correct progress text) were verified by a manual build + logic review instead of automated component tests.
+- 🧪 **2 new backend tests** for the history endpoint (most-recent-first ordering, empty-for-unseen-symbol). `npm run build` verified clean (no test framework available for component-level assertions — see deviation note above).
+- 📋 Phase 3 of 3 in `.agents/plans/PLAN-010-trend-filter-recalibration-mechanism.md` — closes out PLAN-010.
+
+---
+
 ## 🚀 [0.38.0] - 2026-08-29
 
 ### 🔁 Trend Filter Recalibration Mechanism — Phase 2: Calibration Engine (PLAN-010)
