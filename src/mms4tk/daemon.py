@@ -596,7 +596,7 @@ class MMS4Daemon:
 
         return events
 
-    def _get_indicator_params(self) -> IndicatorParams:
+    def _get_indicator_params(self, symbol: Optional[str] = None) -> IndicatorParams:
         """Build IndicatorParams from live SQLite system_settings, falling back to
         env vars (and IndicatorParams' own hardcoded defaults) for any missing key.
 
@@ -604,6 +604,17 @@ class MMS4Daemon:
         `params`, so it built a fresh env-only IndicatorParams() internally — any
         engine_mode/adaptive_vr_*/time_lock_* mutation made via the UI (persisted to
         SQLite system_settings) never reached the signal engine at all.
+
+        PLAN-008 Phase 3: the TMA Slope Trend Filter is PER SYMBOL — 90-day calibration
+        found the same threshold helps BTC/USDC broadly but hurts ETH/USDC in most
+        configurations, so a single global on/off switch would be wrong. Read from
+        `system_settings` under per-symbol-qualified keys (e.g.
+        "tma_trend_filter_enabled:BTC/USDC"): the `symbol_configurations` SQLite table
+        has a fixed schema with no column for these, so storing them only in
+        `configured_symbols_store`/symbols.json would silently reset to defaults on the
+        next `load_symbols_config()` call (it prefers SQLite whenever any row exists).
+        Falls back to `configured_symbols_store` (same-process-lifetime convenience) and
+        then to disabled-by-default.
         """
         db_settings: Dict[str, str] = {}
         try:
@@ -613,12 +624,44 @@ class MMS4Daemon:
             logger.warning(f"_get_indicator_params: failed to read system_settings, using env defaults: {e}")
 
         defaults = IndicatorParams()
+
+        sym_cfg: Dict[str, Any] = {}
+        if symbol:
+            try:
+                from mms4tk.api import configured_symbols_store
+                raw_cfg = configured_symbols_store.get(symbol, {})
+                if isinstance(raw_cfg, dict):
+                    sym_cfg = raw_cfg
+            except Exception as e:
+                logger.warning(f"_get_indicator_params: failed to read per-symbol config for {symbol}: {e}")
+
+        def _sym_bool(key: str, fallback: bool) -> bool:
+            raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is not None:
+                return str(raw).strip().lower() in ("true", "1", "yes", "on")
+            return bool(sym_cfg.get(key, fallback))
+
+        def _sym_int(key: str, fallback: int) -> int:
+            raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is not None:
+                return int(float(raw))
+            return int(sym_cfg.get(key, fallback))
+
+        def _sym_float(key: str, fallback: float) -> float:
+            raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is not None:
+                return float(raw)
+            return float(sym_cfg.get(key, fallback))
+
         return IndicatorParams(
             engine_mode=str(db_settings.get("engine_mode", defaults.engine_mode)),
             adaptive_vr_high=float(db_settings.get("adaptive_vr_high", defaults.adaptive_vr_high)),
             adaptive_vr_low=float(db_settings.get("adaptive_vr_low", defaults.adaptive_vr_low)),
             time_lock_start=str(db_settings.get("time_lock_start", defaults.time_lock_start)),
             time_lock_end=str(db_settings.get("time_lock_end", defaults.time_lock_end)),
+            tma_trend_filter_enabled=_sym_bool("tma_trend_filter_enabled", defaults.tma_trend_filter_enabled),
+            tma_slope_lookback=_sym_int("tma_slope_lookback", defaults.tma_slope_lookback),
+            tma_slope_threshold=_sym_float("tma_slope_threshold", defaults.tma_slope_threshold),
         )
 
     async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
@@ -681,7 +724,7 @@ class MMS4Daemon:
         # and pass live SQLite-backed params so UI-configured engine_mode/adaptive_vr_*
         # actually reach signal evaluation (PLAN-008 Phase 1).
         signal: SignalResult = self.signal_engine.evaluate_signals(
-            candles, self.state_manager, params=self._get_indicator_params(), symbol=target_symbol
+            candles, self.state_manager, params=self._get_indicator_params(target_symbol), symbol=target_symbol
         )
         if target_symbol == self.symbol:
             self.last_signal = signal

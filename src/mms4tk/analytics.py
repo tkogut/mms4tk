@@ -119,6 +119,17 @@ class IndicatorParams(BaseModel):
     time_lock_start: str = Field(default_factory=lambda: os.getenv("MMS4_TIME_LOCK_START", "13:30"))
     time_lock_end: str = Field(default_factory=lambda: os.getenv("MMS4_TIME_LOCK_END", "14:30"))
 
+    # ── TMA Slope Trend Filter (PLAN-008 Phase 3) ──
+    # Per-symbol calibration (90-day backtest, 2026-08-28) found the SAME threshold
+    # helps BTC/USDC broadly (14/16 grid cells beat baseline on both R:R and PnL) but
+    # hurts ETH/USDC in 15/16 cells — a single global default is wrong. Disabled unless
+    # explicitly turned on per symbol; independent of engine_mode (not gated on
+    # is_adaptive — this is a strategy-level filter, not part of the Adaptive Hybrid
+    # Engine's VR/time-lock fast-path).
+    tma_trend_filter_enabled: bool = False
+    tma_slope_lookback: int = 5
+    tma_slope_threshold: float = 0.002
+
 
 class SignalResult(BaseModel):
     """
@@ -212,12 +223,19 @@ class TMAIndicator:
         vr = atr / (sma_atr100 + 1e-8)
         vr = vr.fillna(1.0)
 
+        # 6. TMA Slope (PLAN-008 Phase 3): rate of change of the TMA itself over
+        # `tma_slope_lookback` closed candles — a positive slope means TMA has been
+        # rising (uptrend), negative means falling (downtrend). Used to block
+        # counter-trend BASE entries (see MMS4SignalEngine.evaluate_signals).
+        tma_slope = tma.pct_change(periods=params.tma_slope_lookback)
+
         return pd.DataFrame({
             "tma": tma,
             "atr": atr,
             "upper_band": upper_band,
             "lower_band": lower_band,
-            "vr": vr
+            "vr": vr,
+            "tma_slope": tma_slope
         })
 
 
@@ -274,6 +292,7 @@ class MMS4SignalEngine:
         latest_upper = df["upper_band"].iloc[-1]
         latest_lower = df["lower_band"].iloc[-1]
         latest_vr = float(df["vr"].iloc[-1]) if "vr" in df and not pd.isna(df["vr"].iloc[-1]) else 1.0
+        latest_slope = float(df["tma_slope"].iloc[-1]) if "tma_slope" in df and not pd.isna(df["tma_slope"].iloc[-1]) else None
 
         curr_c = closed_candles[-1]
         prev_c = closed_candles[-2]
@@ -475,6 +494,24 @@ class MMS4SignalEngine:
             if blocked:
                 return blocked
 
+            # PLAN-008 Phase 3: TMA Slope Trend Filter — block a counter-trend SHORT
+            # (fading an uptrend) when the TMA itself has been rising past threshold.
+            # Independent of engine_mode/is_adaptive — a strategy-level filter, not part
+            # of the Adaptive Hybrid Engine's fast-path.
+            if params.tma_trend_filter_enabled and latest_slope is not None and latest_slope > params.tma_slope_threshold:
+                return SignalResult(
+                    signal_type="BASE_SHORT",
+                    price=curr_c.close,
+                    stop_loss=round(curr_c.close * 1.02, 6),
+                    leverage=active_leverage,
+                    is_allowed=False,
+                    reason=(
+                        f"BASE_SHORT blocked by TMA Slope Trend Filter: slope ({latest_slope:.4f}) > "
+                        f"threshold ({params.tma_slope_threshold:.4f}) — uptrend, counter-trend SHORT skipped"
+                    ),
+                    volatility_ratio=latest_vr
+                )
+
             if risk_prof == "CONSERVATIVE":
                 lev = min(active_leverage, 0.5)
             elif risk_prof == "AGGRESSIVE":
@@ -524,6 +561,22 @@ class MMS4SignalEngine:
             blocked = filter_bias("BASE_LONG")
             if blocked:
                 return blocked
+
+            # PLAN-008 Phase 3: TMA Slope Trend Filter — block a counter-trend LONG
+            # (fading a downtrend) when the TMA itself has been falling past threshold.
+            if params.tma_trend_filter_enabled and latest_slope is not None and latest_slope < -params.tma_slope_threshold:
+                return SignalResult(
+                    signal_type="BASE_LONG",
+                    price=curr_c.close,
+                    stop_loss=round(curr_c.close * 0.98, 6),
+                    leverage=active_leverage,
+                    is_allowed=False,
+                    reason=(
+                        f"BASE_LONG blocked by TMA Slope Trend Filter: slope ({latest_slope:.4f}) < "
+                        f"-threshold ({-params.tma_slope_threshold:.4f}) — downtrend, counter-trend LONG skipped"
+                    ),
+                    volatility_ratio=latest_vr
+                )
 
             if risk_prof == "CONSERVATIVE":
                 lev = min(active_leverage, 0.5)
