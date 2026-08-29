@@ -1184,6 +1184,43 @@ class AddSymbolRequest(BaseModel):
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
 
 
+def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """PLAN-010 Phase 1 fix: `daemon._get_indicator_params()` reads these three
+    fields from per-symbol-qualified `system_settings` keys (e.g.
+    "tma_trend_filter_enabled:BTC/USDC") FIRST, falling back to
+    `configured_symbols_store` only when no such key exists — see PLAN-008 Phase 3.
+    This endpoint previously read `configured_symbols_store` only, so it could (and
+    did, 2026-08-29) silently disagree with what the engine actually uses whenever a
+    value was written straight to `system_settings` without also updating the
+    in-memory store. Mirror the exact same fallback chain here so the API/UI can
+    never again show a different trend-filter state than the live engine."""
+    db_settings = logger_db.get_all_settings()
+
+    def _qualified_bool(key: str, fallback: bool) -> bool:
+        raw = db_settings.get(f"{key}:{sym}")
+        if raw is not None:
+            return str(raw).strip().lower() in ("true", "1", "yes", "on")
+        return bool(config.get(key, fallback))
+
+    def _qualified_int(key: str, fallback: int) -> int:
+        raw = db_settings.get(f"{key}:{sym}")
+        if raw is not None:
+            return int(float(raw))
+        return int(config.get(key, fallback))
+
+    def _qualified_float(key: str, fallback: float) -> float:
+        raw = db_settings.get(f"{key}:{sym}")
+        if raw is not None:
+            return float(raw)
+        return float(config.get(key, fallback))
+
+    return {
+        "tma_trend_filter_enabled": _qualified_bool("tma_trend_filter_enabled", False),
+        "tma_slope_lookback": _qualified_int("tma_slope_lookback", 5),
+        "tma_slope_threshold": _qualified_float("tma_slope_threshold", 0.002),
+    }
+
+
 @app.get("/api/v1/symbols", tags=["Multi-Symbol"])
 async def get_trading_symbols() -> Dict[str, Any]:
     """Get all configured trading symbols with per-symbol allocation, Base/Add ratio, live OKX status, state, and leverage."""
@@ -1194,6 +1231,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
 
         state = state_manager.get_symbol_state(sym)
         leverage = state_manager.get_symbol_leverage(sym)
+        trend_filter = _trend_filter_fields(sym, config)
         
         # Live one-time OKX API verification lookup
         if sym not in okx_verification_cache or not okx_verification_cache[sym].get("okx_verified"):
@@ -1214,9 +1252,9 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "stale_candles_threshold": config.get("stale_candles_threshold", 12),
             "stale_atr_threshold": config.get("stale_atr_threshold", 0.5),
             "impulse_negation_enabled": config.get("impulse_negation_enabled", True),
-            "tma_trend_filter_enabled": config.get("tma_trend_filter_enabled", False),
-            "tma_slope_lookback": config.get("tma_slope_lookback", 5),
-            "tma_slope_threshold": config.get("tma_slope_threshold", 0.002),
+            "tma_trend_filter_enabled": trend_filter["tma_trend_filter_enabled"],
+            "tma_slope_lookback": trend_filter["tma_slope_lookback"],
+            "tma_slope_threshold": trend_filter["tma_slope_threshold"],
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -1326,6 +1364,58 @@ async def remove_trading_symbol(symbol: str) -> Dict[str, Any]:
         "is_active": False,
         "configured_symbols": configured_symbols_store,
         "message": f"Para {formatted_sym} została trwale usunięta z menedżera."
+    }
+
+
+# Default eligibility bar for the trend-filter recalibration mechanism (PLAN-010
+# §3.3): midpoint of the ~150-200 clean-trade range agreed 2026-08-29, after the
+# deployed Phase 3 parameters failed out-of-sample validation on a 90-day window.
+# Overridable per symbol via system_settings key
+# "trend_filter_eligibility_threshold:{symbol}" for pairs with very different trade
+# frequency than BTC/USDC or ETH/USDC.
+TREND_FILTER_ELIGIBILITY_THRESHOLD_DEFAULT = 175
+
+
+@app.get("/api/v1/symbols/{symbol:path}/recalibration-status", tags=["Multi-Symbol"])
+async def get_recalibration_status(symbol: str) -> Dict[str, Any]:
+    """PLAN-010 Phase 1 (§3.3): report whether `symbol` has accumulated enough clean
+    closed-trade history to be a candidate for trend-filter recalibration, plus its
+    current live filter state and the verdict of its most recent calibration run (if
+    any). Read-only — never modifies filter parameters or triggers a calibration
+    (that is `POST /recalibrate`, PLAN-010 Phase 2, not built in this phase)."""
+    formatted_sym = symbol.upper().strip()
+    if "/" not in formatted_sym:
+        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+
+    config = configured_symbols_store.get(formatted_sym, {})
+    if isinstance(config, bool):
+        config = {}
+    trend_filter = _trend_filter_fields(formatted_sym, config)
+
+    db_settings = logger_db.get_all_settings()
+    threshold_raw = db_settings.get(f"trend_filter_eligibility_threshold:{formatted_sym}")
+    eligibility_threshold = int(float(threshold_raw)) if threshold_raw is not None else TREND_FILTER_ELIGIBILITY_THRESHOLD_DEFAULT
+
+    clean_trade_count = logger_db.count_clean_closed_trades(formatted_sym)
+
+    # PLAN-010 Phase 2 will add `trend_filter_calibration_runs`; until that table
+    # exists, there is no run history to report — always None here, not a fabricated
+    # "no runs yet" placeholder value that could be confused with a real verdict.
+    last_calibration_run_at = None
+    last_calibration_verdict = None
+
+    return {
+        "symbol": formatted_sym,
+        "trend_filter_enabled": trend_filter["tma_trend_filter_enabled"],
+        "current_params": {
+            "lookback": trend_filter["tma_slope_lookback"],
+            "threshold": trend_filter["tma_slope_threshold"],
+        },
+        "clean_trade_count": clean_trade_count,
+        "eligibility_threshold": eligibility_threshold,
+        "eligible": clean_trade_count >= eligibility_threshold,
+        "last_calibration_run_at": last_calibration_run_at,
+        "last_calibration_verdict": last_calibration_verdict,
     }
 
 
