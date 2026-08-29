@@ -1,0 +1,23 @@
+{
+  "conversation_id": "b70b5bbb-1c18-462d-8cc6-b2e71d17cc2f",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/logger_db.py",
+    "src/mms4tk/okx_executor.py",
+    "src/mms4tk/backtest_engine.py",
+    "src/mms4tk/api.py",
+    "tests/test_backtest_engine.py",
+    "tests/test_fetch_candles_paginated.py",
+    "tests/test_recalibrate_endpoint.py",
+    "tests/fixtures/",
+    "pytest.ini",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-08-29T15:05:07Z",
+  "notes": "PLAN-010 Phase 2: calibration engine (backtest_engine.py, real reduction_amount() SPLIT_50 semantics, mandatory both-direction train/test validation), async /recalibrate + status endpoints (ProcessPoolExecutor, never blocks the shared daemon event loop), paginated+cached OHLCV fetch. 216/216 tests pass including slow real-90-day-data regression guard."
+}
