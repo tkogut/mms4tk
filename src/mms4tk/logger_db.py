@@ -237,6 +237,7 @@ class LoggerDB:
         symbol: Optional[str] = None,
         price_tolerance_pct: float = 0.001,
         time_window_seconds: float = 60.0,
+        exclude_trade_ids: Optional[set] = None,
     ) -> List[List[str]]:
         """PLAN-010 Phase 1: detect bursts of near-identical closed_trades rows —
         the historical-artifact pattern found 2026-08-29 (same symbol/side, ~equal
@@ -252,22 +253,39 @@ class LoggerDB:
         `time_window_seconds` of each other. Returns each connected component with
         >1 member as a list of trade_ids, in timestamp order; singleton rows (no
         detected duplicate) are omitted.
+
+        `symbol`, if given, is matched via NORMALIZED comparison, not a raw string
+        equality — confirmed live (2026-08-29 code review) that `closed_trades.symbol`
+        holds the raw OKX instId ("BTC-USD_UM_XPERP-310404") for every trade_sync-
+        authoritative row, never the clean pair ("BTC/USDC") a caller naturally passes;
+        a plain `WHERE symbol = ?` matched zero real production rows for any symbol.
+        Same pitfall PR #11's `delete_provisional_closed_trade` already had to work
+        around — see `normalize_symbol()`.
+
+        `exclude_trade_ids`, if given, drops those rows BEFORE chain detection (not
+        after) — so an excluded row can never bridge two otherwise-unrelated rows into
+        a false chain. `count_clean_closed_trades` uses this to keep degenerate rows
+        (a separate artifact category, entry_price == exit_price) from being able to
+        link two genuine non-degenerate duplicates together transitively just because
+        both happened to sit within tolerance of the same degenerate row.
         """
         from mms4tk.okx_executor import normalize_symbol
 
+        target_norm = normalize_symbol(symbol) if symbol else None
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            if symbol:
-                cursor.execute(
-                    "SELECT trade_id, symbol, side, entry_price, timestamp FROM closed_trades "
-                    "WHERE symbol = ? ORDER BY timestamp ASC", (symbol,),
-                )
-            else:
-                cursor.execute(
-                    "SELECT trade_id, symbol, side, entry_price, timestamp FROM closed_trades "
-                    "ORDER BY timestamp ASC"
-                )
-            rows = [dict(r) for r in cursor.fetchall()]
+            cursor.execute(
+                "SELECT trade_id, symbol, side, entry_price, timestamp FROM closed_trades "
+                "ORDER BY timestamp ASC"
+            )
+            all_rows = [dict(r) for r in cursor.fetchall()]
+
+        rows = (
+            [r for r in all_rows if normalize_symbol(r["symbol"]) == target_norm]
+            if target_norm is not None else all_rows
+        )
+        if exclude_trade_ids:
+            rows = [r for r in rows if r["trade_id"] not in exclude_trade_ids]
 
         n = len(rows)
         parent = list(range(n))
@@ -323,21 +341,22 @@ class LoggerDB:
         clean up detected duplicates remains a separate, explicitly-approved action
         (see PLAN-010 §6: no `excluded_trade_ids` mechanism is built here).
         """
+        from mms4tk.okx_executor import normalize_symbol
+
         def is_degenerate(t: Dict[str, Any]) -> bool:
             entry, exit_ = float(t["entry_price"] or 0.0), float(t["exit_price"] or 0.0)
             return entry > 0 and abs(entry - exit_) < entry * 0.0005
 
-        trades = [t for t in self.get_closed_trades(limit=None) if t["symbol"] == symbol]
+        # NORMALIZED match — `closed_trades.symbol` holds the raw OKX instId
+        # ("BTC-USD_UM_XPERP-310404") for real trade_sync rows, never the clean pair
+        # ("BTC/USDC") this method is called with; a plain `==` matched zero rows.
+        target_norm = normalize_symbol(symbol)
+        trades = [t for t in self.get_closed_trades(limit=None) if normalize_symbol(t["symbol"]) == target_norm]
         degenerate_ids = {t["trade_id"] for t in trades if is_degenerate(t)}
 
-        # Duplicate-chain detection only makes sense over the non-degenerate rows —
-        # a degenerate row is already excluded above, so it must never also be
-        # double-subtracted as part of a chain's "excess" count below.
-        chains = [
-            [tid for tid in chain if tid not in degenerate_ids]
-            for chain in self.find_duplicate_chains(symbol=symbol)
-        ]
-        chains = [c for c in chains if len(c) > 1]  # a chain may collapse to <=1 after the filter above
+        # Exclude degenerate rows BEFORE chain detection (not after) — see
+        # find_duplicate_chains' `exclude_trade_ids` docstring.
+        chains = self.find_duplicate_chains(symbol=symbol, exclude_trade_ids=degenerate_ids)
 
         total = len(trades)
         excess_from_chains = sum(len(c) - 1 for c in chains)  # each chain counts once, not N times
