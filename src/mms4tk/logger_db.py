@@ -232,6 +232,136 @@ class LoggerDB:
             conn.commit()
             return len(to_delete)
 
+    def find_duplicate_chains(
+        self,
+        symbol: Optional[str] = None,
+        price_tolerance_pct: float = 0.001,
+        time_window_seconds: float = 60.0,
+        exclude_trade_ids: Optional[set] = None,
+    ) -> List[List[str]]:
+        """PLAN-010 Phase 1: detect bursts of near-identical closed_trades rows —
+        the historical-artifact pattern found 2026-08-29 (same symbol/side, ~equal
+        entry_price, closed within seconds of each other, in repeating chains) that
+        pre-dates the `recon_*`/trade_sync dedupe fix (PR #11) and the candle-close
+        gate (PLAN-008 Phase 2). Promoted here, tested, from the one-off
+        connected-components script used for the manual 2026-08-29 DB cleanup, so
+        `count_clean_closed_trades` (and any future cleanup) has a single source of
+        truth instead of a throwaway script.
+
+        Two rows are linked (union-find) when they share NORMALIZED symbol + side,
+        entry_price within `price_tolerance_pct`, and their timestamps are within
+        `time_window_seconds` of each other. Returns each connected component with
+        >1 member as a list of trade_ids, in timestamp order; singleton rows (no
+        detected duplicate) are omitted.
+
+        `symbol`, if given, is matched via NORMALIZED comparison, not a raw string
+        equality — confirmed live (2026-08-29 code review) that `closed_trades.symbol`
+        holds the raw OKX instId ("BTC-USD_UM_XPERP-310404") for every trade_sync-
+        authoritative row, never the clean pair ("BTC/USDC") a caller naturally passes;
+        a plain `WHERE symbol = ?` matched zero real production rows for any symbol.
+        Same pitfall PR #11's `delete_provisional_closed_trade` already had to work
+        around — see `normalize_symbol()`.
+
+        `exclude_trade_ids`, if given, drops those rows BEFORE chain detection (not
+        after) — so an excluded row can never bridge two otherwise-unrelated rows into
+        a false chain. `count_clean_closed_trades` uses this to keep degenerate rows
+        (a separate artifact category, entry_price == exit_price) from being able to
+        link two genuine non-degenerate duplicates together transitively just because
+        both happened to sit within tolerance of the same degenerate row.
+        """
+        from mms4tk.okx_executor import normalize_symbol
+
+        target_norm = normalize_symbol(symbol) if symbol else None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT trade_id, symbol, side, entry_price, timestamp FROM closed_trades "
+                "ORDER BY timestamp ASC"
+            )
+            all_rows = [dict(r) for r in cursor.fetchall()]
+
+        rows = (
+            [r for r in all_rows if normalize_symbol(r["symbol"]) == target_norm]
+            if target_norm is not None else all_rows
+        )
+        if exclude_trade_ids:
+            rows = [r for r in rows if r["trade_id"] not in exclude_trade_ids]
+
+        n = len(rows)
+        parent = list(range(n))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int) -> None:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
+
+        norm = [normalize_symbol(r["symbol"]) for r in rows]
+        ts = [datetime.fromisoformat(r["timestamp"]).timestamp() for r in rows]
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if ts[j] - ts[i] > time_window_seconds:
+                    break  # rows are timestamp-sorted; nothing further can be in range
+                if norm[i] != norm[j]:
+                    continue
+                if str(rows[i]["side"]).upper() != str(rows[j]["side"]).upper():
+                    continue
+                p_i, p_j = float(rows[i]["entry_price"] or 0.0), float(rows[j]["entry_price"] or 0.0)
+                if p_i <= 0 or p_j <= 0:
+                    continue
+                if abs(p_i - p_j) > max(p_i, p_j) * price_tolerance_pct:
+                    continue
+                union(i, j)
+
+        groups: Dict[int, List[str]] = {}
+        for i in range(n):
+            groups.setdefault(find(i), []).append(rows[i]["trade_id"])
+
+        return [members for members in groups.values() if len(members) > 1]
+
+    def count_clean_closed_trades(self, symbol: str) -> int:
+        """PLAN-010 §3.2: count closed trades usable as recalibration evidence for
+        `symbol` — total rows minus the two known-artifact categories identified in
+        the 2026-08-29 review, so `/recalibration-status` reports data readiness
+        against the same standard the manual review used:
+
+          1. Degenerate rows (`entry_price` == `exit_price` within 0.05%) — the
+             pre-trade_sync-fix era, before real fill prices were recorded.
+          2. Duplicate-chain rows (`find_duplicate_chains`) — each detected chain of
+             N near-identical rows counts as ONE clean trade, not N and not zero;
+             the chain represents one real event recorded redundantly.
+
+        This does not delete or modify any row — read-only counting only. Whether to
+        clean up detected duplicates remains a separate, explicitly-approved action
+        (see PLAN-010 §6: no `excluded_trade_ids` mechanism is built here).
+        """
+        from mms4tk.okx_executor import normalize_symbol
+
+        def is_degenerate(t: Dict[str, Any]) -> bool:
+            entry, exit_ = float(t["entry_price"] or 0.0), float(t["exit_price"] or 0.0)
+            return entry > 0 and abs(entry - exit_) < entry * 0.0005
+
+        # NORMALIZED match — `closed_trades.symbol` holds the raw OKX instId
+        # ("BTC-USD_UM_XPERP-310404") for real trade_sync rows, never the clean pair
+        # ("BTC/USDC") this method is called with; a plain `==` matched zero rows.
+        target_norm = normalize_symbol(symbol)
+        trades = [t for t in self.get_closed_trades(limit=None) if normalize_symbol(t["symbol"]) == target_norm]
+        degenerate_ids = {t["trade_id"] for t in trades if is_degenerate(t)}
+
+        # Exclude degenerate rows BEFORE chain detection (not after) — see
+        # find_duplicate_chains' `exclude_trade_ids` docstring.
+        chains = self.find_duplicate_chains(symbol=symbol, exclude_trade_ids=degenerate_ids)
+
+        total = len(trades)
+        excess_from_chains = sum(len(c) - 1 for c in chains)  # each chain counts once, not N times
+        return max(0, total - len(degenerate_ids) - excess_from_chains)
+
     def get_closed_trades(self, limit: Optional[int] = 500) -> List[Dict[str, Any]]:
         """
         Fetch historical closed trades sorted by timestamp.
