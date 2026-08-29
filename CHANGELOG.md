@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.36.1] - 2026-08-29
+
+### 🐛 Fix Duplicate Closed Trades in Wykaz Transakcji
+- 🔎 **Root cause**: `MMS4Daemon.reconcile_positions()` writes an immediate, ESTIMATED `closed_trades` row (`trade_id="recon_{symbol}_{side}_<ts_ms>"`, exit price = the daemon's signal price at detection time) so a stop-out drives the state machine right away. `OKXTradeSyncWorker.sync_closed_trades()` later writes the AUTHORITATIVE row for the same real-world close (real OKX order id, real fill price). The two `trade_id` schemes never match, so `upsert_closed_trade`'s `ON CONFLICT(trade_id)` never dedupes them — the same close appeared twice in Wykaz Transakcji with two different exit prices/PnL. Confirmed live (BTC/USDC, 2026-08-28): entry 79668.8 recorded twice, exit 78335.3 vs 77942.0.
+- 🧹 **`LoggerDB.delete_provisional_closed_trade()`**: removes the matching `recon_*` row once the authoritative fill lands, matched by NORMALIZED symbol (`reconcile_positions` writes the clean pair "BTC/USDC"; the real fill carries the raw OKX instId "BTC-USD_UM_XPERP-310404" — a plain string match would never fire) + side + entry price (within tolerance). Wired into `OKXTradeSyncWorker.sync_closed_trades()` right before each authoritative upsert.
+- 🧪 **`tests/test_dedupe_closed_trades.py`** (5 tests): normalized-symbol matching, price-tolerance and side isolation (doesn't touch unrelated closes), never deletes genuine trade_sync rows (only `recon_*`-prefixed ones are candidates), and an end-to-end sync run leaving exactly one row.
+- 🗄️ **Historical cleanup (separate, one-time)**: ~70 pre-remediation duplicate rows from 2026-08-15/16 (same-price, near-zero-PnL bursts from the since-fixed duplicate-execution bug, unrelated to the recon_/trade_sync mechanism above) to be cleaned from the production DB directly — not part of this code change.
+
+---
+
 ## 🚀 [0.36.0] - 2026-08-28
 
 ### 📈 TMA Slope Trend Filter — per-symbol (PLAN-008 Phase 3)
