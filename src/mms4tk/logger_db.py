@@ -154,6 +154,150 @@ class LoggerDB:
                     updated_by TEXT DEFAULT 'system'
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trend_filter_calibration_runs (
+                    job_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    window_start TEXT,
+                    window_end TEXT,
+                    verdict TEXT,
+                    result_json TEXT,
+                    error TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_calibration_runs_symbol
+                ON trend_filter_calibration_runs(symbol, created_at DESC)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ohlcv_cache (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume REAL NOT NULL,
+                    PRIMARY KEY (symbol, timeframe, timestamp)
+                )
+            """)
+            conn.commit()
+
+    # ── PLAN-010 Phase 2: trend-filter recalibration job tracking ──
+
+    def create_calibration_run(self, job_id: str, symbol: str) -> None:
+        """Insert a new calibration job row with status='pending'. Called synchronously
+        from the request-handling path (POST /recalibrate) — MUST stay fast; the actual
+        computation runs later, off-loop, in a worker process (see backtest_engine.py)."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO trend_filter_calibration_runs
+                    (job_id, symbol, status, created_at, updated_at)
+                VALUES (?, ?, 'pending', ?, ?)
+                """,
+                (job_id, symbol, now_str, now_str),
+            )
+            conn.commit()
+
+    def update_calibration_run(
+        self,
+        job_id: str,
+        status: str,
+        window_start: Optional[str] = None,
+        window_end: Optional[str] = None,
+        verdict: Optional[str] = None,
+        result_json: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Update a calibration job's status and, once finished, its result. Called
+        from the worker process — opens its OWN connection via `self.db_path` (SQLite
+        connections must never cross a process boundary)."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE trend_filter_calibration_runs
+                SET status = ?, updated_at = ?,
+                    window_start = COALESCE(?, window_start),
+                    window_end = COALESCE(?, window_end),
+                    verdict = COALESCE(?, verdict),
+                    result_json = COALESCE(?, result_json),
+                    error = COALESCE(?, error)
+                WHERE job_id = ?
+                """,
+                (status, now_str, window_start, window_end, verdict, result_json, error, job_id),
+            )
+            conn.commit()
+
+    def get_calibration_run(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM trend_filter_calibration_runs WHERE job_id = ?", (job_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_latest_calibration_run(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM trend_filter_calibration_runs WHERE symbol = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (symbol,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def list_calibration_runs(self, symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM trend_filter_calibration_runs WHERE symbol = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (symbol, limit),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    # ── PLAN-010 §4.1a: local OHLCV cache (avoid re-fetching from OKX every run) ──
+
+    def get_cached_ohlcv(self, symbol: str, timeframe: str) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT timestamp, open, high, low, close, volume FROM ohlcv_cache "
+                "WHERE symbol = ? AND timeframe = ? ORDER BY timestamp ASC",
+                (symbol, timeframe),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def upsert_ohlcv_batch(self, symbol: str, timeframe: str, candles: List[Dict[str, Any]]) -> None:
+        """Bulk upsert candles into the cache. `candles` items need
+        timestamp/open/high/low/close/volume keys (as returned by ccxt's fetch_ohlcv,
+        already dict-shaped by the caller)."""
+        if not candles:
+            return
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.executemany(
+                """
+                INSERT INTO ohlcv_cache (symbol, timeframe, timestamp, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe, timestamp) DO UPDATE SET
+                    open=excluded.open, high=excluded.high, low=excluded.low,
+                    close=excluded.close, volume=excluded.volume
+                """,
+                [
+                    (symbol, timeframe, c["timestamp"], c["open"], c["high"], c["low"], c["close"], c["volume"])
+                    for c in candles
+                ],
+            )
             conn.commit()
 
     def upsert_closed_trade(

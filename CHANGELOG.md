@@ -4,6 +4,21 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.38.0] - 2026-08-29
+
+### 🔁 Trend Filter Recalibration Mechanism — Phase 2: Calibration Engine (PLAN-010)
+- 🧮 **`src/mms4tk/backtest_engine.py`**: promotes the scratchpad harness used for the 2026-08-29 review (`backtest_plan008_phase3_v2.py`, `oos_train_test_v2.py`) into a maintained module. `run_backtest()` simulates candle-by-candle using the real production classes (`TMAIndicator`/`MMS4SignalEngine`/`MMS4InactivityManager`/`MMS4StateManager`), with `SPLIT_50` mirroring the REAL `OKXExecutor.reduction_amount()` no-op rule (a position that can't be halved without fully closing it is HELD, not partially booked) — the exact harness-fidelity fix the 2026-08-29 review required before trusting any calibration verdict.
+- 🚦 **`train_test_validate()`**: the ONLY calibration entry point — structurally enforces train/test validation in BOTH directions (train H1→test H2 AND train H2→test H1). Returns `VALIDATED` only when both directions independently generalize; `OVERFIT_REJECTED` when at least one doesn't; `NO_CANDIDATE` when no grid cell beats baseline on a training half at all. Surfaces (never hides) disagreement between the two directions' chosen parameters — exactly the failure mode that shipped in PLAN-008 Phase 3.
+- ⏱️ **Asynchronous by design — `POST /api/v1/symbols/{symbol}/recalibrate`**: returns `202` + `job_id` immediately; the actual computation (tens of seconds to several minutes per the 2026-08-29 measured timings) runs in a `ProcessPoolExecutor` worker process (`run_calibration_job`), never inline. `api.py` and the live trading daemon share one asyncio event loop — a blocking inline run would stall live reconciliation/self-healing-SL for the run's full duration. Requires `eligible: true` from `/recalibration-status` (409 otherwise). Never writes `tma_trend_filter_enabled`/`tma_slope_lookback`/`tma_slope_threshold` — analysis-only.
+- 🆕 **`GET /api/v1/symbols/{symbol}/recalibrate/status/{job_id}`**: polls job status (`pending`/`running`/`done`/`failed`) and returns the full `CalibrationResult` once done.
+- 🧮 **`OKXExecutor.fetch_candles_paginated()`**: paginated OHLCV fetch for 90-180 day windows (a single `fetch_ohlcv` call is capped at ~300 candles), backed by a new `ohlcv_cache` SQLite table — only the missing tail since the last cached candle is fetched from OKX on repeat calls, not the whole window every time. Falls back to cached data on a transient OKX failure. Public market data only — no API credentials needed, safe under the maintenance lock.
+- 🗄️ **`trend_filter_calibration_runs`** table + `LoggerDB` accessors (`create_calibration_run`, `update_calibration_run`, `get_calibration_run`, `get_latest_calibration_run`, `list_calibration_runs`) — job status/result persistence, read back by both the status endpoint and `/recalibration-status`' "last calibration verdict" field (previously always `null` in Phase 1, before this table existed).
+- 🐛 **Review fix (found before merge)**: `POST /recalibrate` had no guard against two requests for the same symbol before the first job finished — `CALIBRATION_EXECUTOR`'s `max_workers=1` serializes the actual computation either way, but nothing stopped a second, wasted multi-minute run from being enqueued. Now returns the existing `pending`/`running` job's `job_id` instead of creating a duplicate.
+- 🧪 **27 new tests**: `test_backtest_engine.py` (10 fast + 1 slow real-90-day-data regression guard — confirms BTC/USDC's actual review-period data does NOT validate, as a tripwire against silently reintroducing the original overfitting bug), `test_fetch_candles_paginated.py` (5, mocked ccxt), `test_recalibrate_endpoint.py` (8, including the concrete non-blocking regression: `POST /recalibrate` must return in <1s even when the job takes 2s+; and the duplicate-job guard above).
+- 📋 Phase 2 of 3 in `.agents/plans/PLAN-010-trend-filter-recalibration-mechanism.md`.
+
+---
+
 ## 🚀 [0.37.0] - 2026-08-29
 
 ### 🔁 Trend Filter Recalibration Mechanism — Phase 1: Data Readiness (PLAN-010)
