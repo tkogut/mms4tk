@@ -1,7 +1,7 @@
 {
   "name": "mms4-dashboard",
   "private": true,
-  "version": "0.33.6",
+  "version": "0.39.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
