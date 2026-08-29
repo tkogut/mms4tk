@@ -4,6 +4,17 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.40.0] - 2026-08-29
+
+### 🔁 Data Collection Epoch Marker (PLAN-010 follow-up)
+- 🆕 **`LoggerDB.get_data_collection_epoch(symbol)`** + `count_clean_closed_trades()` now excludes trades before `system_settings["data_collection_epoch_start:{symbol}"]`, when set — a prior trading regime (different allocation, different enabled filters) is not comparable evidence for calibrating the CURRENT regime, even if individually clean by the existing degenerate/duplicate-chain checks. `None` (never set) preserves the old all-history behavior.
+- 🆕 **`/recalibration-status`** now exposes `data_collection_epoch_start` (null until set for a symbol) and the Symbols UI trend-filter panel shows "liczone od {data} (zmiana reżimu handlu)" under the progress bar once set.
+- 🐛 **Chain detection now epoch-aware too**: a duplicate chain is filtered to its post-epoch members before counting "excess", so a chain straddling the epoch boundary (historical artifact only, 2026-08-15/16) can't drag a pre-epoch row's count into the post-epoch total.
+- ⚙️ **Operational**: marked `data_collection_epoch_start:BTC/USDC` and `:ETH/USDC` = 2026-08-29T16:09:09Z directly in production `system_settings` — the point at which allocation was reduced $100 → $50/symbol and trading was unlocked. Also corrected `backtest_engine.py`'s `BASE_CONTRACTS` (used only for the `SPLIT_50` no-op fidelity check) from the stale $100-allocation sizes (BTC=2, ETH=8) to the real $50-allocation sizes verified live via `discover_eea_xperp_symbol()` (BTC=4, ETH=14) — the old values would have silently modeled the wrong position-size regime in any future recalibration.
+- 🧪 **6 new tests** (4 `LoggerDB`, 2 API): epoch exclusion, per-symbol isolation, boundary-inclusive (`>=`), null-when-unset, and API field exposure.
+
+---
+
 ## 🚀 [0.39.0] - 2026-08-29
 
 ### 🔁 Trend Filter Recalibration Mechanism — Phase 3: Symbols UI (PLAN-010)
