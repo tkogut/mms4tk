@@ -1,0 +1,23 @@
+{
+  "conversation_id": "6ca66b02-a353-4e30-912a-e3b47553acbe",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/logger_db.py",
+    "src/mms4tk/api.py",
+    "src/mms4tk/backtest_engine.py",
+    "ui_dashboard/src/components/SymbolsTab.jsx",
+    "ui_dashboard/dist/",
+    "ui_dashboard/package.json",
+    "ui_dashboard/package-lock.json",
+    "tests/test_recalibration_status.py",
+    "tests/test_recalibrate_endpoint.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-08-29T16:20:06Z",
+  "notes": "PLAN-010 follow-up: data collection epoch marker (excludes pre-regime-change trades from clean_trade_count), fixed stale BASE_CONTRACTS in backtest_engine.py for new $50 allocation. Prod system_settings marked at 2026-08-29T16:09:09Z for BTC/ETH. 224/224 fast tests + 1 slow regression pass."
+}
