@@ -785,6 +785,11 @@ function TrendFilterSection({ symbolObj, apiKey, trendFilterEnabled, onToggleTre
           <span>Dane do rekalibracji</span>
           <span>{cleanCount}/{threshold} czystych transakcji</span>
         </div>
+        {recalStatus?.data_collection_epoch_start && (
+          <div className="text-[9px] text-slate-500 font-mono mb-1">
+            liczone od {new Date(recalStatus.data_collection_epoch_start).toLocaleDateString('pl-PL')} (zmiana reżimu handlu)
+          </div>
+        )}
         <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
           <div
             className={`h-full transition-all ${eligible ? 'bg-emerald-500' : 'bg-slate-600'}`}

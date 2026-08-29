@@ -38,12 +38,19 @@ STALE_ATR_THRESHOLD = 0.5
 IMPULSE_NEGATION_ENABLED = True
 MIN_FULL_CLOSES_HALF = 12  # below this, a half-window config's stats are too noisy to trust
 
-# Empirical median live base-entry contract size per symbol (from production
-# closed_trades.amount, 2026-08-29 review) — used only for the SPLIT_50
-# reduction_amount() no-op check, not for real position sizing. Symbols without a
-# specific entry fall back to the conservative default (more likely to trigger the
-# no-op, matching the smallest observed live sizes).
-BASE_CONTRACTS: Dict[str, float] = {"BTC/USDC": 2.0, "ETH/USDC": 8.0}
+# Real base-entry contract size per symbol at the CURRENT allocation, from
+# `OKXExecutor.calculate_order_amount()` against the live-resolved XPERP contract
+# size (verified 2026-08-29 via `discover_eea_xperp_symbol()` — NOT the raw OKX
+# instId string, whose contract metadata is not indexed the same way in
+# `exchange.markets`). Used only for the SPLIT_50 `reduction_amount()` no-op check,
+# not for real order sizing.
+#
+# 2026-08-29: allocation reduced $100 -> $50/symbol alongside unlocking trading —
+# these MUST be updated again if allocation changes, or the no-op check silently
+# reverts to modeling the OLD position-size regime.
+#   BTC/USDC @ $50 (70/30 base/add): base=4 contracts, addon=2
+#   ETH/USDC @ $50 (70/30 base/add): base=14 contracts, addon=6
+BASE_CONTRACTS: Dict[str, float] = {"BTC/USDC": 4.0, "ETH/USDC": 14.0}
 BASE_CONTRACTS_DEFAULT = 2.0
 
 
