@@ -1,0 +1,17 @@
+{
+  "conversation_id": "fix-dedupe-closed-trades-20260829",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/logger_db.py",
+    "src/mms4tk/trade_sync.py",
+    "tests/test_dedupe_closed_trades.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-08-29T07:46:16Z",
+  "notes": "Fix duplicate closed_trades rows in Wykaz Transakcji: reconcile_positions() writes a provisional recon_* row, trade_sync.py later writes the authoritative real-fill row with a different trade_id -- ON CONFLICT never dedupes. Added LoggerDB.delete_provisional_closed_trade() (normalized-symbol matched) wired into OKXTradeSyncWorker.sync_closed_trades(). Confirmed against a real production duplicate (BTC/USDC 2026-08-28). 5 new tests, full suite 184/184 PASS. Bumped to v0.36.1. Historical cleanup of ~70 pre-remediation duplicate rows (2026-08-15/16, unrelated legacy pattern) is a separate one-time DB operation, not part of this code change. NOT deployed to VPS."
+}

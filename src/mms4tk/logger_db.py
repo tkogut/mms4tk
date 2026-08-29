@@ -187,6 +187,51 @@ class LoggerDB:
             )
             conn.commit()
 
+    def delete_provisional_closed_trade(self, symbol: str, side: str, entry_price: float, tolerance_pct: float = 0.001) -> int:
+        """Delete a `recon_*` provisional row left by MMS4Daemon.reconcile_positions()
+        once the authoritative fill for the same close has arrived from OKX order
+        history (OKXTradeSyncWorker.sync_closed_trades()).
+
+        reconcile_positions() writes an immediate, ESTIMATED closed-trade row (its own
+        `recon_{symbol}_{side}_<ts_ms>` id, exit price = the daemon's signal price at
+        detection time) so a stop-out is visible right away and drives the state machine
+        without waiting for the sync worker. Because that id never matches the real OKX
+        order id trade_sync later writes, `upsert_closed_trade`'s `ON CONFLICT(trade_id)`
+        never fires and BOTH rows persist — the same real position close appears twice in
+        Wykaz Transakcji with two different exit prices/pnl.
+
+        Matched by NORMALIZED symbol (reconcile_positions writes the clean pair, e.g.
+        "BTC/USDC"; trade_sync writes the raw OKX instId, e.g.
+        "BTC-USD_UM_XPERP-310404" — these must be reduced to the same base asset before
+        comparing, a plain string `symbol = ?` match would never fire) + side + entry
+        price (within `tolerance_pct`), since price is the only field guaranteed to
+        agree closely between the estimate and the real fill.
+
+        Returns the number of rows deleted (0 or 1 in the normal case).
+        """
+        from mms4tk.okx_executor import normalize_symbol
+
+        target_norm = normalize_symbol(symbol)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT trade_id, symbol, side, entry_price FROM closed_trades WHERE trade_id LIKE 'recon\\_%' ESCAPE '\\'")
+            candidates = cursor.fetchall()
+            to_delete = []
+            for row in candidates:
+                if normalize_symbol(row["symbol"]) != target_norm:
+                    continue
+                if str(row["side"]).upper() != str(side).upper():
+                    continue
+                row_entry = float(row["entry_price"] or 0.0)
+                if row_entry <= 0 or abs(row_entry - entry_price) > abs(entry_price) * tolerance_pct:
+                    continue
+                to_delete.append(row["trade_id"])
+
+            for tid in to_delete:
+                cursor.execute("DELETE FROM closed_trades WHERE trade_id = ?", (tid,))
+            conn.commit()
+            return len(to_delete)
+
     def get_closed_trades(self, limit: Optional[int] = 500) -> List[Dict[str, Any]]:
         """
         Fetch historical closed trades sorted by timestamp.
