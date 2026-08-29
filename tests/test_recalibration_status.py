@@ -128,3 +128,36 @@ def test_count_clean_closed_trades_degenerate_row_does_not_bridge_a_false_chain(
     # Without the fix, clean_a and clean_b would be seen as one chain via the bridge,
     # collapsing to 1 clean trade instead of 2.
     assert db.count_clean_closed_trades("BTC/USDC") == 2
+
+
+# ── Data collection epoch marker (2026-08-29: allocation reduced, trading unlocked) ──
+
+def test_get_data_collection_epoch_none_when_never_set(db):
+    assert db.get_data_collection_epoch("BTC/USDC") is None
+
+
+def test_count_clean_closed_trades_excludes_pre_epoch_rows(db):
+    """A trade from a PRIOR trading regime (different allocation/filters) is not
+    comparable evidence for calibrating the CURRENT regime, even if otherwise clean."""
+    _insert(db, "old_regime", "2026-08-20T09:00:00+00:00", entry=80000.0, exit_=79000.0)
+    db.set_setting("data_collection_epoch_start:BTC/USDC", "2026-08-29T00:00:00+00:00")
+    _insert(db, "new_regime", "2026-08-29T12:00:00+00:00", entry=80000.0, exit_=79000.0)
+
+    assert db.count_clean_closed_trades("BTC/USDC") == 1
+
+
+def test_count_clean_closed_trades_epoch_is_per_symbol(db):
+    db.set_setting("data_collection_epoch_start:BTC/USDC", "2026-08-29T00:00:00+00:00")
+    _insert(db, "btc_old", "2026-08-20T09:00:00+00:00", symbol="BTC/USDC", entry=80000.0, exit_=79000.0)
+    _insert(db, "eth_old", "2026-08-20T09:00:00+00:00", symbol="ETH/USDC", entry=2400.0, exit_=2380.0)
+
+    assert db.count_clean_closed_trades("BTC/USDC") == 0  # excluded: before BTC's epoch
+    assert db.count_clean_closed_trades("ETH/USDC") == 1  # ETH has no epoch marker -> counts all history
+
+
+def test_count_clean_closed_trades_epoch_boundary_row_counts(db):
+    """A trade exactly AT the epoch timestamp counts (>=, not >)."""
+    db.set_setting("data_collection_epoch_start:BTC/USDC", "2026-08-29T00:00:00+00:00")
+    _insert(db, "at_epoch", "2026-08-29T00:00:00+00:00", entry=80000.0, exit_=79000.0)
+
+    assert db.count_clean_closed_trades("BTC/USDC") == 1

@@ -213,3 +213,17 @@ def test_recalibration_history_lists_most_recent_first(client, monkeypatch):
 def test_recalibration_history_empty_for_symbol_with_no_runs(client):
     history = client.get("/api/v1/symbols/ETH%2FUSDC/recalibrate/history").json()
     assert history["runs"] == []
+
+
+def test_recalibration_status_exposes_null_epoch_when_unset(client):
+    status = client.get("/api/v1/symbols/BTC%2FUSDC/recalibration-status").json()
+    assert status["data_collection_epoch_start"] is None
+
+
+def test_recalibration_status_exposes_epoch_once_set(client):
+    """2026-08-29: allocation reduced + trading unlocked -> a symbol's clean count
+    should only reflect trades from that point on, and the API must surface WHEN
+    that boundary is, not just apply it silently."""
+    api.logger_db.set_setting("data_collection_epoch_start:BTC/USDC", "2026-08-29T16:00:00+00:00")
+    status = client.get("/api/v1/symbols/BTC%2FUSDC/recalibration-status").json()
+    assert status["data_collection_epoch_start"] == "2026-08-29T16:00:00+00:00"
