@@ -134,6 +134,23 @@ def test_recalibrate_status_transitions_pending_to_done(client, monkeypatch):
     assert body["result"] == {"note": "fake"}
 
 
+def test_recalibrate_returns_existing_job_instead_of_duplicating(client, monkeypatch):
+    """Two POSTs for the same symbol before the first job finishes must return the
+    SAME job_id, not enqueue a second one that duplicates the (potentially
+    minutes-long) computation."""
+    _make_eligible(api.logger_db)
+    monkeypatch.setattr(
+        "mms4tk.backtest_engine.run_calibration_job",
+        lambda job_id, symbol, db_path: time.sleep(1.0),  # still "running" for a bit
+    )
+
+    first = client.post("/api/v1/symbols/BTC%2FUSDC/recalibrate", headers=HEADERS)
+    second = client.post("/api/v1/symbols/BTC%2FUSDC/recalibrate", headers=HEADERS)
+
+    assert first.status_code == 202 and second.status_code == 202
+    assert first.json()["job_id"] == second.json()["job_id"]
+
+
 def test_recalibrate_status_404_for_unknown_job(client):
     resp = client.get("/api/v1/symbols/BTC%2FUSDC/recalibrate/status/does-not-exist")
     assert resp.status_code == 404
