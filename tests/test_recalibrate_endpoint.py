@@ -179,3 +179,37 @@ def test_recalibrate_never_writes_trend_filter_settings(client, monkeypatch):
 
     after = api.logger_db.get_all_settings().get("tma_trend_filter_enabled:BTC/USDC")
     assert before == after
+
+
+def test_recalibration_history_lists_most_recent_first(client, monkeypatch):
+    """PLAN-010 §5.2.3: the 'historia kalibracji' panel needs runs newest-first,
+    each with enough summary fields to render without a second round-trip."""
+    _make_eligible(api.logger_db)
+    monkeypatch.setattr(
+        "mms4tk.backtest_engine.run_calibration_job",
+        lambda job_id, symbol, db_path: api.logger_db.update_calibration_run(
+            job_id, status="done", verdict="OVERFIT_REJECTED", result_json=json.dumps({"note": "x"}),
+        ),
+    )
+
+    job_ids = []
+    for _ in range(3):
+        resp = client.post("/api/v1/symbols/BTC%2FUSDC/recalibrate", headers=HEADERS)
+        jid = resp.json()["job_id"]
+        job_ids.append(jid)
+        for _ in range(20):
+            if client.get(f"/api/v1/symbols/BTC%2FUSDC/recalibrate/status/{jid}").json()["status"] == "done":
+                break
+            time.sleep(0.02)
+
+    history = client.get("/api/v1/symbols/BTC%2FUSDC/recalibrate/history").json()
+    assert history["symbol"] == "BTC/USDC"
+    assert len(history["runs"]) == 3
+    assert history["runs"][0]["job_id"] == job_ids[-1]  # most recent first
+    assert all(r["verdict"] == "OVERFIT_REJECTED" for r in history["runs"])
+    assert "result_json" not in history["runs"][0]  # lightweight summary, not the full blob
+
+
+def test_recalibration_history_empty_for_symbol_with_no_runs(client):
+    history = client.get("/api/v1/symbols/ETH%2FUSDC/recalibrate/history").json()
+    assert history["runs"] == []
