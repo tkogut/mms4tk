@@ -348,6 +348,14 @@ def test_second_addon_blocked_after_entry_price_drift(db):
     # The fill shifts the average entry, as it does on a real exchange.
     ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "short", contracts=6.0,
                                                           entry=99.4, notional=12.0)])
+    # Advance to a new closed candle (PLAN-008 Ph2 Candle-Close Gate would otherwise
+    # short-circuit this second cycle before the Single Addon Guard even runs, since the
+    # daemon's own candle mock would still be on the same closed candle as the 1st call).
+    ex.fetch_candles = AsyncMock(return_value=[
+        Candle(timestamp=c.timestamp + 999_000_000, open=c.open, high=c.high, low=c.low,
+               close=c.close, volume=c.volume)
+        for c in flat_candles(60)
+    ])
     res2 = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
     assert res2["outcome"] == "SKIPPED_HIGH_RISK_ADD_SHORT"
     assert ex.execute_order.await_count == 1

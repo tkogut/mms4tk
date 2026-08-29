@@ -1,0 +1,18 @@
+{
+  "conversation_id": "plan-008-phase2-candle-gate-20260828",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/daemon.py",
+    "tests/test_candle_gate.py",
+    "tests/test_sl_cooldown.py",
+    "tests/test_audit_remediation.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-08-28T16:42:50Z",
+  "notes": "PLAN-008 Phase 2: candle-close gate (_last_signal_candle_ts) + post-SL cooldown (_sl_cooldown_until) in daemon.py. Fixes confirmed live duplicate-execution bug (24.08 cluster, 10-15x EXECUTED_BASE_SHORT). Reconciliation/self-healing SL/Inactivity Manager verified to keep running unconditionally every cycle. 7 new tests + 1 existing test adjusted for new candle-gate semantics; full suite 170/170 PASS. Bumped to v0.35.0. NOT deployed to VPS."
+}

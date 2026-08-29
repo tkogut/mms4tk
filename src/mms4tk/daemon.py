@@ -116,6 +116,8 @@ class MMS4Daemon:
         self.last_signal: Optional[SignalResult] = None
         self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager()
         self._last_candle_ts: Dict[str, int] = {}  # per-symbol: timestamp of last known closed candle
+        self._last_signal_candle_ts: Dict[str, int] = {}  # PLAN-008 Ph2: per-symbol, last closed-candle ts an entry signal was dispatched on
+        self._sl_cooldown_until: Dict[str, int] = {}  # PLAN-008 Ph2: per-symbol, candle ts (ms) until which new entries are blocked after a reconciled SL
 
         # Stop-loss percentages used when opening; reconciliation compares the exit price
         # against these to decide whether a vanished position was a stop-out.
@@ -730,6 +732,20 @@ class MMS4Daemon:
         except Exception as rec_err:
             logger.error(f"Reconciliation failed for {target_symbol}: {rec_err}", exc_info=True)
 
+        # PLAN-008 Phase 2: engage a post-SL cooldown so a fresh reconciled stop-loss
+        # doesn't get immediately re-entered on the very next signal.
+        for _rc_evt in reconciliation_events:
+            if _rc_evt.get("is_stop_loss") and len(candles) >= 2:
+                cooldown_n = int(os.getenv("MMS4_SL_COOLDOWN_CANDLES", "3"))
+                if cooldown_n > 0:
+                    c_interval = abs(int(candles[-1].timestamp) - int(candles[-2].timestamp))
+                    if c_interval > 0:
+                        self._sl_cooldown_until[target_symbol] = int(candles[-1].timestamp) + (cooldown_n * c_interval)
+                        logger.info(
+                            f"🧊 Post-SL cooldown engaged for {target_symbol}: {cooldown_n} candles "
+                            f"(until ts={self._sl_cooldown_until[target_symbol]})"
+                        )
+
         if reconciliation_events:
             # Risk state may have just changed (BASE -> SCOUT); re-read it.
             sym_state = self.state_manager.get_symbol_state(target_symbol)
@@ -1027,269 +1043,310 @@ class MMS4Daemon:
                 "reconciliation": reconciliation_events,
             }
 
+        # PLAN-008 Phase 2: Candle-Close Gate + Post-SL Cooldown — computed once, applied
+        # at the top of both entry-signal branches below. Reconciliation, self-healing SL
+        # and the Inactivity Manager have already run for this cycle (above); this section
+        # only gates NEW entries, never position supervision.
+        last_closed_ts = int(candles[-2].timestamp) if len(candles) >= 2 else 0
+        sl_cooldown_until = self._sl_cooldown_until.get(target_symbol, 0)
+        cooldown_active = False
+        if sl_cooldown_until > 0 and len(candles) >= 1:
+            if int(candles[-1].timestamp) < sl_cooldown_until:
+                cooldown_active = True
+            else:
+                del self._sl_cooldown_until[target_symbol]
+
         if is_maintenance_locked():
             outcome = f"SKIPPED_MAINTENANCE_MODE"
             details = f"⛔ Trading blocked: Maintenance Mode is ACTIVE. Signal {signal.signal_type} for {target_symbol} skipped."
             logger.warning(details)
         elif signal.signal_type in ["BASE_SHORT", "BASE_LONG"]:
-            if matching_pos is not None and existing_contracts > 0:
-                outcome = f"SKIPPED_{signal.signal_type}"
-                details = f"Base position ({target_pos_side.upper()}) already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
-            elif opposite_pos is not None and existing_contracts > 0:
-                # MMS4 Rule 1.4 & 8.4: Opposite TMA band hit is the natural Take Profit for the existing position.
-                # Step 1: Close opposite position completely (Take Profit / Mean-Reversion Exit)
-                side_to_close = existing_side.lower()
-                pnl_pct = 0.0
-                if active_entry_price > 0:
-                    if side_to_close == "short":
-                        pnl_pct = (active_entry_price - signal.price) / active_entry_price
-                    else:
-                        pnl_pct = (signal.price - active_entry_price) / active_entry_price
-
-                pnl_str = f"+{pnl_pct*100:.2f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.2f}%"
-                logger.info(
-                    f"🎯 MMS4 Take Profit on opposite TMA band for {target_symbol}: "
-                    f"Closing {side_to_close.upper()} (Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL={pnl_str})"
+            if cooldown_active:
+                outcome = "COOLDOWN_ACTIVE"
+                details = (
+                    f"Post-SL cooldown active for {target_symbol} until ts={sl_cooldown_until} "
+                    f"— {signal.signal_type} skipped."
                 )
+            elif last_closed_ts > 0 and last_closed_ts == self._last_signal_candle_ts.get(target_symbol, 0):
+                outcome = f"CANDLE_GATE_SKIP_{signal.signal_type}"
+                details = (
+                    f"Signal {signal.signal_type} for {target_symbol} already evaluated for closed "
+                    f"candle {last_closed_ts}. Skipping repeat execution this candle."
+                )
+            else:
+                self._last_signal_candle_ts[target_symbol] = last_closed_ts
+                if matching_pos is not None and existing_contracts > 0:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = f"Base position ({target_pos_side.upper()}) already open for {target_symbol} ({existing_contracts} contracts, notional=${existing_notional:.2f} USD). Single Position Guard active."
+                elif opposite_pos is not None and existing_contracts > 0:
+                    # MMS4 Rule 1.4 & 8.4: Opposite TMA band hit is the natural Take Profit for the existing position.
+                    # Step 1: Close opposite position completely (Take Profit / Mean-Reversion Exit)
+                    side_to_close = existing_side.lower()
+                    pnl_pct = 0.0
+                    if active_entry_price > 0:
+                        if side_to_close == "short":
+                            pnl_pct = (active_entry_price - signal.price) / active_entry_price
+                        else:
+                            pnl_pct = (signal.price - active_entry_price) / active_entry_price
 
-                try:
-                    # 1. Close existing opposite position and VERIFY it actually closed.
-                    close_result = await self.executor.reduce_position(
-                        symbol=target_symbol,
-                        side=side_to_close,
-                        reduction_pct=1.0,
-                        reason=f"TAKE_PROFIT_{signal.signal_type}"
+                    pnl_str = f"+{pnl_pct*100:.2f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.2f}%"
+                    logger.info(
+                        f"🎯 MMS4 Take Profit on opposite TMA band for {target_symbol}: "
+                        f"Closing {side_to_close.upper()} (Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL={pnl_str})"
                     )
-                    if not self._close_succeeded(close_result):
-                        close_status = (close_result or {}).get("status", "unknown")
-                        # The close is not confirmed. Re-query the exchange before deciding —
-                        # opening the opposite leg on top of a live position would leave two
-                        # hedged positions instead of a flip.
-                        if await self._position_still_open(target_symbol, side_to_close):
-                            raise RuntimeError(
-                                f"Take-Profit close reported '{close_status}' and {target_symbol} "
-                                f"{side_to_close.upper()} is still open on OKX — flip aborted to "
-                                f"avoid stacking an opposing leg."
-                            )
-                        logger.info(
-                            f"Take-Profit close for {target_symbol} returned '{close_status}' but the "
-                            f"position is gone on OKX; proceeding with the flip."
-                        )
 
-                    self.inactivity_manager.stop_tracking(target_symbol)
-                    self._clear_addons(target_symbol, side_to_close)
                     try:
-                        self.logger_db.delete_position_snapshot(target_symbol, side_to_close)
-                    except Exception:
-                        pass
-
-                    # 2. Book the realized take-profit and transition state (SCOUT -> BASE)
-                    try:
-                        ct_size = self._get_contract_size(target_symbol)
-                        pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
-                        self.state_manager.record_trade(
-                            trade_id=f"tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}",
+                        # 1. Close existing opposite position and VERIFY it actually closed.
+                        close_result = await self.executor.reduce_position(
                             symbol=target_symbol,
                             side=side_to_close,
-                            entry_price=active_entry_price,
-                            exit_price=signal.price,
-                            amount=existing_contracts,
-                            pnl=pnl_usd,
-                            pnl_percent=pnl_pct,
-                            is_take_profit=True,
+                            reduction_pct=1.0,
+                            reason=f"TAKE_PROFIT_{signal.signal_type}"
                         )
-                    except Exception as rec_err:
-                        logger.error(f"Failed to record take-profit trade for {target_symbol}: {rec_err}")
-                        self.state_manager.on_take_profit_hit(target_symbol)
+                        if not self._close_succeeded(close_result):
+                            close_status = (close_result or {}).get("status", "unknown")
+                            # The close is not confirmed. Re-query the exchange before deciding —
+                            # opening the opposite leg on top of a live position would leave two
+                            # hedged positions instead of a flip.
+                            if await self._position_still_open(target_symbol, side_to_close):
+                                raise RuntimeError(
+                                    f"Take-Profit close reported '{close_status}' and {target_symbol} "
+                                    f"{side_to_close.upper()} is still open on OKX — flip aborted to "
+                                    f"avoid stacking an opposing leg."
+                                )
+                            logger.info(
+                                f"Take-Profit close for {target_symbol} returned '{close_status}' but the "
+                                f"position is gone on OKX; proceeding with the flip."
+                            )
 
-                    # 3. Emit Take Profit webhook event & Telegram
-                    try:
-                        from mms4tk.hermes_webhook import HermesWebhookClient
-                        wh_client = HermesWebhookClient()
-                        wh_client.emit_take_profit_event(
-                            symbol=target_symbol,
-                            closed_side=side_to_close,
-                            entry_price=active_entry_price,
-                            exit_price=signal.price,
-                            pnl_pct=pnl_pct,
-                            new_side=target_pos_side,
-                            reason=f"Opposite TMA Band reached ({signal.signal_type})"
-                        )
-                    except Exception as whe:
-                        logger.warning(f"Failed to emit take profit event for {target_symbol}: {whe}")
+                        self.inactivity_manager.stop_tracking(target_symbol)
+                        self._clear_addons(target_symbol, side_to_close)
+                        try:
+                            self.logger_db.delete_position_snapshot(target_symbol, side_to_close)
+                        except Exception:
+                            pass
 
-                    # 4. Open new position in the flipped direction
-                    if base_order_amount <= 0:
-                        outcome = f"TAKE_PROFIT_NO_FLIP_{signal.signal_type}"
+                        # 2. Book the realized take-profit and transition state (SCOUT -> BASE)
+                        try:
+                            ct_size = self._get_contract_size(target_symbol)
+                            pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
+                            self.state_manager.record_trade(
+                                trade_id=f"tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}",
+                                symbol=target_symbol,
+                                side=side_to_close,
+                                entry_price=active_entry_price,
+                                exit_price=signal.price,
+                                amount=existing_contracts,
+                                pnl=pnl_usd,
+                                pnl_percent=pnl_pct,
+                                is_take_profit=True,
+                            )
+                        except Exception as rec_err:
+                            logger.error(f"Failed to record take-profit trade for {target_symbol}: {rec_err}")
+                            self.state_manager.on_take_profit_hit(target_symbol)
+
+                        # 3. Emit Take Profit webhook event & Telegram
+                        try:
+                            from mms4tk.hermes_webhook import HermesWebhookClient
+                            wh_client = HermesWebhookClient()
+                            wh_client.emit_take_profit_event(
+                                symbol=target_symbol,
+                                closed_side=side_to_close,
+                                entry_price=active_entry_price,
+                                exit_price=signal.price,
+                                pnl_pct=pnl_pct,
+                                new_side=target_pos_side,
+                                reason=f"Opposite TMA Band reached ({signal.signal_type})"
+                            )
+                        except Exception as whe:
+                            logger.warning(f"Failed to emit take profit event for {target_symbol}: {whe}")
+
+                        # 4. Open new position in the flipped direction
+                        if base_order_amount <= 0:
+                            outcome = f"TAKE_PROFIT_NO_FLIP_{signal.signal_type}"
+                            details = (
+                                f"Take Profit on opposite TMA Band for {target_symbol}: Closed "
+                                f"{side_to_close.upper()} (PnL: {pnl_str}). New {signal.signal_type} entry "
+                                f"skipped — ${notional_base_usd:.2f} notional does not fit a whole contract "
+                                f"within budget."
+                            )
+                        else:
+                            order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                            order_info = await self.executor.execute_order(
+                                symbol=target_symbol,
+                                side=order_side,
+                                amount=base_order_amount,
+                                stop_loss_pct=self.base_sl_pct,
+                                leverage=sym_leverage,
+                                price=signal.price
+                            )
+                            outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"
+                            details = (
+                                f"Take Profit on opposite TMA Band for {target_symbol}: Closed {side_to_close.upper()} "
+                                f"({existing_contracts} contracts, Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL: {pnl_str}). "
+                                f"Flipped to new {signal.signal_type} base position "
+                                f"(${self.base_trade_usd:.2f} USD margin, SL={self.base_sl_pct*100:.2f}%)."
+                            )
+                    except Exception as e:
+                        outcome = f"ERROR_{signal.signal_type}"
+                        details = f"Failed to execute TP & Flip for {target_symbol}: {str(e)}"
+                        logger.error(details, exc_info=True)
+                elif base_order_amount <= 0:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = (
+                        f"{signal.signal_type} for {target_symbol} skipped: ${notional_base_usd:.2f} notional "
+                        f"(margin ${self.base_trade_usd:.2f} x{sym_leverage}) does not fit a whole contract "
+                        f"within the allocation budget. Risk is reduced by NOT trading, never by oversizing."
+                    )
+                    logger.info(f"⊘ {details}")
+                else:
+                    # ── Portfolio Margin Guard: reserve before checking, hold across the
+                    # await to execute_order() so a sibling symbol cycle racing the same cap
+                    # (they all run concurrently under asyncio.gather) sees this notional as
+                    # already committed instead of checking against a stale snapshot. ──
+                    pmg = await self.reserve_portfolio_margin(
+                        live_positions, notional_base_usd, target_symbol
+                    )
+                    if not pmg["allowed"]:
+                        outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
                         details = (
-                            f"Take Profit on opposite TMA Band for {target_symbol}: Closed "
-                            f"{side_to_close.upper()} (PnL: {pnl_str}). New {signal.signal_type} entry "
-                            f"skipped — ${notional_base_usd:.2f} notional does not fit a whole contract "
-                            f"within budget."
+                            f"🛡️ Portfolio Margin Guard blocked {signal.signal_type} for {target_symbol}: "
+                            f"adding ${notional_base_usd:.2f} would push total from "
+                            f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap. "
+                            f"Headroom: ${pmg['headroom_usd']:.2f}"
                         )
+                        logger.warning(details)
                     else:
                         order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
-                        order_info = await self.executor.execute_order(
-                            symbol=target_symbol,
-                            side=order_side,
-                            amount=base_order_amount,
-                            stop_loss_pct=self.base_sl_pct,
-                            leverage=sym_leverage,
-                            price=signal.price
-                        )
-                        outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"
-                        details = (
-                            f"Take Profit on opposite TMA Band for {target_symbol}: Closed {side_to_close.upper()} "
-                            f"({existing_contracts} contracts, Entry=${active_entry_price:,.4f}, Exit=${signal.price:,.4f}, PnL: {pnl_str}). "
-                            f"Flipped to new {signal.signal_type} base position "
-                            f"(${self.base_trade_usd:.2f} USD margin, SL={self.base_sl_pct*100:.2f}%)."
-                        )
-                except Exception as e:
-                    outcome = f"ERROR_{signal.signal_type}"
-                    details = f"Failed to execute TP & Flip for {target_symbol}: {str(e)}"
-                    logger.error(details, exc_info=True)
-            elif base_order_amount <= 0:
-                outcome = f"SKIPPED_{signal.signal_type}"
-                details = (
-                    f"{signal.signal_type} for {target_symbol} skipped: ${notional_base_usd:.2f} notional "
-                    f"(margin ${self.base_trade_usd:.2f} x{sym_leverage}) does not fit a whole contract "
-                    f"within the allocation budget. Risk is reduced by NOT trading, never by oversizing."
-                )
-                logger.info(f"⊘ {details}")
-            else:
-                # ── Portfolio Margin Guard: reserve before checking, hold across the
-                # await to execute_order() so a sibling symbol cycle racing the same cap
-                # (they all run concurrently under asyncio.gather) sees this notional as
-                # already committed instead of checking against a stale snapshot. ──
-                pmg = await self.reserve_portfolio_margin(
-                    live_positions, notional_base_usd, target_symbol
-                )
-                if not pmg["allowed"]:
-                    outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
-                    details = (
-                        f"🛡️ Portfolio Margin Guard blocked {signal.signal_type} for {target_symbol}: "
-                        f"adding ${notional_base_usd:.2f} would push total from "
-                        f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap. "
-                        f"Headroom: ${pmg['headroom_usd']:.2f}"
-                    )
-                    logger.warning(details)
-                else:
-                    order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
-                    try:
-                        order_info = await self.executor.execute_order(
-                            symbol=target_symbol,
-                            side=order_side,
-                            amount=base_order_amount,
-                            stop_loss_pct=self.base_sl_pct,
-                            leverage=sym_leverage,
-                            price=signal.price
-                        )
-                        outcome = f"EXECUTED_{signal.signal_type}"
-                        details = (
-                            f"Executed {signal.signal_type} base order for {target_symbol} "
-                            f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
-                            f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
-                        )
-                    except BelowMinimumNotional as e:
-                        # Not a failure: the intended size is under the venue's minimum, so
-                        # the correct action is to stand down rather than trade bigger.
-                        outcome = f"SKIPPED_{signal.signal_type}"
-                        details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
-                        logger.info(f"⊘ {details}")
-                    except Exception as e:
-                        outcome = f"ERROR_{signal.signal_type}"
-                        details = f"Failed to execute order for {target_symbol}: {str(e)}"
-                        logger.error(details, exc_info=True)
-                    finally:
-                        # Whichever branch ran, this cycle is done deciding on this
-                        # notional. A filled order becomes real notional via next cycle's
-                        # fetch_positions(); the reservation must not outlive this cycle.
-                        await self.release_portfolio_reservation(notional_base_usd)
+                        try:
+                            order_info = await self.executor.execute_order(
+                                symbol=target_symbol,
+                                side=order_side,
+                                amount=base_order_amount,
+                                stop_loss_pct=self.base_sl_pct,
+                                leverage=sym_leverage,
+                                price=signal.price
+                            )
+                            outcome = f"EXECUTED_{signal.signal_type}"
+                            details = (
+                                f"Executed {signal.signal_type} base order for {target_symbol} "
+                                f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
+                                f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                            )
+                        except BelowMinimumNotional as e:
+                            # Not a failure: the intended size is under the venue's minimum, so
+                            # the correct action is to stand down rather than trade bigger.
+                            outcome = f"SKIPPED_{signal.signal_type}"
+                            details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
+                            logger.info(f"⊘ {details}")
+                        except Exception as e:
+                            outcome = f"ERROR_{signal.signal_type}"
+                            details = f"Failed to execute order for {target_symbol}: {str(e)}"
+                            logger.error(details, exc_info=True)
+                        finally:
+                            # Whichever branch ran, this cycle is done deciding on this
+                            # notional. A filled order becomes real notional via next cycle's
+                            # fetch_positions(); the reservation must not outlive this cycle.
+                            await self.release_portfolio_reservation(notional_base_usd)
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
-            # Single Addon Guard: an explicit, persisted per-position counter.
-            # The previous heuristic ("contracts exceed base by >= 1") classified any
-            # position slightly larger than one base unit as already-added and blocked
-            # legitimate first addons, while the in-memory lock was lost on restart.
-            match_entry = _pos_entry_price(matching_pos) if matching_pos is not None else 0.0
-            addons_done = (
-                self._addon_count(target_symbol, target_pos_side, match_entry)
-                if matching_pos is not None else 0
-            )
-            # Hard cap on total committed margin, independent of the counter.
-            margin_cap_usd = alloc["notional_cap_usd"]
-            would_exceed_cap = (existing_notional + notional_addon_usd) > margin_cap_usd * (1.0 + 0.10)
-
-            if sym_state != MMS4State.BASE_MODE:
-                outcome = f"BLOCKED_{signal.signal_type}"
-                details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
-            elif matching_pos is None or existing_contracts <= 0:
-                outcome = f"BLOCKED_{signal.signal_type}"
+            if cooldown_active:
+                outcome = "COOLDOWN_ACTIVE"
                 details = (
-                    f"High Risk Add {signal.signal_type} blocked for {target_symbol} because no matching "
-                    f"{target_pos_side.upper()} base position exists "
-                    f"(Active: {existing_side.upper() if existing_side else 'NONE'})."
+                    f"Post-SL cooldown active for {target_symbol} until ts={sl_cooldown_until} "
+                    f"— {signal.signal_type} skipped."
                 )
-            elif addons_done >= 1:
-                outcome = f"SKIPPED_{signal.signal_type}"
+            elif last_closed_ts > 0 and last_closed_ts == self._last_signal_candle_ts.get(target_symbol, 0):
+                outcome = f"CANDLE_GATE_SKIP_{signal.signal_type}"
                 details = (
-                    f"High Risk Add already executed {addons_done}x on this {target_pos_side.upper()} "
-                    f"position for {target_symbol} (entry=${match_entry:,.4f}). Single Addon Guard active."
-                )
-            elif would_exceed_cap:
-                outcome = f"SKIPPED_{signal.signal_type}"
-                details = (
-                    f"High Risk Add for {target_symbol} skipped: existing ${existing_notional:.2f} + "
-                    f"addon ${notional_addon_usd:.2f} would exceed the ${margin_cap_usd:.2f} notional cap."
-                )
-            elif addon_order_amount <= 0:
-                outcome = f"SKIPPED_{signal.signal_type}"
-                details = (
-                    f"High Risk Add for {target_symbol} skipped: ${notional_addon_usd:.2f} notional does "
-                    f"not fit a whole contract within budget."
+                    f"Signal {signal.signal_type} for {target_symbol} already evaluated for closed "
+                    f"candle {last_closed_ts}. Skipping repeat execution this candle."
                 )
             else:
-                # ── Portfolio Margin Guard: reserve + block addon if global cap would
-                # be exceeded (see reserve_portfolio_margin for the race it closes). ──
-                pmg = await self.reserve_portfolio_margin(
-                    live_positions, notional_addon_usd, target_symbol
+                self._last_signal_candle_ts[target_symbol] = last_closed_ts
+                # Single Addon Guard: an explicit, persisted per-position counter.
+                # The previous heuristic ("contracts exceed base by >= 1") classified any
+                # position slightly larger than one base unit as already-added and blocked
+                # legitimate first addons, while the in-memory lock was lost on restart.
+                match_entry = _pos_entry_price(matching_pos) if matching_pos is not None else 0.0
+                addons_done = (
+                    self._addon_count(target_symbol, target_pos_side, match_entry)
+                    if matching_pos is not None else 0
                 )
-                if not pmg["allowed"]:
-                    outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
+                # Hard cap on total committed margin, independent of the counter.
+                margin_cap_usd = alloc["notional_cap_usd"]
+                would_exceed_cap = (existing_notional + notional_addon_usd) > margin_cap_usd * (1.0 + 0.10)
+
+                if sym_state != MMS4State.BASE_MODE:
+                    outcome = f"BLOCKED_{signal.signal_type}"
+                    details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
+                elif matching_pos is None or existing_contracts <= 0:
+                    outcome = f"BLOCKED_{signal.signal_type}"
                     details = (
-                        f"🛡️ Portfolio Margin Guard blocked High Risk Add for {target_symbol}: "
-                        f"adding ${notional_addon_usd:.2f} would push total from "
-                        f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap."
+                        f"High Risk Add {signal.signal_type} blocked for {target_symbol} because no matching "
+                        f"{target_pos_side.upper()} base position exists "
+                        f"(Active: {existing_side.upper() if existing_side else 'NONE'})."
                     )
-                    logger.warning(details)
+                elif addons_done >= 1:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = (
+                        f"High Risk Add already executed {addons_done}x on this {target_pos_side.upper()} "
+                        f"position for {target_symbol} (entry=${match_entry:,.4f}). Single Addon Guard active."
+                    )
+                elif would_exceed_cap:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = (
+                        f"High Risk Add for {target_symbol} skipped: existing ${existing_notional:.2f} + "
+                        f"addon ${notional_addon_usd:.2f} would exceed the ${margin_cap_usd:.2f} notional cap."
+                    )
+                elif addon_order_amount <= 0:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = (
+                        f"High Risk Add for {target_symbol} skipped: ${notional_addon_usd:.2f} notional does "
+                        f"not fit a whole contract within budget."
+                    )
                 else:
-                    order_side = "SELL" if "SHORT" in signal.signal_type else "BUY"
-                    try:
-                        order_info = await self.executor.execute_order(
-                            symbol=target_symbol,
-                            side=order_side,
-                            amount=addon_order_amount,
-                            stop_loss_pct=self.addon_sl_pct,
-                            leverage=sym_leverage,
-                            price=signal.price
-                        )
-                        self._record_addon(target_symbol, target_pos_side, match_entry)
-                        outcome = f"EXECUTED_{signal.signal_type}"
+                    # ── Portfolio Margin Guard: reserve + block addon if global cap would
+                    # be exceeded (see reserve_portfolio_margin for the race it closes). ──
+                    pmg = await self.reserve_portfolio_margin(
+                        live_positions, notional_addon_usd, target_symbol
+                    )
+                    if not pmg["allowed"]:
+                        outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
                         details = (
-                            f"Executed High Risk Add order for {target_symbol} "
-                            f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
-                            f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                            f"🛡️ Portfolio Margin Guard blocked High Risk Add for {target_symbol}: "
+                            f"adding ${notional_addon_usd:.2f} would push total from "
+                            f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap."
                         )
-                    except BelowMinimumNotional as e:
-                        outcome = f"SKIPPED_{signal.signal_type}"
-                        details = f"High Risk Add for {target_symbol} skipped — {e}"
-                        logger.info(f"⊘ {details}")
-                    except Exception as e:
-                        outcome = f"ERROR_{signal.signal_type}"
-                        details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
-                        logger.error(details, exc_info=True)
-                    finally:
-                        await self.release_portfolio_reservation(notional_addon_usd)
+                        logger.warning(details)
+                    else:
+                        order_side = "SELL" if "SHORT" in signal.signal_type else "BUY"
+                        try:
+                            order_info = await self.executor.execute_order(
+                                symbol=target_symbol,
+                                side=order_side,
+                                amount=addon_order_amount,
+                                stop_loss_pct=self.addon_sl_pct,
+                                leverage=sym_leverage,
+                                price=signal.price
+                            )
+                            self._record_addon(target_symbol, target_pos_side, match_entry)
+                            outcome = f"EXECUTED_{signal.signal_type}"
+                            details = (
+                                f"Executed High Risk Add order for {target_symbol} "
+                                f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
+                                f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                            )
+                        except BelowMinimumNotional as e:
+                            outcome = f"SKIPPED_{signal.signal_type}"
+                            details = f"High Risk Add for {target_symbol} skipped — {e}"
+                            logger.info(f"⊘ {details}")
+                        except Exception as e:
+                            outcome = f"ERROR_{signal.signal_type}"
+                            details = f"Failed to execute High Risk Add for {target_symbol}: {str(e)}"
+                            logger.error(details, exc_info=True)
+                        finally:
+                            await self.release_portfolio_reservation(notional_addon_usd)
 
         # 4. Log cycle outcome for specific symbol
         self.logger_db.log_cycle(
