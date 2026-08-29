@@ -4,6 +4,21 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.36.0] - 2026-08-28
+
+### 📈 TMA Slope Trend Filter — per-symbol (PLAN-008 Phase 3)
+- 🧮 **`tma_slope` column** in `TMAIndicator.calculate()`: `tma.pct_change(periods=tma_slope_lookback)`, causal (no lookahead — plain trailing `.rolling()`, same as the rest of the indicator).
+- 🚫 **Counter-trend BASE entry gating** in `evaluate_signals()`: `BASE_SHORT` vetoed (`is_allowed=False`) when slope > `tma_slope_threshold` (uptrend); `BASE_LONG` vetoed when slope < `-tma_slope_threshold` (downtrend). Independent of `engine_mode`/`is_adaptive` — a strategy-level filter, not part of the Adaptive Hybrid Engine's VR/time-lock fast-path. Routes through the daemon's existing `is_allowed=False` veto handling — no daemon-side dispatch changes needed.
+- 🎯 **Per-symbol, not global — required by calibration data**: a 90-day backtest (real `TMAIndicator`/`MMS4SignalEngine`/`MMS4InactivityManager`, real OKX OHLCV) found the SAME `lookback`/`threshold` pair behaves very differently per symbol — a single global switch would have been wrong. Two symbols, two distinct calibrated configs:
+  - **BTC/USDC**: `lookback=3, threshold=0.002` — 14/16 cells of the initial 4×4 grid beat baseline (R:R 0.82→1.33, PnL +10.4%→+29.7%, 79 full closes).
+  - **ETH/USDC**: the initial 4×4 grid (lookback≤12, threshold≤0.005) only passed at its most restrictive corner — a low-confidence, edge-of-grid result. Extending the grid (lookback 12–30, threshold 0.005–0.020) resolved it: **20/25 extended cells beat baseline**, a broad, stable region — ETH just needs a slower filter than BTC (20h+ lookback vs 3h). Calibrated: **`lookback=20, threshold=0.010`** (R:R 0.89→1.11, PnL +9.6%→+16.4%, 70 full closes), chosen from the middle of the passing region rather than a single best cell.
+- 🐛 **Persistence fix**: `tma_trend_filter_enabled`/`tma_slope_lookback`/`tma_slope_threshold` are read from `system_settings` under per-symbol-qualified keys (e.g. `tma_trend_filter_enabled:BTC/USDC`), NOT from `configured_symbols_store`/`symbols.json` alone — the `symbol_configurations` SQLite table has a fixed schema with no column for these, so storing them only there would silently reset to defaults on the next `load_symbols_config()` call (it prefers SQLite whenever any row exists, which it always does once a symbol has been added). This is a pre-existing gap shared by `stale_candles_threshold`/`stale_atr_threshold`/`impulse_negation_enabled` too — flagged separately, not fixed here (out of scope for this PR).
+- 🧩 **`_get_indicator_params()` now per-symbol**: takes an optional `symbol` argument, looks up the qualified settings, falls back to `configured_symbols_store` then disabled-by-default.
+- 🧪 **`tests/test_trend_filter.py`** (6 tests): slope sign correctness, backward-compatible default-off behavior, counter-trend SHORT/LONG vetoes, below-threshold pass-through, independence from `engine_mode`. **`tests/test_trend_filter_per_symbol_params.py`** (3 tests): default-disabled, per-symbol override surviving a simulated daemon restart, no cross-symbol leakage.
+- 📋 Phase 3 of 3 in `.agents/plans/PLAN-008-strategy-fix-trend-filter.md` — closes out PLAN-008.
+
+---
+
 ## 🚀 [0.35.0] - 2026-08-28
 
 ### 🚦 Candle-Close Gate + Post-SL Cooldown (PLAN-008 Phase 2)

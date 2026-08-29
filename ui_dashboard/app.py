@@ -191,7 +191,7 @@ def fetch_closed_trades_df():
 
 
 # Version Reader
-APP_VERSION = "0.35.0"
+APP_VERSION = "0.36.0"
 try:
     from mms4tk import __version__ as mms_ver
     APP_VERSION = mms_ver
