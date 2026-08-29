@@ -469,6 +469,15 @@ class LoggerDB:
 
         return [members for members in groups.values() if len(members) > 1]
 
+    def get_data_collection_epoch(self, symbol: str) -> Optional[str]:
+        """PLAN-010: the timestamp (ISO8601) from which trades for `symbol` count as
+        evidence for the CURRENT trading regime (allocation size, enabled filters).
+        Set manually whenever a change makes prior trades a different regime — e.g.
+        2026-08-29's allocation reduction ($100 -> $50/symbol) and trend-filter
+        disable. `None` if never set (all history counts, the pre-PLAN-010 default).
+        """
+        return self.get_setting(f"data_collection_epoch_start:{symbol}")
+
     def count_clean_closed_trades(self, symbol: str) -> int:
         """PLAN-010 §3.2: count closed trades usable as recalibration evidence for
         `symbol` — total rows minus the two known-artifact categories identified in
@@ -480,6 +489,10 @@ class LoggerDB:
           2. Duplicate-chain rows (`find_duplicate_chains`) — each detected chain of
              N near-identical rows counts as ONE clean trade, not N and not zero;
              the chain represents one real event recorded redundantly.
+          3. Rows before `get_data_collection_epoch(symbol)`, if set — a prior trading
+             regime (different allocation, different enabled filters) is not
+             comparable evidence for calibrating the CURRENT regime, even if the
+             trades themselves are individually "clean" by (1)/(2).
 
         This does not delete or modify any row — read-only counting only. Whether to
         clean up detected duplicates remains a separate, explicitly-approved action
@@ -496,11 +509,25 @@ class LoggerDB:
         # ("BTC/USDC") this method is called with; a plain `==` matched zero rows.
         target_norm = normalize_symbol(symbol)
         trades = [t for t in self.get_closed_trades(limit=None) if normalize_symbol(t["symbol"]) == target_norm]
+
+        epoch = self.get_data_collection_epoch(symbol)
+        if epoch:
+            trades = [t for t in trades if str(t["timestamp"]) >= epoch]  # ISO8601 sorts lexicographically
+
         degenerate_ids = {t["trade_id"] for t in trades if is_degenerate(t)}
 
         # Exclude degenerate rows BEFORE chain detection (not after) — see
-        # find_duplicate_chains' `exclude_trade_ids` docstring.
-        chains = self.find_duplicate_chains(symbol=symbol, exclude_trade_ids=degenerate_ids)
+        # find_duplicate_chains' `exclude_trade_ids` docstring. Chain detection also
+        # only runs over the epoch-filtered set: a chain straddling the epoch
+        # boundary (extremely unlikely — chains are historical artifacts from
+        # 2026-08-15/16) would otherwise let a pre-epoch member drag a post-epoch
+        # row's "excess" count along with it.
+        post_epoch_ids = {t["trade_id"] for t in trades}
+        chains = [
+            [tid for tid in chain if tid in post_epoch_ids]
+            for chain in self.find_duplicate_chains(symbol=symbol, exclude_trade_ids=degenerate_ids)
+        ]
+        chains = [c for c in chains if len(c) > 1]
 
         total = len(trades)
         excess_from_chains = sum(len(c) - 1 for c in chains)  # each chain counts once, not N times
