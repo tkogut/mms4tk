@@ -2,6 +2,9 @@ import os
 import json
 import sqlite3
 import logging
+import asyncio
+import uuid
+from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 import pandas as pd
@@ -55,6 +58,12 @@ signal_engine = MMS4SignalEngine()
 daemon = MMS4Daemon(executor=executor, state_manager=state_manager, signal_engine=signal_engine, logger_db=logger_db)
 trade_sync_worker = OKXTradeSyncWorker(executor=executor, logger_db=logger_db, interval_seconds=900.0)
 
+# PLAN-010 §4.2: trend-filter recalibration runs off the shared FastAPI/daemon event
+# loop, in a real OS process — `max_workers=1` is deliberate (calibration is a rare,
+# manual, one-symbol-at-a-time action; it must never compete with the daemon's own
+# CPU/memory footprint at any real concurrency).
+CALIBRATION_EXECUTOR = ProcessPoolExecutor(max_workers=1)
+
 latest_signal: Optional[SignalResult] = None
 
 
@@ -88,6 +97,7 @@ async def lifespan(app: FastAPI):
         logger.info("FastAPI Shutdown: Stopping background workers...")
         await daemon.stop()
         await trade_sync_worker.stop()
+        CALIBRATION_EXECUTOR.shutdown(wait=False, cancel_futures=True)
         # TelegramQueueManager.stop() is a plain sync method by design (it just flips
         # the worker thread's running flag — see telegram_queue.py) — awaiting it
         # raised TypeError on every lifespan shutdown, failing teardown for any test
@@ -1398,11 +1408,10 @@ async def get_recalibration_status(symbol: str) -> Dict[str, Any]:
 
     clean_trade_count = logger_db.count_clean_closed_trades(formatted_sym)
 
-    # PLAN-010 Phase 2 will add `trend_filter_calibration_runs`; until that table
-    # exists, there is no run history to report — always None here, not a fabricated
-    # "no runs yet" placeholder value that could be confused with a real verdict.
-    last_calibration_run_at = None
-    last_calibration_verdict = None
+    # PLAN-010 Phase 2: report the most recent calibration run for this symbol, if any.
+    last_run = logger_db.get_latest_calibration_run(formatted_sym)
+    last_calibration_run_at = last_run["updated_at"] if last_run else None
+    last_calibration_verdict = last_run["verdict"] if last_run else None
 
     return {
         "symbol": formatted_sym,
@@ -1416,6 +1425,73 @@ async def get_recalibration_status(symbol: str) -> Dict[str, Any]:
         "eligible": clean_trade_count >= eligibility_threshold,
         "last_calibration_run_at": last_calibration_run_at,
         "last_calibration_verdict": last_calibration_verdict,
+    }
+
+
+@app.post("/api/v1/symbols/{symbol:path}/recalibrate", tags=["Multi-Symbol"],
+          dependencies=[Depends(verify_api_key)], status_code=status.HTTP_202_ACCEPTED)
+async def start_recalibration(symbol: str) -> Dict[str, Any]:
+    """PLAN-010 Phase 2 (§4.2): start a trend-filter recalibration run for `symbol`.
+
+    ASYNCHRONOUS BY DESIGN — returns immediately with a `job_id`; the actual
+    train/test computation (tens of seconds to several minutes, per the 2026-08-29
+    review's measured timings) runs in a separate OS process via
+    `run_in_executor(CALIBRATION_EXECUTOR, ...)`, never inline. `api.py` and the live
+    trading daemon share one asyncio event loop (`daemon.start()` runs in the same
+    FastAPI lifespan) — a blocking inline run would stall live reconciliation and
+    self-healing stop-loss checks for the run's full duration. See PLAN-010 §4.2.
+
+    Requires `eligible: true` (409 otherwise, with the current clean trade count).
+    Never modifies `tma_trend_filter_enabled`/`tma_slope_lookback`/`tma_slope_threshold`
+    — applying a validated result stays a separate, explicit call to the existing
+    `POST /api/v1/symbols/update` (PLAN-010 §5.2).
+    """
+    formatted_sym = symbol.upper().strip()
+    if "/" not in formatted_sym:
+        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+
+    status_payload = await get_recalibration_status(formatted_sym)
+    if not status_payload["eligible"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": f"{formatted_sym} has not accumulated enough clean trade history for recalibration.",
+                "clean_trade_count": status_payload["clean_trade_count"],
+                "eligibility_threshold": status_payload["eligibility_threshold"],
+            },
+        )
+
+    job_id = str(uuid.uuid4())
+    logger_db.create_calibration_run(job_id, formatted_sym)
+
+    from mms4tk.backtest_engine import run_calibration_job
+    loop = asyncio.get_event_loop()
+    # Fire-and-forget: NOT awaited here — the job runs independently in the process
+    # pool while this request returns immediately. Progress is polled via the
+    # status endpoint below, which reads the same `trend_filter_calibration_runs`
+    # row this job updates from its own process.
+    loop.run_in_executor(CALIBRATION_EXECUTOR, run_calibration_job, job_id, formatted_sym, logger_db.db_path)
+
+    return {"job_id": job_id, "symbol": formatted_sym, "status": "pending"}
+
+
+@app.get("/api/v1/symbols/{symbol:path}/recalibrate/status/{job_id}", tags=["Multi-Symbol"])
+async def get_recalibration_job_status(symbol: str, job_id: str) -> Dict[str, Any]:
+    """Poll a recalibration job started by `POST /recalibrate`. `status` is one of
+    `pending` / `running` / `done` / `failed`; `result` (the full `CalibrationResult`,
+    both train/test directions) is populated only once `status == "done"`."""
+    run = logger_db.get_calibration_run(job_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No calibration job {job_id}")
+
+    result = json.loads(run["result_json"]) if run.get("result_json") else None
+    return {
+        "job_id": job_id,
+        "symbol": run["symbol"],
+        "status": run["status"],
+        "verdict": run.get("verdict"),
+        "error": run.get("error"),
+        "result": result,
     }
 
 
