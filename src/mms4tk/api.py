@@ -1425,6 +1425,9 @@ async def get_recalibration_status(symbol: str) -> Dict[str, Any]:
         "eligible": clean_trade_count >= eligibility_threshold,
         "last_calibration_run_at": last_calibration_run_at,
         "last_calibration_verdict": last_calibration_verdict,
+        # PLAN-010: null means "counting all history" (no regime change has been
+        # marked yet for this symbol) — not "no data collected".
+        "data_collection_epoch_start": logger_db.get_data_collection_epoch(formatted_sym),
     }
 
 

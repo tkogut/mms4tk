@@ -2,5 +2,5 @@
 MMS4 Toolkit (mms4tk) core package.
 """
 
-__version__ = "0.39.0"
+__version__ = "0.40.0"
 
