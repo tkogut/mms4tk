@@ -4,6 +4,19 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.37.0] - 2026-08-29
+
+### 🔁 Trend Filter Recalibration Mechanism — Phase 1: Data Readiness (PLAN-010)
+- 🐛 **Fixed `GET /api/v1/symbols` display divergence**: the endpoint read `tma_trend_filter_enabled`/`tma_slope_lookback`/`tma_slope_threshold` from `configured_symbols_store` only. `daemon._get_indicator_params()` reads the SAME fields from per-symbol-qualified `system_settings` keys FIRST (PLAN-008 Phase 3), falling back to the store only when no such key exists. The two were found live and diverged (2026-08-29): the API reported the trend filter as disabled for BTC/USDC and ETH/USDC while `system_settings` — what the engine actually reads — still had it enabled with calibrated parameters. `_trend_filter_fields()` now mirrors the daemon's exact fallback chain so the API/UI can never again silently disagree with the live engine.
+- 🧮 **`LoggerDB.find_duplicate_chains()`**: promotes the connected-components duplicate-detection used ad hoc during the 2026-08-29 manual DB cleanup into a tested, named method — groups closed_trades rows by normalized symbol + side + near-identical entry price + tight time window (union-find), returning each multi-row chain once.
+- 🧮 **`LoggerDB.count_clean_closed_trades(symbol)`**: total closed trades minus degenerate rows (`entry_price == exit_price`, pre-`trade_sync`-fix era) minus the "excess" members of any detected duplicate chain (a chain of N near-identical rows counts as 1 real event, not N) — read-only, does not delete or modify anything.
+- 🆕 **`GET /api/v1/symbols/{symbol}/recalibration-status`**: reports `clean_trade_count`, `eligibility_threshold` (default 175 — midpoint of the ~150-200 range agreed after the deployed Phase 3 trend-filter parameters failed out-of-sample validation), `eligible`, current live filter state/params, and the last calibration run's verdict (always `null` in this phase — the calibration engine itself is PLAN-010 Phase 2, not built yet).
+- 🧪 **`tests/test_recalibration_status.py`** (6 tests): duplicate-chain grouping, time-window/side/symbol isolation, degenerate-row exclusion, chain-counts-once semantics, per-symbol isolation.
+- 📋 Phase 1 of 3 in `.agents/plans/PLAN-010-trend-filter-recalibration-mechanism.md`.
+- ⚠️ **Operational note**: the deployed PLAN-008 Phase 3 trend filter was disabled directly at its `system_settings` source of truth for BTC/USDC and ETH/USDC on 2026-08-29, pending this recalibration mechanism — not part of this code change (a live config action, not a code fix).
+
+---
+
 ## 🚀 [0.36.1] - 2026-08-29
 
 ### 🐛 Fix Duplicate Closed Trades in Wykaz Transakcji
