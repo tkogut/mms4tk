@@ -1461,6 +1461,15 @@ async def start_recalibration(symbol: str) -> Dict[str, Any]:
             },
         )
 
+    # A symbol already has a pending/running job -> return it instead of enqueueing
+    # a duplicate. CALIBRATION_EXECUTOR's max_workers=1 would serialize the actual
+    # computation either way, but without this check two requests double the work
+    # (and CPU time on the VPS) for what is, in practice, the same answer.
+    existing = logger_db.get_latest_calibration_run(formatted_sym)
+    if existing and existing["status"] in ("pending", "running"):
+        return {"job_id": existing["job_id"], "symbol": formatted_sym, "status": existing["status"],
+                "note": "A calibration run for this symbol is already in progress; returning its job_id instead of starting a duplicate."}
+
     job_id = str(uuid.uuid4())
     logger_db.create_calibration_run(job_id, formatted_sym)
 
