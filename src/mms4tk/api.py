@@ -1504,6 +1504,29 @@ async def get_recalibration_job_status(symbol: str, job_id: str) -> Dict[str, An
     }
 
 
+@app.get("/api/v1/symbols/{symbol:path}/recalibrate/history", tags=["Multi-Symbol"])
+async def get_recalibration_history(symbol: str, limit: int = 20) -> Dict[str, Any]:
+    """PLAN-010 §5.2.3: read-only, most-recent-first list of past calibration runs
+    for `symbol`, for the "historia kalibracji" panel in the Symbols UI. Each entry
+    omits the full `result_json` blob (fetch via the status endpoint by `job_id` for
+    the complete train/test breakdown) — this is a lightweight summary list."""
+    formatted_sym = symbol.upper().strip()
+    if "/" not in formatted_sym:
+        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+
+    runs = logger_db.list_calibration_runs(formatted_sym, limit=limit)
+    return {
+        "symbol": formatted_sym,
+        "runs": [
+            {
+                "job_id": r["job_id"], "status": r["status"], "verdict": r.get("verdict"),
+                "created_at": r["created_at"], "updated_at": r["updated_at"], "error": r.get("error"),
+            }
+            for r in runs
+        ],
+    }
+
+
 @app.get("/api/v1/positions", tags=["Multi-Symbol"])
 async def get_active_positions() -> Dict[str, Any]:
     """Fetch live open positions from OKX across all active trading symbols."""
