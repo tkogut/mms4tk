@@ -184,11 +184,31 @@ class OKXTradeSyncWorker:
                 # Return on the capital actually committed, not on notional.
                 pnl_pct = (f["pnl_usd"] / margin) if margin > 0 else 0.0
 
+                trade_side = (f["pos_side"] or f["side"]).upper()
+
+                # This authoritative fill supersedes any provisional `recon_*` row
+                # MMS4Daemon.reconcile_positions() wrote for the same close (see
+                # LoggerDB.delete_provisional_closed_trade docstring) — different
+                # trade_id schemes mean upsert_closed_trade's ON CONFLICT would never
+                # dedupe them on its own, leaving the same real close duplicated in
+                # Wykaz Transakcji with two different exit prices/pnl.
+                try:
+                    removed = self.logger_db.delete_provisional_closed_trade(
+                        symbol=f["symbol"], side=trade_side, entry_price=entry_price,
+                    )
+                    if removed:
+                        logger.info(
+                            f"Removed {removed} provisional reconciliation row(s) for "
+                            f"{f['symbol']} {trade_side} — superseded by authoritative fill {f['ord_id']}"
+                        )
+                except Exception as dedupe_err:
+                    logger.warning(f"Failed to clean up provisional closed_trade for {f['symbol']}: {dedupe_err}")
+
                 self.logger_db.upsert_closed_trade(
                     trade_id=f["ord_id"],
                     timestamp=f["ts_iso"],
                     symbol=f["symbol"],
-                    side=(f["pos_side"] or f["side"]).upper(),
+                    side=trade_side,
                     entry_price=entry_price,
                     exit_price=exit_price,
                     amount=f["size"],
