@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X, ShieldAlert } from 'lucide-react';
 
 export function SymbolsTab({ apiKey }) {
@@ -152,7 +152,7 @@ export function SymbolsTab({ apiKey }) {
     }
   };
 
-  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio, newTimeframe, staleConfig = {}) => {
+  const handleUpdateSymbolSettings = async (symObj, newAlloc, newBaseRatio, newTimeframe, staleConfig = {}, trendFilterConfig = {}) => {
     const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
     try {
       const res = await fetch('/api/v1/symbols/update', {
@@ -170,15 +170,25 @@ export function SymbolsTab({ apiKey }) {
           timeframe: newTimeframe || '15m',
           stale_candles_threshold: parseInt(staleConfig.stale_candles_threshold ?? 12),
           stale_atr_threshold: parseFloat(staleConfig.stale_atr_threshold ?? 0.5),
-          impulse_negation_enabled: staleConfig.impulse_negation_enabled !== false
+          impulse_negation_enabled: staleConfig.impulse_negation_enabled !== false,
+          // PLAN-010 Phase 3: pass through the trend-filter fields untouched unless the
+          // caller explicitly supplies new ones (SymbolCard's own toggle, or the
+          // recalibration modal's "Zastosuj nowe parametry") — never silently reset
+          // lookback/threshold to their schema defaults on an unrelated settings save.
+          tma_trend_filter_enabled: trendFilterConfig.tma_trend_filter_enabled ?? symObj.tma_trend_filter_enabled ?? false,
+          tma_slope_lookback: trendFilterConfig.tma_slope_lookback ?? symObj.tma_slope_lookback ?? 5,
+          tma_slope_threshold: trendFilterConfig.tma_slope_threshold ?? symObj.tma_slope_threshold ?? 0.002,
         })
       });
       if (res.ok) {
         setMsg(`✓ Zapisano ustawienia dla ${symObj.symbol} ($${newAlloc} USD, Base/Add: ${newBaseRatio}%/${100 - newBaseRatio}%, Interwał: ${newTimeframe || '15m'})`);
         fetchSymbols();
+        return true;
       }
+      return false;
     } catch (err) {
       setMsg('❌ Błąd zapisu ustawień pary');
+      return false;
     } finally {
       setTimeout(() => setMsg(''), 5000);
     }
@@ -274,6 +284,7 @@ export function SymbolsTab({ apiKey }) {
               onToggle={handleToggleSymbol}
               onRequestDelete={(target) => setConfirmDeleteTarget(target)}
               onSaveSettings={handleUpdateSymbolSettings}
+              apiKey={apiKey}
             />
           );
         })}
@@ -370,13 +381,18 @@ export function SymbolsTab({ apiKey }) {
   );
 }
 
-function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, onSaveSettings }) {
+function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, onSaveSettings, apiKey }) {
   const [allocUsd, setAllocUsd] = useState(symbolObj.allocation_usd || 10.0);
   const [baseRatio, setBaseRatio] = useState(symbolObj.base_ratio || 70);
   const [timeframe, setTimeframe] = useState(symbolObj.timeframe || '15m');
   const [staleCandles, setStaleCandles] = useState(symbolObj.stale_candles_threshold ?? 12);
   const [staleAtr, setStaleAtr] = useState(symbolObj.stale_atr_threshold ?? 0.5);
   const [impulseNeg, setImpulseNeg] = useState(symbolObj.impulse_negation_enabled !== false);
+  const [trendFilterEnabled, setTrendFilterEnabled] = useState(symbolObj.tma_trend_filter_enabled === true);
+
+  useEffect(() => {
+    setTrendFilterEnabled(symbolObj.tma_trend_filter_enabled === true);
+  }, [symbolObj.tma_trend_filter_enabled]);
 
   useEffect(() => {
     setAllocUsd(symbolObj.allocation_usd || 10.0);
@@ -579,6 +595,8 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
               stale_candles_threshold: staleCandles,
               stale_atr_threshold: staleAtr,
               impulse_negation_enabled: impulseNeg
+            }, {
+              tma_trend_filter_enabled: trendFilterEnabled,
             })}
             className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
           >
@@ -593,6 +611,316 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Usuń</span>
+          </button>
+        </div>
+
+        {/* PLAN-010 Phase 3: Trend Filter Recalibration panel */}
+        <TrendFilterSection
+          symbolObj={symbolObj}
+          apiKey={apiKey}
+          trendFilterEnabled={trendFilterEnabled}
+          onToggleTrendFilter={() => setTrendFilterEnabled(v => !v)}
+          onApplyParams={(lookback, threshold) =>
+            onSaveSettings(symbolObj, allocUsd, baseRatio, timeframe, {
+              stale_candles_threshold: staleCandles,
+              stale_atr_threshold: staleAtr,
+              impulse_negation_enabled: impulseNeg,
+            }, {
+              tma_trend_filter_enabled: true,
+              tma_slope_lookback: lookback,
+              tma_slope_threshold: threshold,
+            })
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+// PLAN-010 Phase 3: per-pair trend-filter recalibration panel — see
+// .agents/plans/PLAN-010-trend-filter-recalibration-mechanism.md §5.
+function TrendFilterSection({ symbolObj, apiKey, trendFilterEnabled, onToggleTrendFilter, onApplyParams }) {
+  const [recalStatus, setRecalStatus] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [job, setJob] = useState(null); // {job_id, status, verdict, result, error}
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState([]);
+  const pollRef = useRef(null);
+
+  const fetchRecalStatus = async () => {
+    try {
+      const res = await fetch(`/api/v1/symbols/${encodeURIComponent(symbolObj.symbol)}/recalibration-status`);
+      if (res.ok) setRecalStatus(await res.json());
+    } catch (err) {
+      console.warn('[TrendFilterSection] status fetch failed:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchRecalStatus();
+    const interval = setInterval(fetchRecalStatus, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbolObj.symbol]);
+
+  // Stop polling a job's status if the component unmounts mid-run — this only
+  // stops OUR polling, it never cancels the job itself (it keeps running
+  // server-side; reopening "historia kalibracji" shows it once finished, per plan).
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const pollJobStatus = (jobId) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/v1/symbols/${encodeURIComponent(symbolObj.symbol)}/recalibrate/status/${jobId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setJob(data);
+          if (data.status === 'done' || data.status === 'failed') {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            fetchRecalStatus();
+          }
+        }
+      } catch (err) {
+        console.warn('[TrendFilterSection] status poll failed:', err);
+      }
+    }, 2500);
+  };
+
+  const handleStartRecalibration = async () => {
+    setShowModal(true);
+    setJob({ status: 'pending' });
+    const currentKey = apiKey || localStorage.getItem('mms4_api_key') || 'test-api-auth-key-unit-test';
+    try {
+      const res = await fetch(`/api/v1/symbols/${encodeURIComponent(symbolObj.symbol)}/recalibrate`, {
+        method: 'POST',
+        headers: { 'X-MMS4-API-KEY': currentKey },
+      });
+      if (res.status === 202) {
+        const data = await res.json();
+        setJob({ job_id: data.job_id, status: data.status });
+        pollJobStatus(data.job_id);
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        setJob({ status: 'failed', error: errBody.detail?.message || 'Nie udało się uruchomić kalibracji.' });
+      }
+    } catch (err) {
+      setJob({ status: 'failed', error: 'Błąd sieci podczas uruchamiania kalibracji.' });
+    }
+  };
+
+  const handleApply = () => {
+    const rec = job?.result?.recommended_params;
+    if (!rec) return;
+    onApplyParams(rec.lookback, rec.threshold);
+    setShowModal(false);
+  };
+
+  const loadHistory = async () => {
+    const opening = !historyOpen;
+    setHistoryOpen(opening);
+    if (opening) {
+      try {
+        const res = await fetch(`/api/v1/symbols/${encodeURIComponent(symbolObj.symbol)}/recalibrate/history`);
+        if (res.ok) setHistory((await res.json()).runs || []);
+      } catch (err) {
+        console.warn('[TrendFilterSection] history fetch failed:', err);
+      }
+    }
+  };
+
+  const cleanCount = recalStatus?.clean_trade_count ?? 0;
+  const threshold = recalStatus?.eligibility_threshold ?? 175;
+  const eligible = recalStatus?.eligible === true;
+  const lastVerdict = recalStatus?.last_calibration_verdict;
+
+  return (
+    <div className="pt-2 border-t border-slate-800/50">
+      <div className="flex items-center gap-2 mb-2">
+        <Search className="w-3.5 h-3.5 text-purple-400" />
+        <span className="text-[10px] font-bold text-purple-400 font-mono tracking-wide">
+          FILTR TRENDU (TMA SLOPE)
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between gap-2 text-xs mb-2">
+        <button
+          type="button"
+          // Disable-only toggle, deliberately: re-enabling with unvalidated schema
+          // defaults (lookback=5, threshold=0.002) via a plain click would reintroduce
+          // exactly the ungrounded-parameter anti-pattern this whole mechanism exists
+          // to prevent. Turning the filter back ON only happens via a validated
+          // recalibration's "✅ Zastosuj nowe parametry" (which sets real params AND
+          // enabled=true together, atomically).
+          onClick={() => trendFilterEnabled && onToggleTrendFilter()}
+          disabled={!trendFilterEnabled}
+          title={trendFilterEnabled
+            ? 'Wyłącz filtr trendu (kliknij, potem "Zapisz Ustawienia")'
+            : 'Włącz tylko przez zatwierdzenie zwalidowanej kalibracji ("🔬 Rekalibruj" → "✅ Zastosuj nowe parametry")'}
+          className={`py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-colors ${
+            trendFilterEnabled
+              ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900'
+              : 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
+          }`}
+        >
+          {trendFilterEnabled ? '✓ WŁ' : '✕ WYŁ'}
+        </button>
+        {trendFilterEnabled && (
+          <span className="text-[10px] text-slate-400 font-mono">
+            lookback={symbolObj.tma_slope_lookback ?? 5} · próg={symbolObj.tma_slope_threshold ?? 0.002}
+          </span>
+        )}
+      </div>
+
+      {lastVerdict && lastVerdict !== 'VALIDATED' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-300 text-[10px] font-mono flex items-center gap-1.5">
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          <span>ostatnia kalibracja: brak potwierdzenia ({lastVerdict})</span>
+        </div>
+      )}
+
+      <div className="mb-2">
+        <div className="flex justify-between text-[10px] text-slate-400 font-mono mb-1">
+          <span>Dane do rekalibracji</span>
+          <span>{cleanCount}/{threshold} czystych transakcji</span>
+        </div>
+        <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div
+            className={`h-full transition-all ${eligible ? 'bg-emerald-500' : 'bg-slate-600'}`}
+            style={{ width: `${Math.min(100, (cleanCount / Math.max(1, threshold)) * 100)}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleStartRecalibration}
+          disabled={!eligible}
+          title={eligible ? 'Uruchom rekalibrację' : `Wymagane ${threshold} czystych transakcji (obecnie ${cleanCount})`}
+          className={`flex-1 py-1.5 rounded-lg text-xs font-semibold font-mono border transition-colors flex items-center justify-center gap-1.5 ${
+            eligible
+              ? 'bg-purple-950 hover:bg-purple-900 text-purple-300 border-purple-500/40'
+              : 'bg-slate-800 text-slate-600 border-slate-700 cursor-not-allowed'
+          }`}
+        >
+          <span>🔬 Rekalibruj</span>
+        </button>
+        <button
+          type="button"
+          onClick={loadHistory}
+          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-mono border border-slate-700 transition-colors"
+        >
+          {historyOpen ? '▲' : '▼'} Historia
+        </button>
+      </div>
+
+      {historyOpen && (
+        <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+          {history.length === 0 && (
+            <div className="text-[10px] text-slate-500 font-mono px-1">Brak zapisanych kalibracji.</div>
+          )}
+          {history.map(run => (
+            <div key={run.job_id} className="flex justify-between text-[10px] font-mono px-2 py-1 bg-slate-950 border border-slate-800 rounded">
+              <span className="text-slate-400">{new Date(run.created_at).toLocaleString('pl-PL')}</span>
+              <span className={run.verdict === 'VALIDATED' ? 'text-emerald-400' : 'text-slate-500'}>
+                {run.verdict || run.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showModal && (
+        <RecalibrationModal
+          symbol={symbolObj.symbol}
+          job={job}
+          onClose={() => setShowModal(false)}
+          onApply={handleApply}
+        />
+      )}
+    </div>
+  );
+}
+
+function RecalibrationModal({ symbol, job, onClose, onApply }) {
+  const status = job?.status;
+  const verdict = job?.verdict || job?.result?.verdict;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <h4 className="font-bold text-gray-100 font-mono text-sm">🔬 Kalibracja filtra trendu — {symbol}</h4>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {(status === 'pending' || status === 'running') && (
+          <div className="text-center py-8 text-slate-300 font-mono text-sm">
+            🔄 Kalibracja w toku… (może potrwać od kilkudziesięciu sekund do kilku minut)
+          </div>
+        )}
+
+        {status === 'failed' && (
+          <div className="px-3 py-2 rounded-lg bg-red-950/40 border border-red-500/30 text-red-300 text-xs font-mono">
+            ❌ {job?.error || 'Kalibracja nie powiodła się.'}
+          </div>
+        )}
+
+        {status === 'done' && job?.result && (
+          <div className="space-y-3">
+            <div className={`px-3 py-2 rounded-lg border text-xs font-mono ${
+              verdict === 'VALIDATED'
+                ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+                : 'bg-amber-950/40 border-amber-500/30 text-amber-300'
+            }`}>
+              Werdykt: <strong>{verdict}</strong>
+              {job.result.note && <div className="mt-1 text-slate-400">{job.result.note}</div>}
+            </div>
+
+            {['h1_to_h2', 'h2_to_h1'].map(dirKey => {
+              const dir = job.result[dirKey];
+              if (!dir) return null;
+              return (
+                <div key={dirKey} className="text-[11px] font-mono bg-slate-950 border border-slate-800 rounded-lg p-2">
+                  <div className="text-slate-400 mb-1">Trening: {dir.train_window}</div>
+                  {!dir.candidate_found ? (
+                    <div className="text-slate-500">Brak konfiguracji lepszej od baseline.</div>
+                  ) : (
+                    <>
+                      <div className="text-slate-300">lookback={dir.chosen_lookback}, próg={dir.chosen_threshold}</div>
+                      <div className="text-slate-400">
+                        test: R:R={dir.test_stats?.rr?.toFixed?.(2)} pnl={((dir.test_stats?.total_pnl ?? 0) * 100).toFixed(1)}%
+                        {' '}vs baseline R:R={dir.test_baseline?.rr?.toFixed?.(2)}
+                      </div>
+                      <div className={dir.generalizes ? 'text-emerald-400' : 'text-red-400'}>
+                        {dir.generalizes ? '✓ generalizuje na danych testowych' : '✗ NIE generalizuje'}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
+          {status === 'done' && verdict === 'VALIDATED' && job.result.recommended_params && (
+            <button
+              onClick={onApply}
+              className="flex-1 py-1.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-semibold font-mono transition-colors"
+            >
+              ✅ Zastosuj nowe parametry
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors"
+          >
+            Zamknij
           </button>
         </div>
       </div>
