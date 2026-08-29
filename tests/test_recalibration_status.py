@@ -85,3 +85,46 @@ def test_count_clean_closed_trades_is_per_symbol(db):
     assert db.count_clean_closed_trades("BTC/USDC") == 1
     assert db.count_clean_closed_trades("ETH/USDC") == 1
     assert db.count_clean_closed_trades("SOL/USDC") == 0
+
+
+def test_count_clean_closed_trades_matches_raw_okx_instid_rows(db):
+    """Regression (found in code review, 2026-08-29): production `closed_trades.symbol`
+    holds the raw OKX instId for every real trade_sync-authoritative row (confirmed live:
+    130/130 rows), NEVER the clean pair a caller naturally passes. A plain string `==`
+    match returns 0 for every real symbol in production — this must use normalize_symbol()
+    like `delete_provisional_closed_trade` (PR #11) already does."""
+    _insert(db, "real1", "2026-08-16T09:00:00+00:00", symbol="BTC-USD_UM_XPERP-310404",
+            entry=80000.0, exit_=79800.0)
+    _insert(db, "real2", "2026-08-17T09:00:00+00:00", symbol="BTC-USD_UM_XPERP-310404",
+            entry=81000.0, exit_=80500.0)
+
+    assert db.count_clean_closed_trades("BTC/USDC") == 2
+
+
+def test_find_duplicate_chains_matches_raw_okx_instid_rows(db):
+    _insert(db, "r1", "2026-08-16T09:00:00+00:00", symbol="BTC-USD_UM_XPERP-310404",
+            entry=80000.0, exit_=79950.0)
+    _insert(db, "r2", "2026-08-16T09:00:05+00:00", symbol="BTC-USD_UM_XPERP-310404",
+            entry=80001.0, exit_=79800.0)
+
+    chains = db.find_duplicate_chains(symbol="BTC/USDC")
+    assert len(chains) == 1
+    assert set(chains[0]) == {"r1", "r2"}
+
+
+def test_count_clean_closed_trades_degenerate_row_does_not_bridge_a_false_chain(db):
+    """A degenerate row (entry==exit) sitting in time/price range of two otherwise
+    UNRELATED clean trades must not transitively chain them together once removed —
+    exclude_trade_ids filters it out BEFORE chain detection, not after, precisely to
+    prevent this."""
+    # price_tolerance_pct=0.001 -> ~80 apart is the boundary near 80000. clean_a and
+    # clean_b sit ~145 apart (outside tolerance of EACH OTHER directly); the
+    # degenerate row sits ~75/70 from each (within tolerance of both) -- a bridge in
+    # price only reachable by going through it.
+    _insert(db, "clean_a", "2026-08-16T09:00:00+00:00", entry=80000.0, exit_=79000.0)
+    _insert(db, "degenerate_bridge", "2026-08-16T09:00:05+00:00", entry=80075.0, exit_=80075.0)
+    _insert(db, "clean_b", "2026-08-16T09:00:10+00:00", entry=80145.0, exit_=81000.0)
+
+    # Without the fix, clean_a and clean_b would be seen as one chain via the bridge,
+    # collapsing to 1 clean trade instead of 2.
+    assert db.count_clean_closed_trades("BTC/USDC") == 2
