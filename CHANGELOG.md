@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.41.1] - 2026-08-30
+
+### 💬 Telegram Reports & Alerts Fee Transparency
+- 🔔 **Position Close Monitor (`scripts/hermes/mms4tk_position_close_monitor.py`)**: Updated Telegram trade close notification to explicitly show Net PnL (`💸 Wynik Netto`), fees (`🏷️ Prowizje OKX`), Gross PnL (`📈 Wynik Brutto`), and accurate win/loss status based on net profit.
+- 📊 **Multi-Symbol Digest (`scripts/hermes/mms4tk_multi_symbol_digest.py`)**: Enhanced OKX wallet summary in multi-symbol reports to display realized net PnL, total fees, realized gross PnL, and net win rate.
+- 🤖 **Daemon Real-Time Notifications (`daemon.py`)**: Integrated taker fee estimation and estimated net PnL into stop-loss and trade reconciliation Telegram alerts.
+- 🧪 **Unit Test Suite (`tests/test_telegram_fee_reports.py`)**: Added unit tests validating message formatting across close monitor, multi-symbol digest, and daemon reconciliation.
+
+---
+
 ## 🚀 [0.41.0] - 2026-08-30
 
 ### 💸 Fee Tracking & Net PnL Accounting (PLAN-011)
