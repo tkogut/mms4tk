@@ -195,7 +195,8 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     if (timeframeTrades.length > 0) {
       let cumulativePnl = 0;
       return timeframeTrades.map((t) => {
-        cumulativePnl += Number(t.pnl_usd || 0);
+        const netPnl = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? Number(t.pnl_net_usd) : Number(t.pnl_usd || 0);
+        cumulativePnl += netPnl;
         const ts = t.timestamp ? new Date(t.timestamp).getTime() : now;
         const dateObj = new Date(ts);
         return {
@@ -268,9 +269,10 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
       }
 
       // PnL result filter
-      const pnl = Number(t.pnl_usd || 0);
-      if (filterPnl === 'WIN' && (pnl < 0 || !t.is_win)) return false;
-      if (filterPnl === 'LOSS' && pnl >= 0 && t.is_win) return false;
+      const netPnl = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? Number(t.pnl_net_usd) : Number(t.pnl_usd || 0);
+      const isWin = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? netPnl > 0 : (t.is_win || netPnl >= 0);
+      if (filterPnl === 'WIN' && !isWin) return false;
+      if (filterPnl === 'LOSS' && isWin) return false;
 
       // Search term
       if (searchTerm.trim() !== '') {
@@ -285,8 +287,8 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     }).sort((a, b) => {
       const tsA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const tsB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-      const pnlA = Number(a.pnl_usd || 0);
-      const pnlB = Number(b.pnl_usd || 0);
+      const pnlA = a.pnl_net_usd !== undefined && a.pnl_net_usd !== null ? Number(a.pnl_net_usd) : Number(a.pnl_usd || 0);
+      const pnlB = b.pnl_net_usd !== undefined && b.pnl_net_usd !== null ? Number(b.pnl_net_usd) : Number(b.pnl_usd || 0);
 
       if (sortOrder === 'newest') return tsB - tsA; // NEWEST FIRST (default)
       if (sortOrder === 'oldest') return tsA - tsB;
@@ -759,38 +761,51 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                   <th className="px-4 py-2.5">Strona</th>
                   <th className="px-4 py-2.5">Cena Wejścia</th>
                   <th className="px-4 py-2.5">Cena Wyjścia</th>
-                  <th className="px-4 py-2.5">PnL ($)</th>
+                  <th className="px-4 py-2.5">PnL Netto / Brutto ($)</th>
+                  <th className="px-4 py-2.5">Prowizja (Fee)</th>
                   <th className="px-4 py-2.5">Wynik / Stan</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
-                {currentTrades.map((t, idx) => (
-                  <tr key={idx} className="hover:bg-slate-800/30">
-                    <td className="px-4 py-3 text-slate-400 font-bold">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
-                    <td className="px-4 py-3 font-bold text-gray-100">{normalizeSym(t.symbol) || 'BTC/USDC'}</td>
-                    <td className="px-4 py-3 font-bold">
-                      <span className={`px-2 py-0.5 rounded text-[11px] ${
-                        String(t.side || '').toUpperCase().includes('BUY') || String(t.side || '').toUpperCase().includes('LONG')
-                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                          : 'bg-rose-950 text-rose-400 border border-rose-500/30'
-                      }`}>
-                        {t.side || 'BUY'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-slate-200">${Number(t.entry_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className="px-4 py-3 text-slate-200">${Number(t.exit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className={`px-4 py-3 font-bold text-sm ${Number(t.pnl_usd || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      ${Number(t.pnl_usd || 0).toFixed(2)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2.5 py-0.5 rounded font-bold ${
-                        t.is_win || Number(t.pnl_usd || 0) >= 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-red-950 text-red-400 border border-red-500/30'
-                      }`}>
-                        {t.is_win || Number(t.pnl_usd || 0) >= 0 ? 'WIN 🟢' : 'LOSS 🔴'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {currentTrades.map((t, idx) => {
+                  const netPnlVal = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? Number(t.pnl_net_usd) : Number(t.pnl_usd || 0);
+                  const isNetWin = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? netPnlVal > 0 : (t.is_win || netPnlVal >= 0);
+                  return (
+                    <tr key={idx} className="hover:bg-slate-800/30">
+                      <td className="px-4 py-3 text-slate-400 font-bold">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '---'}</td>
+                      <td className="px-4 py-3 font-bold text-gray-100">{normalizeSym(t.symbol) || 'BTC/USDC'}</td>
+                      <td className="px-4 py-3 font-bold">
+                        <span className={`px-2 py-0.5 rounded text-[11px] ${
+                          String(t.side || '').toUpperCase().includes('BUY') || String(t.side || '').toUpperCase().includes('LONG')
+                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-rose-950 text-rose-400 border border-rose-500/30'
+                        }`}>
+                          {t.side || 'BUY'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-200">${Number(t.entry_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 text-slate-200">${Number(t.exit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3">
+                        <div className={`font-bold text-sm ${netPnlVal >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          ${netPnlVal.toFixed(2)}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-normal">
+                          Brutto: ${Number(t.pnl_usd || 0).toFixed(2)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-400 text-xs">
+                        ${Number(t.fee_usd || 0).toFixed(4)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2.5 py-0.5 rounded font-bold ${
+                          isNetWin ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-red-950 text-red-400 border border-red-500/30'
+                        }`}>
+                          {isNetWin ? 'WIN 🟢' : 'LOSS 🔴'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (

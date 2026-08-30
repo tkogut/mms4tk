@@ -108,9 +108,18 @@ class LoggerDB:
                     pnl_usd REAL NOT NULL,
                     pnl_pct REAL NOT NULL,
                     is_win INTEGER NOT NULL,
-                    leverage REAL NOT NULL DEFAULT 1.0
+                    leverage REAL NOT NULL DEFAULT 1.0,
+                    fee_usd REAL NOT NULL DEFAULT 0.0,
+                    pnl_net_usd REAL NOT NULL DEFAULT 0.0
                 )
             """)
+            # Auto-migrate existing closed_trades schema if fee_usd or pnl_net_usd missing
+            cursor.execute("PRAGMA table_info(closed_trades)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "fee_usd" not in columns:
+                cursor.execute("ALTER TABLE closed_trades ADD COLUMN fee_usd REAL NOT NULL DEFAULT 0.0")
+            if "pnl_net_usd" not in columns:
+                cursor.execute("ALTER TABLE closed_trades ADD COLUMN pnl_net_usd REAL NOT NULL DEFAULT 0.0")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_addons (
                     symbol TEXT NOT NULL,
@@ -312,22 +321,28 @@ class LoggerDB:
         pnl_usd: float,
         pnl_pct: float,
         is_win: bool,
-        leverage: float = 1.0
+        leverage: float = 1.0,
+        fee_usd: float = 0.0,
+        pnl_net_usd: Optional[float] = None
     ) -> None:
         """Upsert a closed trade into closed_trades table."""
+        if pnl_net_usd is None:
+            pnl_net_usd = pnl_usd - fee_usd
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO closed_trades (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, is_win, leverage)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO closed_trades (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, is_win, leverage, fee_usd, pnl_net_usd)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trade_id) DO UPDATE SET
                     exit_price=excluded.exit_price,
                     pnl_usd=excluded.pnl_usd,
                     pnl_pct=excluded.pnl_pct,
-                    is_win=excluded.is_win
+                    is_win=excluded.is_win,
+                    fee_usd=excluded.fee_usd,
+                    pnl_net_usd=excluded.pnl_net_usd
                 """,
-                (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, 1 if is_win else 0, leverage)
+                (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, 1 if is_win else 0, leverage, fee_usd, pnl_net_usd)
             )
             conn.commit()
 
@@ -553,6 +568,10 @@ class LoggerDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_recent_closed_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Fetch the most recent closed trades (sorted chronologically)."""
+        return self.get_closed_trades(limit=limit)
+
     def get_kpi_summary(self, initial_equity: float = 0.0) -> Dict[str, Any]:
         """
         Compute KPI summary (Win Rate, Profit Factor, MDD %, Average R:R) from closed_trades.
@@ -574,6 +593,7 @@ class LoggerDB:
             return {
                 "total_trades": 0,
                 "win_rate": 0.0,
+                "net_win_rate_pct": 0.0,
                 "win_rate_long": 0.0,
                 "win_rate_short": 0.0,
                 "profit_factor": 0.0,
@@ -582,6 +602,9 @@ class LoggerDB:
                 "max_drawdown_usd": 0.0,
                 "average_rr": 0.0,
                 "total_pnl_usd": 0.0,
+                "realized_gross_pnl_usd": 0.0,
+                "total_fees_usd": 0.0,
+                "realized_net_pnl_usd": 0.0,
             }
 
         # Filter out zero-PnL entry fills to get actual closed round-trip trades with realized PnL
@@ -631,10 +654,21 @@ class LoggerDB:
                     max_dd_pct = pct
 
         total_pnl_usd = sum(t["pnl_usd"] for t in closed_pnl_trades)
+        total_fees_usd = sum(float(t.get("fee_usd") or 0.0) for t in closed_pnl_trades)
+        realized_net_pnl_usd = sum(
+            float(t.get("pnl_net_usd") if t.get("pnl_net_usd") is not None else (t["pnl_usd"] - float(t.get("fee_usd") or 0.0)))
+            for t in closed_pnl_trades
+        )
+        net_wins = [
+            t for t in closed_pnl_trades
+            if float(t.get("pnl_net_usd") if t.get("pnl_net_usd") is not None else (t["pnl_usd"] - float(t.get("fee_usd") or 0.0))) > 0
+        ]
+        net_win_rate = (len(net_wins) / total_pnl_count * 100.0) if total_pnl_count > 0 else 0.0
 
         return {
             "total_trades": total_pnl_count,
             "win_rate": round(win_rate * 100, 1),
+            "net_win_rate_pct": round(net_win_rate, 1),
             "win_rate_long": round(win_rate_long * 100, 1),
             "win_rate_short": round(win_rate_short * 100, 1),
             "profit_factor": profit_factor,
@@ -645,6 +679,9 @@ class LoggerDB:
             "max_drawdown_usd": round(max_dd_usd, 2),
             "average_rr": average_rr,
             "total_pnl_usd": round(total_pnl_usd, 2),
+            "realized_gross_pnl_usd": round(total_pnl_usd, 2),
+            "total_fees_usd": round(total_fees_usd, 4),
+            "realized_net_pnl_usd": round(realized_net_pnl_usd, 2),
         }
 
     def log_cycle(
