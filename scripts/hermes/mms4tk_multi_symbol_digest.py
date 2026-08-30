@@ -135,27 +135,15 @@ def clean_symbol_name(sym: str) -> str:
     return clean
 
 
-def main():
-    print("🔄 Fetching multi-symbol data from MMS4 API...")
-    health_data = fetch_api("/api/v1/health") or {}
-    ver = health_data.get("version", "0.18.0")
-
-    symbols_data = fetch_api("/api/v1/symbols") or {}
-    positions_data = fetch_api("/api/v1/positions") or {}
-    balance_data = fetch_api("/api/v1/balance") or {}
-    stats_data = fetch_api("/api/v1/stats/pnl") or {}
-
-    symbols = symbols_data.get("symbols", [])
-    positions = positions_data.get("positions", [])
-
+def build_digest_content(ver: str, symbols: list, positions: list, balance_data: dict, stats_data: dict) -> str:
+    """Build unified multi-symbol swarm report content."""
     free_usdc = float(balance_data.get("free", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("available_usd", 0.0))
     total_eq = float(balance_data.get("total", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("total_usd", 0.0))
-    realized_pnl = float(stats_data.get("realized_pnl", stats_data.get("total_pnl_usd", 0.0)))
-
-    if not symbols:
-        print("⚠️ No symbol configuration returned from API.")
-        return
-
+    
+    realized_gross_pnl = float(stats_data.get("realized_gross_pnl_usd", stats_data.get("realized_pnl", stats_data.get("total_pnl_usd", 0.0))))
+    total_fees = float(stats_data.get("total_fees_usd", 0.0))
+    realized_net_pnl = float(stats_data.get("realized_net_pnl_usd", realized_gross_pnl - total_fees))
+    net_win_rate = float(stats_data.get("net_win_rate_pct", stats_data.get("win_rate", 0.0)))
 
     active_symbols = [s for s in symbols if s.get("is_active") is not False]
     total_alloc = sum(float(s.get("allocation_usd", 10.0)) for s in active_symbols)
@@ -204,6 +192,9 @@ def main():
 
     used_margin = sum((float(p.get("notional_usd", 0.0)) / max(float(p.get("leverage", 1.0)), 1.0)) for p in positions)
 
+    net_pnl_sign = "+" if realized_net_pnl >= 0 else "-"
+    gross_pnl_sign = "+" if realized_gross_pnl >= 0 else "-"
+
     lines.append(f"")
     lines.append(f"💰 **PODSUMOWANIE PORTFELA OKX (API)**:")
     lines.append(f"- **💵 Wolny Dostępny Depozyt**: `${free_usdc:.2f} USDC` (z OKX API)")
@@ -211,12 +202,36 @@ def main():
     lines.append(f"- **🔒 Wykorzystany Depozyt (Margin)**: `${used_margin:.2f} USD`")
     lines.append(f"- **🎯 Łączna Alokacja Par**: `${total_alloc:.2f} USD`")
     lines.append(f"- **📈 Niezrealizowany PnL (uPnL)**: `{'+$' if total_upnl >= 0 else '-$'}{abs(total_upnl):.2f} USD`")
-    realized_pnl_sign = "+$" if realized_pnl >= 0 else "-$"
-    lines.append(f"- **💸 Zrealizowany PnL (Całkowity)**: `{realized_pnl_sign}{abs(realized_pnl):.2f} USD`")
+    lines.append(f"- 💸 Zrealizowany PnL Netto: {net_pnl_sign}${abs(realized_net_pnl):.2f} USD")
+    lines.append(f"- 🏷️ Łączne Prowizje OKX: -${total_fees:.2f} USD")
+    lines.append(f"- 📈 Zrealizowany PnL Brutto: {gross_pnl_sign}${abs(realized_gross_pnl):.2f} USD")
+    lines.append(f"- 🎯 Skuteczność Netto (Win Rate): {net_win_rate:.1f}%")
     lines.append(f"- **Status Floty OKX**: `GOTOWA` 🟢")
 
+    return "\n".join(lines)
 
-    full_digest = "\n".join(lines)
+
+def main():
+    print("🔄 Fetching multi-symbol data from MMS4 API...")
+    health_data = fetch_api("/api/v1/health") or {}
+    ver = health_data.get("version", "0.18.0")
+
+    symbols_data = fetch_api("/api/v1/symbols") or {}
+    positions_data = fetch_api("/api/v1/positions") or {}
+    balance_data = fetch_api("/api/v1/balance") or {}
+    stats_data = fetch_api("/api/v1/stats/pnl") or {}
+
+    symbols = symbols_data.get("symbols", [])
+    positions = positions_data.get("positions", [])
+
+    if not symbols:
+        print("⚠️ No symbol configuration returned from API.")
+        return
+
+    free_usdc = float(balance_data.get("free", {}).get("USDC") or balance_data.get("portfolio_usd", {}).get("available_usd", 0.0))
+    active_symbols = [s for s in symbols if s.get("is_active") is not False]
+
+    full_digest = build_digest_content(ver, symbols, positions, balance_data, stats_data)
     print(full_digest)
 
     # Post card to Hermes Kanban
