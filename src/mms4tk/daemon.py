@@ -544,6 +544,10 @@ class MMS4Daemon:
                 "new_state": self.state_manager.get_symbol_state(target_symbol).value,
             })
 
+            est_fee = entry_price * contracts * ct_size * 0.001
+            pnl_net_est = pnl_usd - est_fee
+            pnl_icon = "🟢" if pnl_net_est >= 0 else "🔴"
+
             if is_stop_out:
                 try:
                     from mms4tk.hermes_webhook import HermesWebhookClient
@@ -553,7 +557,9 @@ class MMS4Daemon:
                             f"Pozycja zamknięta przez Stop-Loss na giełdzie.\n"
                             f"- Wejście: `${entry_price:,.4f}`\n"
                             f"- Wyjście: `${exit_price:,.4f}`\n"
-                            f"- Wynik: `{pnl_pct*100:+.2f}%` (${pnl_usd:+.2f} USD)\n"
+                            f"- Wynik Netto (szac.): {pnl_icon} ${pnl_net_est:+.2f} USD ({pnl_pct*100:+.2f}%)\n"
+                            f"- Prowizje OKX (szac.): ~${est_fee:.2f} USD\n"
+                            f"- Wynik Brutto: ${pnl_usd:+.2f} USD\n"
                             f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
                         ),
                         priority=2,
@@ -564,14 +570,15 @@ class MMS4Daemon:
             else:
                 try:
                     from mms4tk.hermes_webhook import HermesWebhookClient
-                    pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
                     HermesWebhookClient.send_telegram(
                         title=f"🔔 ZAMKNIĘCIE POZYCJI: {target_symbol} {side.upper()}",
                         body=(
                             f"Pozycja zamknięta na OKX (Manual/TP).\n"
                             f"- Wejście: `${entry_price:,.4f}`\n"
                             f"- Wyjście: `${exit_price:,.4f}`\n"
-                            f"- Wynik: {pnl_icon} `{pnl_pct*100:+.2f}%` (${pnl_usd:+.2f} USD)\n"
+                            f"- Wynik Netto (szac.): {pnl_icon} ${pnl_net_est:+.2f} USD ({pnl_pct*100:+.2f}%)\n"
+                            f"- Prowizje OKX (szac.): ~${est_fee:.2f} USD\n"
+                            f"- Wynik Brutto: ${pnl_usd:+.2f} USD\n"
                             f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
                         ),
                         priority=2,
