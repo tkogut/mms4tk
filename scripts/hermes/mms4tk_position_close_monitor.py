@@ -90,6 +90,49 @@ def save_state(state: dict):
         print(f"⚠️ Nie udało się zapisać stanu: {e}", file=sys.stderr)
 
 
+def format_close_notification(trade: dict) -> str:
+    """Format Telegram message for position close with fees and Net PnL."""
+    symbol = trade.get("symbol", "N/A")
+    side = str(trade.get("side", "")).upper()
+    entry = float(trade.get("entry_price", 0) or 0)
+    exit_p = float(trade.get("exit_price", 0) or 0)
+    pnl = float(trade.get("pnl_usd", 0) or 0)
+    pnl_pct_raw = float(trade.get("pnl_pct", 0) or 0)
+    fee_usd = float(trade.get("fee_usd", 0.0) or 0.0)
+    pnl_net = float(trade.get("pnl_net_usd") if trade.get("pnl_net_usd") is not None else (pnl - fee_usd))
+
+    if entry > 0:
+        if side == "SHORT":
+            pnl_pct_calc = (entry - exit_p) / entry * 100
+        else:
+            pnl_pct_calc = (exit_p - entry) / entry * 100
+    else:
+        pnl_pct_calc = pnl_pct_raw * 100
+
+    is_win = bool(trade.get("is_win") if trade.get("is_win") is not None else (pnl_net > 0))
+    amount = float(trade.get("amount", 0) or 0)
+    leverage = float(trade.get("leverage", 3.0) or 3.0)
+
+    pnl_icon = "🟢" if is_win else "🔴"
+    pnl_net_str = f"+${pnl_net:.2f}" if pnl_net >= 0 else f"-${abs(pnl_net):.2f}"
+    pnl_gross_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+    result_label = "ZYSK" if is_win else "STRATA"
+    win_tag = "WIN 🟢" if is_win else "LOSS 🔴"
+
+    return (
+        f"🔔 ZAMKNIĘCIE POZYCJI OKX: {symbol}\n\n"
+        f"- Strona: `{side}`\n"
+        f"- Ilość: `{amount:.2f}`\n"
+        f"- Dźwignia: `{leverage:.0f}x`\n"
+        f"- Wejście: `${entry:,.4f}`\n"
+        f"- Wyjście: `${exit_p:,.4f}`\n"
+        f"- 💸 Wynik Netto: {pnl_icon} **`{pnl_net_str}`** ({pnl_pct_calc:+.2f}%)\n"
+        f"- 🏷️ Prowizje OKX: `-${fee_usd:.4f} USD`\n"
+        f"- 📈 Wynik Brutto: `{pnl_gross_str}`\n"
+        f"- Status: `{result_label}` ({win_tag})\n"
+    )
+
+
 def main():
     trades = fetch_trades(limit=50)
     if trades is None:
@@ -114,39 +157,7 @@ def main():
         return
 
     if newest_id != last_trade_id:
-        symbol = newest.get("symbol", "N/A")
-        side = str(newest.get("side", "")).upper()
-        entry = float(newest.get("entry_price", 0) or 0)
-        exit_p = float(newest.get("exit_price", 0) or 0)
-        pnl = float(newest.get("pnl_usd", 0) or 0)
-        pnl_pct_raw = float(newest.get("pnl_pct", 0) or 0)
-        
-        if entry > 0:
-            if side == "SHORT":
-                pnl_pct_calc = (entry - exit_p) / entry * 100
-            else:
-                pnl_pct_calc = (exit_p - entry) / entry * 100
-        else:
-            pnl_pct_calc = pnl_pct_raw * 100
-            
-        is_win = bool(newest.get("is_win", pnl >= 0))
-        amount = float(newest.get("amount", 0) or 0)
-        leverage = float(newest.get("leverage", 3.0) or 3.0)
-
-        pnl_icon = "🟢" if is_win else "🔴"
-        pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
-        result_label = "ZYSK" if is_win else "STRATA"
-
-        msg = (
-            f"🔔 ZAMKNIĘCIE POZYCJI OKX: {symbol}\n\n"
-            f"- Strona: `{side}`\n"
-            f"- Ilość: `{amount:.2f}`\n"
-            f"- Dźwignia: `{leverage:.0f}x`\n"
-            f"- Wejście: `${entry:,.4f}`\n"
-            f"- Wyjście: `${exit_p:,.4f}`\n"
-            f"- Wynik: {pnl_icon} **`{pnl_str}`** ({pnl_pct_calc:+.2f}%)\n"
-            f"- Rodzaj: `{result_label}`\n"
-        )
+        msg = format_close_notification(newest)
 
         print(msg)
         send_telegram(msg)
