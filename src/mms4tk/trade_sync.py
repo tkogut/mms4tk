@@ -51,26 +51,39 @@ class OKXTradeSyncWorker:
         return False
 
     @staticmethod
-    def _consume_entry_price(open_queue: List[Dict[str, Any]], size: float) -> float:
+    def _consume_open_legs(open_queue: List[Dict[str, Any]], size: float) -> tuple[float, float]:
         """
-        FIFO-match `size` against queued opening fills and return their size-weighted
-        average price. Consumed quantity is removed from the queue.
+        FIFO-match `size` against queued opening fills and return:
+        (size-weighted average entry price, total allocated opening fee).
+        Consumed quantity is removed from the queue.
         """
         if not open_queue or size <= 0:
-            return 0.0
+            return 0.0, 0.0
         remaining = size
         weighted = 0.0
         matched = 0.0
+        open_fee = 0.0
         while open_queue and remaining > 1e-12:
             leg = open_queue[0]
             take = min(leg["size"], remaining)
             weighted += leg["price"] * take
+            open_fee_unit = float(leg.get("open_fee_per_unit") or 0.0)
+            open_fee += take * open_fee_unit
             matched += take
             remaining -= take
             leg["size"] -= take
             if leg["size"] <= 1e-12:
                 open_queue.pop(0)
-        return (weighted / matched) if matched > 0 else 0.0
+        entry_price = (weighted / matched) if matched > 0 else 0.0
+        return entry_price, open_fee
+
+    @classmethod
+    def _consume_entry_price(cls, open_queue: List[Dict[str, Any]], size: float) -> float:
+        """
+        FIFO-match `size` against queued opening fills and return their size-weighted
+        average price. Consumed quantity is removed from the queue.
+        """
+        return cls._consume_open_legs(open_queue, size)[0]
 
     @staticmethod
     def _infer_entry_price(fill: Dict[str, Any]) -> float:
@@ -143,6 +156,7 @@ class OKXTradeSyncWorker:
                 if sync_start_iso and ts_iso < sync_start_iso:
                     continue
 
+                fee_usd = abs(float(item.get("fee") or item.get("fee_usd") or 0.0))
                 fills.append({
                     "ord_id": str(ord_id),
                     "ts_ms": ts_ms,
@@ -154,6 +168,7 @@ class OKXTradeSyncWorker:
                     "size": float(item.get("accFillSz") or item.get("sz") or 0.0),
                     "pnl_usd": float(item.get("pnl") or 0.0),
                     "lever": float(item.get("lever") or 1.0),
+                    "fee_usd": fee_usd,
                 })
             fills.sort(key=lambda f: f["ts_ms"])
 
@@ -168,21 +183,28 @@ class OKXTradeSyncWorker:
                 is_close = self._is_closing_fill(f)
 
                 if not is_close:
+                    f["open_fee_per_unit"] = (f["fee_usd"] / f["size"]) if f["size"] > 0 else 0.0
                     open_legs.setdefault(key, []).append(f)
                     continue
 
-                entry_price = self._consume_entry_price(open_legs.get(key, []), f["size"])
+                entry_price, open_fee = self._consume_open_legs(open_legs.get(key, []), f["size"])
                 if entry_price <= 0:
                     # No matching open in this window (position opened before the sync
                     # cutoff). Derive the entry from the realized PnL where possible.
                     entry_price = self._infer_entry_price(f)
+
+                close_fee = abs(float(f.get("fee_usd") or f.get("fee") or 0.0))
+                total_fee = open_fee + close_fee
+                pnl_gross = float(f["pnl_usd"])
+                pnl_net = pnl_gross - total_fee
+                is_win = pnl_net > 0
 
                 exit_price = f["price"]
                 lever = f["lever"] or 1.0
                 notional = exit_price * f["size"]
                 margin = (notional / lever) if lever > 0 else notional
                 # Return on the capital actually committed, not on notional.
-                pnl_pct = (f["pnl_usd"] / margin) if margin > 0 else 0.0
+                pnl_pct = (pnl_net / margin) if margin > 0 else 0.0
 
                 trade_side = (f["pos_side"] or f["side"]).upper()
 
@@ -212,10 +234,12 @@ class OKXTradeSyncWorker:
                     entry_price=entry_price,
                     exit_price=exit_price,
                     amount=f["size"],
-                    pnl_usd=f["pnl_usd"],
+                    pnl_usd=pnl_gross,
                     pnl_pct=pnl_pct,
-                    is_win=f["pnl_usd"] > 0,
+                    is_win=is_win,
                     leverage=lever,
+                    fee_usd=total_fee,
+                    pnl_net_usd=pnl_net,
                 )
                 synced_count += 1
 

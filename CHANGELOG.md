@@ -4,6 +4,18 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.41.0] - 2026-08-30
+
+### 💸 Fee Tracking & Net PnL Accounting (PLAN-011)
+- 🗄️ **`LoggerDB` Schema Auto-Migration**: Added `fee_usd` and `pnl_net_usd` columns (`REAL NOT NULL DEFAULT 0.0`) to `closed_trades` with seamless PRAGMA table auto-migration for existing databases.
+- 🔄 **FIFO Round-Trip Fee Matching (`trade_sync.py`)**: `OKXTradeSyncWorker` now parses order fee amounts from OKX fills, tracks `open_fee_per_unit` on opening legs, matches consumed opening fees + closing fees on position close, computes `pnl_net = pnl_gross - total_fee`, and classifies `is_win = pnl_net > 0`.
+- 🍰 **Pro-Rata Partial Close Handling**: Supported multi-stage and split-close exits (such as `SPLIT_50`) with proportional opening fee consumption across trade legs.
+- 📊 **Stats & History API Synchronization (`api.py`)**: Updated `GET /api/v1/stats/pnl` and `GET /api/v1/stats` with `realized_gross_pnl_usd`, `total_fees_usd`, `realized_net_pnl_usd`, and `net_win_rate_pct`. Added `/api/v1/trades/history` endpoint alias.
+- 🖥️ **UI Dashboard Transparency (`AnalyticsTab.jsx`)**: Updated Wykaz Transakcji to display PnL Netto as primary metric with PnL Brutto and Prowizja (Fee) visible, updated status badge classification to reflect true net win/loss, and updated equity curve to calculate cumulative net realized balance (`pnl_net_usd ?? pnl_usd`).
+- 🧪 **Unit Test Suite (`tests/test_fee_tracking.py`)**: Added full coverage for schema auto-migration, FIFO fee matching, partial close fee proration, net win/loss edge cases, and API stats aggregation.
+
+---
+
 ## 🚀 [0.40.0] - 2026-08-29
 
 ### 🔁 Data Collection Epoch Marker (PLAN-010 follow-up)
