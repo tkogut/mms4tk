@@ -124,9 +124,13 @@ class StateResponse(BaseModel):
 class PnLResponse(BaseModel):
     daily_roe: float = Field(default=0.0, description="Daily Return on Equity percentage")
     realized_pnl: float = Field(default=0.0, description="Realized Profit and Loss")
+    realized_gross_pnl_usd: float = Field(default=0.0, description="Realized Gross Profit and Loss in USD")
+    total_fees_usd: float = Field(default=0.0, description="Total trading fees paid in USD")
+    realized_net_pnl_usd: float = Field(default=0.0, description="Realized Net Profit and Loss in USD (Gross PnL - Fees)")
     unrealized_pnl: float = Field(default=0.0, description="Unrealized Profit and Loss")
     total_trades: int = Field(default=0, description="Total number of trades executed")
     win_rate: float = Field(default=0.0, description="Win rate percentage (0.0 to 100.0)")
+    net_win_rate_pct: float = Field(default=0.0, description="Net win rate percentage accounting for fees (0.0 to 100.0)")
     profit_factor: float = Field(default=0.0, description="Profit factor ratio")
     max_drawdown: float = Field(default=0.0, description="Max Drawdown in USD (see max_drawdown_pct for the ratio)")
     average_rr: float = Field(default=0.0, description="Average Risk to Reward ratio")
@@ -358,12 +362,21 @@ async def get_pnl() -> Dict[str, Any]:
     except Exception as err:
         logger.warning(f"Could not fetch OKX live balance for /api/v1/stats/pnl: {err}")
 
+    gross_pnl = float(kpi.get("realized_gross_pnl_usd", kpi.get("total_pnl_usd", summary.get("realized_pnl", 0.0))))
+    total_fees = float(kpi.get("total_fees_usd", 0.0))
+    net_pnl = float(kpi.get("realized_net_pnl_usd", gross_pnl - total_fees))
+    net_win_rate = float(kpi.get("net_win_rate_pct", kpi.get("win_rate", 0.0)))
+
     return {
         "daily_roe": 0.0,
-        "realized_pnl": kpi.get("total_pnl_usd", summary.get("realized_pnl", 0.0)),
+        "realized_pnl": gross_pnl,
+        "realized_gross_pnl_usd": gross_pnl,
+        "total_fees_usd": total_fees,
+        "realized_net_pnl_usd": net_pnl,
         "unrealized_pnl": 0.0,
         "total_trades": kpi.get("total_trades", summary.get("total_trades", 0)),
         "win_rate": kpi.get("win_rate", 0.0),
+        "net_win_rate_pct": net_win_rate,
         "profit_factor": kpi.get("profit_factor", 0.0),
         "max_drawdown": kpi.get("max_drawdown_usd", kpi.get("max_drawdown", 0.0)),
         "max_drawdown_pct": kpi.get("max_drawdown_pct", 0.0),
@@ -642,6 +655,7 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
 
 # ─── Dashboard Integration Endpoints ─────────────────────────────────────────
 
+@app.get("/api/v1/trades/history", tags=["History"])
 @app.get("/api/v1/history/trades", tags=["History"])
 async def get_history_trades(limit: int = 100) -> List[Dict[str, Any]]:
     """Fetch real historical closed trades from SQLite logger_db."""
