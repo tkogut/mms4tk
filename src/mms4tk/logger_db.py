@@ -141,6 +141,20 @@ class LoggerDB:
                     PRIMARY KEY (symbol, side)
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tp_midline_ledger (
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    midline_price REAL NOT NULL,
+                    reduced_contracts REAL NOT NULL,
+                    remaining_contracts REAL NOT NULL,
+                    pnl_usd REAL NOT NULL,
+                    executed_at TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (symbol, side)
+                )
+            """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_state_logs_ts ON state_logs(timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cycle_logs_ts ON cycle_logs(timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_closed_trades_ts ON closed_trades(timestamp)")
@@ -985,6 +999,83 @@ class LoggerDB:
                 "DELETE FROM position_snapshots WHERE symbol = ? AND side = ?", (symbol, side.lower())
             )
             conn.commit()
+
+    # ── Midline Take-Profit Ledger (PLAN-009) ──────────────────────────
+
+    def record_midline_tp(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        midline_price: float,
+        reduced_contracts: float,
+        remaining_contracts: float,
+        pnl_usd: float,
+    ) -> None:
+        """Record a partial midline take-profit event into the persistent ledger."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO tp_midline_ledger (
+                    symbol, side, entry_price, midline_price,
+                    reduced_contracts, remaining_contracts, pnl_usd,
+                    executed_at, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(symbol, side) DO UPDATE SET
+                    entry_price = excluded.entry_price,
+                    midline_price = excluded.midline_price,
+                    reduced_contracts = excluded.reduced_contracts,
+                    remaining_contracts = excluded.remaining_contracts,
+                    pnl_usd = excluded.pnl_usd,
+                    executed_at = excluded.executed_at,
+                    is_active = 1
+                """,
+                (
+                    symbol,
+                    side.lower(),
+                    float(entry_price),
+                    float(midline_price),
+                    float(reduced_contracts),
+                    float(remaining_contracts),
+                    float(pnl_usd),
+                    now_iso,
+                ),
+            )
+            conn.commit()
+
+    def is_midline_tp_active(self, symbol: str, side: str) -> bool:
+        """
+        Check if midline take-profit has already been executed for this symbol and side.
+        Fail-closed: returns True on any database exception to prevent duplicate orders.
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT is_active FROM tp_midline_ledger WHERE symbol = ? AND side = ? AND is_active = 1",
+                    (symbol, side.lower()),
+                )
+                row = cursor.fetchone()
+                return bool(row and (row["is_active"] == 1 if isinstance(row, sqlite3.Row) else row[0] == 1))
+        except Exception as e:
+            logger.error(f"Error checking midline TP ledger for {symbol} {side} (failing CLOSED -> True): {e}")
+            return True
+
+    def clear_midline_tp(self, symbol: str, side: Optional[str] = None) -> None:
+        """Clear/deactivate midline TP record when position is fully closed."""
+        try:
+            with self._get_connection() as conn:
+                if side is None:
+                    conn.execute("UPDATE tp_midline_ledger SET is_active = 0 WHERE symbol = ?", (symbol,))
+                else:
+                    conn.execute(
+                        "UPDATE tp_midline_ledger SET is_active = 0 WHERE symbol = ? AND side = ?",
+                        (symbol, side.lower()),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error clearing midline TP ledger for {symbol} {side}: {e}")
 
     def get_all_symbol_configs(self) -> Dict[str, Dict[str, Any]]:
         """Retrieve all per-symbol configurations from SQLite symbol_configurations table."""

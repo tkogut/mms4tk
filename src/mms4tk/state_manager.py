@@ -73,6 +73,7 @@ class TradeRecord(BaseModel):
     pnl_percent: float
     is_stop_loss: bool = False
     is_take_profit: bool = False
+    is_partial: bool = False
     sl_percent: float = 0.0
     mode_at_execution: MMS4State
 
@@ -383,13 +384,15 @@ class MMS4StateManager:
         pnl_percent: float,
         is_stop_loss: bool = False,
         is_take_profit: bool = False,
-        sl_percent: float = 0.0
+        sl_percent: float = 0.0,
+        is_partial: bool = False,
     ) -> TradeRecord:
         """
         Record completed trade, update PnL, and evaluate state transitions.
 
         State transitions are applied to the trade's OWN symbol — previously the symbol
         was dropped here and the primary symbol was transitioned instead.
+        Partial TP (is_partial=True) preserves SCOUT_MODE without transitioning to BASE_MODE.
         """
         record = TradeRecord(
             trade_id=trade_id,
@@ -402,6 +405,7 @@ class MMS4StateManager:
             pnl_percent=pnl_percent,
             is_stop_loss=is_stop_loss,
             is_take_profit=is_take_profit,
+            is_partial=is_partial,
             sl_percent=sl_percent,
             mode_at_execution=self._current_state
         )
@@ -412,7 +416,10 @@ class MMS4StateManager:
         if is_stop_loss:
             self.on_stop_loss_hit(sl_percent, sl_price=exit_price, symbol=symbol)
         elif is_take_profit:
-            self.on_take_profit_hit(symbol=symbol)
+            if is_partial:
+                logger.info("Partial TP recorded — SCOUT_MODE state preserved until full position closure")
+            else:
+                self.on_take_profit_hit(symbol=symbol)
 
         if self.logger_db is not None:
             try:

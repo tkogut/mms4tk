@@ -4,6 +4,20 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.42.0] - 2026-08-31
+
+### 🎯 Midline Partial Take-Profit (T1 Netting) & Inactivity v2 (PLAN-009)
+- ⏱️ **Profit Stall Gate (`inactivity_manager.py`)**: Added `profit_stall_candles` and `last_peak_price` tracking in `PositionTracker`. If uPnL >= 0.6 ATR stalls for 4 consecutive candles without making a new ATH/ATL, automatically triggers `SPLIT_50` to de-risk gains.
+- 📐 **Impulse Negation 38.2% Fibonacci Retracement**: Tightened impulse negation from 50% to 38.2% Fibonacci retracement for meaningful impulses >= 0.8 ATR.
+- 💰 **Break-Even Escape Fee Buffer**: Updated `DEFAULT_ROUND_TRIP_COST_PCT` to 0.12% (0.0012) and `DEFAULT_BE_ESCAPE_THRESHOLD` to 0.20% (0.0020) to ensure BE_ESCAPE only triggers when round-trip exchange fees are fully covered.
+- 🛡️ **`tp_midline_ledger` Table & Fail-Closed Pattern (`logger_db.py`)**: Implemented persistent SQLite ledger `tp_midline_ledger` with fail-closed read semantics (`is_midline_tp_active()` returns `True` on any database error to block duplicate market orders).
+- 🎯 **Daemon Midline Netting Execution & Hard 2.0% SL (`daemon.py`)**: Autonomous partial position closure (T1) on TMA midline cross with hard 2.00% Stop Loss preservation on the remaining contract size (does not advance SL to entry). Micro-positions (< 2 contracts) skip T1 gracefully.
+- 🔒 **SCOUT_MODE Lock on Partial TP (`state_manager.py`)**: Added `is_partial: bool = False` to `record_trade()`; partial take-profit events retain defensive `SCOUT_MODE` until full position closure.
+- 📡 **Telegram Alerts & Web Dashboard (`hermes_webhook.py`, `SettingsTab.jsx`, `api.py`)**: Added `emit_midline_tp_event()` Telegram dispatch and exposed `midline_partial_tp_enabled` / `midline_tp_fraction` in the Web UI dashboard and REST API.
+- 🧪 **Unit Test Suite (`tests/test_midline_inactivity_tp.py`)**: Added 7 comprehensive test cases covering profit stall gate, 38.2% Fibonacci negation, BE fee buffer, fail-closed ledger, hard SL distance preservation, micro-position indivisibility, and SCOUT_MODE lock.
+
+---
+
 ## 🚀 [0.41.1] - 2026-08-30
 
 ### 💬 Telegram Reports & Alerts Fee Transparency

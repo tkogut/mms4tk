@@ -310,6 +310,65 @@ class HermesWebhookClient:
 
         return event_id
 
+    def emit_midline_tp_event(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        exit_price: float,
+        contracts_closed: float,
+        remaining_contracts: float,
+        pnl_usd: float,
+        fee_usd: float = 0.0,
+    ) -> int:
+        """
+        Emit a Midline Partial Take-Profit (T1) event when position crosses TMA midline.
+        Creates a Kanban card and dispatches a Telegram alert.
+        """
+        pnl_sign = "+" if pnl_usd >= 0 else ""
+        net_pnl = pnl_usd - fee_usd
+        title = f"🎯 MIDLINE TP (T1): {symbol} ({side.upper()}) | {pnl_sign}${pnl_usd:.2f} USD"
+        body = (
+            f"🎯 Częściowa realizacja zysku (TMA Midline) dla {symbol}.\n\n"
+            f"• Pozycja: {side.upper()}\n"
+            f"• Cena wejścia: ${entry_price:,.4f}\n"
+            f"• Cena realizacji (Midline): ${exit_price:,.4f}\n"
+            f"• Zamknięto kontraktów: {contracts_closed}\n"
+            f"• Pozostało kontraktów: {remaining_contracts}\n"
+            f"• Zrealizowany PnL: {pnl_sign}${pnl_usd:.2f} USD (Net: ${net_pnl:.2f})\n"
+            f"• Stop Loss: Utrzymany na poziomie bazowym (2.00%)\n"
+            f"• Czas: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
+
+        event = HermesWebhookEvent(
+            event_type="MIDLINE_PARTIAL_TP",
+            title=title,
+            body=body,
+            metadata={
+                "symbol": symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "contracts_closed": contracts_closed,
+                "remaining_contracts": remaining_contracts,
+                "pnl_usd": round(pnl_usd, 4),
+                "fee_usd": round(fee_usd, 4),
+                "trigger": "midline_tp",
+            },
+            initial_status="done",
+            priority=8,
+        )
+        event_id = self.emit_event(event)
+
+        HermesWebhookClient.send_telegram(
+            title=title,
+            body=body,
+            priority=5,
+            dedupe_key=f"MIDLINE_TP_{symbol}_{int(time.time()/60)}",
+        )
+
+        return event_id
+
     def get_pending_events(self, limit: int = 10) -> list:
         """Retrieve undispatched webhook events."""
         try:
