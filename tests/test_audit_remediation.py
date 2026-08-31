@@ -205,7 +205,7 @@ def test_be_escape_wins_inside_break_even_band():
 
     emitted = []
     for _ in range(20):
-        a = m.update_and_check("S", 10_005.0, atr, True)  # inside 0.1% band
+        a = m.update_and_check("S", 10_015.0, atr, True)  # inside 0.2% band and >= 0.12% cost cover
         if a != StaleAction.HOLD:
             emitted.append(a)
 

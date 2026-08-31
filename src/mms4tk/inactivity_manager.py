@@ -44,6 +44,8 @@ class PositionTracker:
     is_split: bool = False
     split_at_candle: int = 0
     stale_detected: bool = False
+    profit_stall_candles: int = 0
+    last_peak_price: float = 0.0
     # Candle index of the last emitted protective action; guards against re-issuing the
     # same reduction on every cycle while the triggering condition persists.
     last_action_candle: int = -1
@@ -55,8 +57,10 @@ class PositionTracker:
     def __post_init__(self):
         if self.side == "long":
             self.max_observed_price = self.entry_price
+            self.last_peak_price = self.entry_price
         else:
             self.min_observed_price = self.entry_price
+            self.last_peak_price = self.entry_price
 
 
 class MMS4InactivityManager:
@@ -71,10 +75,11 @@ class MMS4InactivityManager:
 
     Impulse Negation (Rule I):
       If price made a meaningful impulse (> 0.3 * ATR) then retraced > 50%
+      (or > 38.2% for impulse >= 0.8 * ATR)
       → SPLIT_50 (first occurrence) or FORCE_CLOSE (after split)
 
     Break-Even Escape (Rule II):
-      After stagnation is detected, if price returns within 0.1% of entry
+      After stagnation is detected, if price returns within 0.1-0.2% of entry
       → BE_ESCAPE (close at market for ~zero loss)
     """
 
@@ -83,13 +88,12 @@ class MMS4InactivityManager:
     DEFAULT_VOL_COMPRESSION_THRESHOLD: float = 0.5  # fraction of ATR
     DEFAULT_GRACE_CANDLES: int = 5
     DEFAULT_IMPULSE_NEGATION_ENABLED: bool = True
-    DEFAULT_BE_ESCAPE_THRESHOLD: float = 0.001  # 0.1% of entry price
+    DEFAULT_BE_ESCAPE_THRESHOLD: float = float(os.getenv("MMS4_BE_THRESHOLD", "0.002"))  # 0.2% of entry price
     # Round-trip cost allowance (taker fee on both legs + funding). A "break-even" exit
     # inside the raw price band still realizes a small loss once fees are paid; set this
     # to e.g. 0.0012 (OKX taker 0.05% x2 + funding) to require BE_ESCAPE to be net
-    # non-negative. Default 0.0 preserves the documented behaviour — raising it makes the
-    # rule stricter and shifts those exits onto the two-stage ladder instead.
-    DEFAULT_ROUND_TRIP_COST_PCT: float = float(os.getenv("MMS4_BE_COST_PCT", "0.0"))
+    # non-negative.
+    DEFAULT_ROUND_TRIP_COST_PCT: float = float(os.getenv("MMS4_BE_COST_PCT", "0.0012"))
     # Minimum candles between two protective actions on the same position.
     DEFAULT_ACTION_COOLDOWN_CANDLES: int = 1
     # Impulse size (in ATR) that must be made before a 50% retracement counts as a
@@ -253,7 +257,37 @@ class MMS4InactivityManager:
                 tracker.split_at_candle = 0
 
         # ──────────────────────────────────────────────────────────
-        # RULE I: 50% Impulse Negation
+        # RULE 0: Profit Stall Gate (uPnL >= 0.6 ATR stalled 4 candles)
+        # ──────────────────────────────────────────────────────────
+        profit_atr = (
+            (current_price - tracker.entry_price) / atr
+            if tracker.side == "long"
+            else (tracker.entry_price - current_price) / atr
+        )
+        if profit_atr >= 0.6:
+            is_new_peak = (
+                current_price > tracker.last_peak_price
+                if tracker.side == "long"
+                else current_price < tracker.last_peak_price
+            )
+            if is_new_peak:
+                tracker.last_peak_price = current_price
+                tracker.profit_stall_candles = 0
+            elif new_candle_closed:
+                tracker.profit_stall_candles += 1
+
+            if tracker.profit_stall_candles >= 4 and not tracker.is_split:
+                logger.warning(
+                    f"⏰ Profit Stall Gate triggered for {inst_id} (4 candles stalled at profit) → SPLIT_50"
+                )
+                tracker.is_split = True
+                tracker.split_at_candle = tracker.candle_count
+                return self._arm(tracker, StaleAction.SPLIT_50)
+        else:
+            tracker.profit_stall_candles = 0
+
+        # ──────────────────────────────────────────────────────────
+        # RULE I: 50% / 38.2% Impulse Negation
         # ──────────────────────────────────────────────────────────
         if impulse_enabled:
             action = self._check_impulse_negation(
@@ -356,13 +390,15 @@ class MMS4InactivityManager:
 
         if tracker.side == "long":
             local_impulse = tracker.max_observed_price - tracker.entry_price
-            negation_level = tracker.max_observed_price - (local_impulse * 0.5)
-            negated = local_impulse > min_impulse and current_price < negation_level
+            fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
+            negation_level = tracker.max_observed_price - (local_impulse * fib_ratio)
+            negated = local_impulse >= min_impulse and current_price < negation_level
             peak_label, peak_value = "peak", tracker.max_observed_price
         else:
             local_impulse = tracker.entry_price - tracker.min_observed_price
-            negation_level = tracker.min_observed_price + (local_impulse * 0.5)
-            negated = local_impulse > min_impulse and current_price > negation_level
+            fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
+            negation_level = tracker.min_observed_price + (local_impulse * fib_ratio)
+            negated = local_impulse >= min_impulse and current_price > negation_level
             peak_label, peak_value = "trough", tracker.min_observed_price
 
         if not negated:
@@ -370,7 +406,7 @@ class MMS4InactivityManager:
 
         logger.warning(
             f"⚡ Impulse negation ({tracker.side.upper()}) for {tracker.inst_id} | "
-            f"{peak_label}=${peak_value:,.2f} 50%=${negation_level:,.2f} "
+            f"{peak_label}=${peak_value:,.2f} fib={fib_ratio*100:.1f}% negation_level=${negation_level:,.2f} "
             f"current=${current_price:,.2f}"
         )
 

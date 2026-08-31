@@ -103,6 +103,6 @@ def test_be_escape_rule():
     tracker = manager.get_tracker("ICP/USDC")
     tracker.stale_detected = True  # Simulated prior stagnation flag
     
-    # Price touches entry within 0.1% (10.005 vs 10.0) -> BE_ESCAPE
-    action = manager.update_and_check("ICP/USDC", current_price=10.005, current_atr=1.0, new_candle_closed=True)
+    # Price touches entry within 0.2% and >= 0.12% cost allowance (10.015 vs 10.0) -> BE_ESCAPE
+    action = manager.update_and_check("ICP/USDC", current_price=10.015, current_atr=1.0, new_candle_closed=True)
     assert action == StaleAction.BE_ESCAPE

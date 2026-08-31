@@ -887,6 +887,10 @@ class SettingsUpdateRequest(BaseModel):
     time_lock_start: Optional[str] = Field(default=None, description="Time Lock Start in HH:MM (default 13:30)")
     time_lock_end: Optional[str] = Field(default=None, description="Time Lock End in HH:MM (default 14:30)")
 
+    # ── Midline Take-Profit Parameters (PLAN-009) ──
+    midline_partial_tp_enabled: Optional[bool] = Field(default=None, description="Enable partial Take Profit at TMA Midline (T1)")
+    midline_tp_fraction: Optional[float] = Field(default=None, description="Fraction of position to close at TMA Midline (default 0.50)")
+
 
 @app.get("/api/v1/settings", tags=["Settings"])
 async def get_settings() -> Dict[str, Any]:
@@ -904,6 +908,8 @@ async def get_settings() -> Dict[str, Any]:
         "adaptive_vr_low": float(db_settings.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
         "time_lock_start": db_settings.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_settings.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
+        "midline_partial_tp_enabled": str(db_settings.get("midline_partial_tp_enabled", "true")).strip().lower() in ("true", "1", "yes", "on"),
+        "midline_tp_fraction": float(db_settings.get("midline_tp_fraction", 0.50)),
     }
 
 
@@ -1002,6 +1008,14 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         db_updates["time_lock_end"] = t_end
         env_updates["MMS4_TIME_LOCK_END"] = t_end
 
+    if req.midline_partial_tp_enabled is not None:
+        db_updates["midline_partial_tp_enabled"] = str(bool(req.midline_partial_tp_enabled)).lower()
+    if req.midline_tp_fraction is not None:
+        frac = float(req.midline_tp_fraction)
+        if not (0.05 <= frac <= 0.95):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="midline_tp_fraction must be between 0.05 and 0.95")
+        db_updates["midline_tp_fraction"] = str(frac)
+
     if req.api_key is not None and req.api_key.strip():
         new_k = req.api_key.strip()
         os.environ["MMS4_API_KEY"] = new_k
@@ -1028,6 +1042,8 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         "time_lock_start": db_current.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_current.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
         "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
+        "midline_partial_tp_enabled": str(db_current.get("midline_partial_tp_enabled", "true")).strip().lower() in ("true", "1", "yes", "on"),
+        "midline_tp_fraction": float(db_current.get("midline_tp_fraction", 0.50)),
     }
 
 
