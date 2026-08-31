@@ -1,73 +1,84 @@
 {
-  "project": "AGENTS-OS Project",
+  "project": "agents-os-core",
   "version": "5.0",
   "nodes": [
     {
       "id": ".agents/specs/AGENTS-OS.md",
       "label": "AGENTS-OS.md",
       "type": "Ultimate Source of Truth",
-      "description": "Constitution of AGENTS-OS v6.0 governing all Swarm rules and system operations."
+      "description": "Constitution of AGENTS-OS v6.5 governing all Swarm rules and system operations."
     },
     {
-      "id": ".agents/specs/knowledge/vps_hermes_okx_architecture.md",
-      "label": "Vps Hermes Okx Architecture",
-      "type": "Expert Knowledge",
-      "description": "Knowledge base note synchronized from NotebookLM: Vps Hermes Okx Architecture"
+      "id": "INSTALL.sh",
+      "label": "INSTALL.sh",
+      "type": "Critical Infrastructure",
+      "description": "Installer script for AGENTS-OS dependencies, global skills, and snap compatibility links."
     },
     {
-      "id": ".agents/specs/knowledge/mms4_knowledge_base.md",
-      "label": "Mms4 Knowledge Base",
-      "type": "Expert Knowledge",
-      "description": "Knowledge base note synchronized from NotebookLM: Mms4 Knowledge Base"
+      "id": "os-init",
+      "label": "os-init",
+      "type": "Critical Infrastructure",
+      "description": "System bootstrap tool to initialize new workspace nodes with v6.5 Swarm Template Vault."
     },
     {
-      "id": ".agents/specs/knowledge/okx-api-guide.md",
-      "label": "Okx Api Guide",
-      "type": "Expert Knowledge",
-      "description": "Knowledge base note synchronized from NotebookLM: Okx Api Guide"
+      "id": "vault",
+      "label": "vault/",
+      "type": "Critical Infrastructure",
+      "description": "Standard directory vault acting as the blueprint standard for all new sub-agents."
     },
     {
-      "id": ".agents/specs/knowledge/okx_europe_eea_x_perps.md",
-      "label": "Okx Europe Eea X Perps",
+      "id": ".agents/specs/knowledge/integracja archotectury open-mercato.md",
+      "label": "Integracja Archotectury Open Mercato",
       "type": "Expert Knowledge",
-      "description": "Knowledge base note synchronized from NotebookLM: OKX Europe (EEA) X-Perps API Guide"
+      "description": "Knowledge base note synchronized from NotebookLM: Integracja Archotectury Open Mercato"
     },
     {
-      "id": ".agents/specs/knowledge/mms4-stale-positions-report.md",
-      "label": "Mms4 Stale Positions Report",
+      "id": ".agents/specs/knowledge/kompendium_skilli_open_mercato.md",
+      "label": "Kompendium Skilli Open Mercato",
       "type": "Expert Knowledge",
-      "description": "Knowledge base note synchronized from NotebookLM: Mms4 Stale Positions Report"
+      "description": "Full NotebookLM distillation and knowledge base covering all 36 Open-Mercato SDLC skills."
+    },
+    {
+      "id": ".agents/skills/notebooklm-sync",
+      "label": "notebooklm-sync",
+      "type": "System Skill",
+      "description": "Skill for synchronization and distillation of expert knowledge from NotebookLM to AGENTS-OS."
     }
   ],
   "edges": [
     {
       "source": ".agents/specs/AGENTS-OS.md",
-      "target": ".agents/specs/knowledge/vps_hermes_okx_architecture.md",
+      "target": ".agents/rules/core-rule.md",
+      "relation": "governs"
+    },
+    {
+      "source": "INSTALL.sh",
+      "target": "vault",
+      "relation": "references"
+    },
+    {
+      "source": "os-init",
+      "target": "vault",
+      "relation": "replicates"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/integracja archotectury open-mercato.md",
       "relation": "governs_knowledge"
     },
     {
       "source": ".agents/specs/AGENTS-OS.md",
-      "target": ".agents/specs/knowledge/mms4_knowledge_base.md",
+      "target": ".agents/specs/knowledge/kompendium_skilli_open_mercato.md",
       "relation": "governs_knowledge"
     },
     {
-      "source": ".agents/specs/AGENTS-OS.md",
-      "target": ".agents/specs/knowledge/okx-api-guide.md",
-      "relation": "governs_knowledge"
-    },
-    {
-      "source": ".agents/specs/AGENTS-OS.md",
-      "target": ".agents/specs/knowledge/okx_europe_eea_x_perps.md",
-      "relation": "governs_knowledge"
-    },
-    {
-      "source": ".agents/specs/AGENTS-OS.md",
-      "target": ".agents/specs/knowledge/mms4-stale-positions-report.md",
-      "relation": "governs_knowledge"
+      "source": ".agents/skills/notebooklm-sync",
+      "target": ".agents/specs/knowledge/kompendium_skilli_open_mercato.md",
+      "relation": "synchronizes_to"
     }
   ],
   "metadata": {
-    "last_distillation": "2026-08-15",
+    "last_distillation": "2026-08-29",
     "source": "Inception Engine"
   }
 }
