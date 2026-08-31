@@ -15,6 +15,8 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   const [timeLockStart, setTimeLockStart] = useState(daemonData?.time_lock_start || '13:30');
   const [timeLockEnd, setTimeLockEnd] = useState(daemonData?.time_lock_end || '14:30');
   const [portfolioMarginCap, setPortfolioMarginCap] = useState(daemonData?.total_max_portfolio_margin_usd ?? 0);
+  const [midlinePartialTpEnabled, setMidlinePartialTpEnabled] = useState(daemonData?.midline_partial_tp_enabled ?? true);
+  const [midlineTpFraction, setMidlineTpFraction] = useState(daemonData?.midline_tp_fraction ?? 0.50);
 
   // ── Margin & Symbol Allocations for Quick Presets ──
   const [symbolsTotalAllocation, setSymbolsTotalAllocation] = useState(0);
@@ -50,6 +52,8 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
       if (daemonData.time_lock_end) setTimeLockEnd(daemonData.time_lock_end);
       if (daemonData.total_max_portfolio_margin_usd !== undefined) setPortfolioMarginCap(daemonData.total_max_portfolio_margin_usd);
       if (daemonData.stop_loss_pct !== undefined) setStopLoss(daemonData.stop_loss_pct);
+      if (daemonData.midline_partial_tp_enabled !== undefined) setMidlinePartialTpEnabled(daemonData.midline_partial_tp_enabled);
+      if (daemonData.midline_tp_fraction !== undefined) setMidlineTpFraction(daemonData.midline_tp_fraction);
       isInitializedRef.current = true;
     }
   }, [daemonData]);
@@ -107,7 +111,9 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           adaptive_vr_low: parseFloat(vrLow),
           time_lock_start: timeLockStart,
           time_lock_end: timeLockEnd,
-          total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap)
+          total_max_portfolio_margin_usd: parseFloat(portfolioMarginCap),
+          midline_partial_tp_enabled: midlinePartialTpEnabled,
+          midline_tp_fraction: parseFloat(midlineTpFraction)
         });
       }
       setSavedSuccess(true);
@@ -325,6 +331,50 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
           </div>
           <p className="text-[10px] text-slate-500">
             Zabezpiecza przed overleveragingiem – blokuje nowe zlecenia, gdy łączny wykorzystany depozyt na OKX przekroczy ten próg.
+          </p>
+        </div>
+
+        {/* ── Midline Partial Take Profit (PLAN-009) ── */}
+        <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-lg space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-200">Częściowy TP na Linii Środkowej TMA (T1):</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMidlinePartialTpEnabled(!midlinePartialTpEnabled)}
+              className={`w-11 h-5 flex items-center rounded-full p-0.5 transition-colors shrink-0 ${
+                midlinePartialTpEnabled ? 'bg-emerald-500 justify-end' : 'bg-slate-800 justify-start'
+              }`}
+            >
+              <span className="w-3.5 h-3.5 rounded-full bg-white shadow-md" />
+            </button>
+          </div>
+
+          {midlinePartialTpEnabled && (
+            <div className="space-y-2 pt-1 border-t border-slate-800/80">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-400">Frakcja redukcji pozycji (TP %):</span>
+                <span className="font-mono font-bold text-emerald-400">{(midlineTpFraction * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.10"
+                max="0.90"
+                step="0.05"
+                value={midlineTpFraction}
+                onChange={(e) => setMidlineTpFraction(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                <span>10%</span>
+                <span>50% (Domyślnie)</span>
+                <span>90%</span>
+              </div>
+            </div>
+          )}
+          <p className="text-[10px] text-slate-500">
+            Automatyczna realizacja części zysku (T1) przy przecięciu mediany TMA. Pozostała część chroniona stałym 2.00% SL.
           </p>
         </div>
 

@@ -130,6 +130,10 @@ class IndicatorParams(BaseModel):
     tma_slope_lookback: int = 5
     tma_slope_threshold: float = 0.002
 
+    # ── Midline Partial Take-Profit (PLAN-009) ──
+    midline_partial_tp_enabled: bool = True
+    midline_tp_fraction: float = 0.50
+
 
 class SignalResult(BaseModel):
     """
@@ -231,6 +235,7 @@ class TMAIndicator:
 
         return pd.DataFrame({
             "tma": tma,
+            "tma_mid": tma,
             "atr": atr,
             "upper_band": upper_band,
             "lower_band": lower_band,

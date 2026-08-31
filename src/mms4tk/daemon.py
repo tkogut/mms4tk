@@ -531,6 +531,10 @@ class MMS4Daemon:
 
             self.logger_db.delete_position_snapshot(target_symbol, side)
             self._clear_addons(target_symbol, side)
+            try:
+                self.logger_db.clear_midline_tp(target_symbol, side)
+            except Exception:
+                pass
             if self.inactivity_manager.is_tracking(target_symbol):
                 self.inactivity_manager.stop_tracking(target_symbol)
 
@@ -644,18 +648,24 @@ class MMS4Daemon:
 
         def _sym_bool(key: str, fallback: bool) -> bool:
             raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is None:
+                raw = db_settings.get(key)
             if raw is not None:
                 return str(raw).strip().lower() in ("true", "1", "yes", "on")
             return bool(sym_cfg.get(key, fallback))
 
         def _sym_int(key: str, fallback: int) -> int:
             raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is None:
+                raw = db_settings.get(key)
             if raw is not None:
                 return int(float(raw))
             return int(sym_cfg.get(key, fallback))
 
         def _sym_float(key: str, fallback: float) -> float:
             raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is None:
+                raw = db_settings.get(key)
             if raw is not None:
                 return float(raw)
             return float(sym_cfg.get(key, fallback))
@@ -669,6 +679,8 @@ class MMS4Daemon:
             tma_trend_filter_enabled=_sym_bool("tma_trend_filter_enabled", defaults.tma_trend_filter_enabled),
             tma_slope_lookback=_sym_int("tma_slope_lookback", defaults.tma_slope_lookback),
             tma_slope_threshold=_sym_float("tma_slope_threshold", defaults.tma_slope_threshold),
+            midline_partial_tp_enabled=_sym_bool("midline_partial_tp_enabled", defaults.midline_partial_tp_enabled),
+            midline_tp_fraction=_sym_float("midline_tp_fraction", defaults.midline_tp_fraction),
         )
 
     async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
@@ -892,21 +904,28 @@ class MMS4Daemon:
                 self._clear_addons(target_symbol, ledger_side)
 
         # ────────────────────────────────────────────────────────────────
-        # STALE POSITION MANAGEMENT (MMS4 Inactivity Manager)
+        # STALE POSITION MANAGEMENT (MMS4 Inactivity Manager) & MIDLINE TP
         # Runs every cycle: tracks active positions, detects stagnation,
-        # and executes protective Split/Close actions autonomously.
+        # executes Midline partial TP (T1), and executes protective actions.
         # ────────────────────────────────────────────────────────────────
         try:
-            # Compute current ATR from CLOSED candles only — candles[-1] is still forming,
-            # so including it makes the stagnation threshold repaint within the candle.
+            # Compute current ATR and TMA midline
             current_atr = 0.0
+            tma_mid = 0.0
+            ind_params = self._get_indicator_params(target_symbol)
             closed_candles = candles[:-1] if len(candles) > 1 else candles
             if len(closed_candles) >= 20:
-                tma_df = TMAIndicator.calculate(closed_candles, IndicatorParams())
-                if not tma_df.empty and "atr" in tma_df.columns:
-                    last_valid_atr = tma_df["atr"].dropna()
+                tma_df_closed = TMAIndicator.calculate(closed_candles, ind_params)
+                if not tma_df_closed.empty and "atr" in tma_df_closed.columns:
+                    last_valid_atr = tma_df_closed["atr"].dropna()
                     if len(last_valid_atr) > 0:
                         current_atr = float(last_valid_atr.iloc[-1])
+            if len(candles) >= 20:
+                tma_df_all = TMAIndicator.calculate(candles, ind_params)
+                if not tma_df_all.empty and "tma" in tma_df_all.columns:
+                    last_valid_tma = tma_df_all["tma"].dropna()
+                    if len(last_valid_tma) > 0:
+                        tma_mid = float(last_valid_tma.iloc[-1])
 
             # Load per-symbol inactivity config from symbols store
             try:
@@ -949,6 +968,144 @@ class MMS4Daemon:
                 # No position open — stop tracking if was tracked
                 if self.inactivity_manager.is_tracking(target_symbol):
                     self.inactivity_manager.stop_tracking(target_symbol)
+                if self.logger_db:
+                    try:
+                        self.logger_db.clear_midline_tp(target_symbol)
+                    except Exception:
+                        pass
+
+            # ────────────────────────────────────────────────────────────────
+            # MIDLINE PARTIAL TAKE PROFIT (PLAN-009 T1 Netting)
+            # Evaluated when an active position is open before inactivity checks.
+            # ────────────────────────────────────────────────────────────────
+            if active_pos is not None and _pos_contracts(active_pos) > 0 and tma_mid > 0:
+                side_to_close = active_side.lower()
+                existing_contracts = _pos_contracts(active_pos)
+                candle_high = float(getattr(candles[-1], "high", signal.price)) if candles else signal.price
+                candle_low = float(getattr(candles[-1], "low", signal.price)) if candles else signal.price
+
+                if side_to_close == "long":
+                    midline_hit = (candle_high >= tma_mid or signal.price >= tma_mid) and (active_entry_price <= tma_mid or signal.price > active_entry_price)
+                else:
+                    midline_hit = (candle_low <= tma_mid or signal.price <= tma_mid) and (active_entry_price >= tma_mid or signal.price < active_entry_price)
+
+                is_tp_active = self.logger_db.is_midline_tp_active(target_symbol, side_to_close) if self.logger_db else False
+
+                if midline_hit and not is_tp_active and ind_params.midline_partial_tp_enabled:
+                    reduce_amt = self.executor.reduction_amount(existing_contracts, ind_params.midline_tp_fraction)
+                    if reduce_amt is None or existing_contracts < 2:
+                        logger.info(f"Micro-position {existing_contracts} contracts not divisible → T1_SKIPPED_NOT_DIVISIBLE")
+                    else:
+                        contracts_to_reduce = reduce_amt
+                        remaining_contracts = existing_contracts - contracts_to_reduce
+
+                        logger.info(
+                            f"🎯 Midline Take-Profit Triggered for {target_symbol} ({side_to_close.upper()}): "
+                            f"Reducing {contracts_to_reduce}/{existing_contracts} contracts at ${tma_mid:,.2f}"
+                        )
+
+                        # 1. Partial close on OKX
+                        reduce_result = await self.executor.reduce_position(
+                            symbol=target_symbol,
+                            side=side_to_close,
+                            reduction_pct=ind_params.midline_tp_fraction,
+                            reason="MIDLINE_PARTIAL_TP"
+                        )
+
+                        # 2. Scale / re-attach 2.0% hard Stop-Loss with exact same trigger price
+                        try:
+                            await self.executor.attach_stop_loss(
+                                symbol=target_symbol,
+                                side="sell" if side_to_close == "long" else "buy",
+                                entry_price=active_entry_price,
+                                stop_loss_pct=self.base_sl_pct,
+                                pos_side=side_to_close,
+                            )
+                        except Exception as sl_err:
+                            logger.error(f"Failed to re-attach SL algo after midline TP: {sl_err}")
+
+                        # 3. Calculate realized PnL
+                        pnl_pct = (tma_mid - active_entry_price) / active_entry_price if side_to_close == "long" else (active_entry_price - tma_mid) / active_entry_price
+                        ct_size = self._get_contract_size(target_symbol)
+                        partial_pnl = pnl_pct * active_entry_price * contracts_to_reduce * ct_size
+
+                        # 4. Record in persistent ledger (fail-closed guard)
+                        if self.logger_db:
+                            self.logger_db.record_midline_tp(
+                                symbol=target_symbol,
+                                side=side_to_close,
+                                entry_price=active_entry_price,
+                                midline_price=tma_mid,
+                                reduced_contracts=contracts_to_reduce,
+                                remaining_contracts=remaining_contracts,
+                                pnl_usd=partial_pnl,
+                            )
+
+                        # 5. Record trade in state manager with is_partial=True
+                        trade_id = f"midline_tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}"
+                        self.state_manager.record_trade(
+                            trade_id=trade_id,
+                            symbol=target_symbol,
+                            side=side_to_close,
+                            entry_price=active_entry_price,
+                            exit_price=tma_mid,
+                            amount=contracts_to_reduce,
+                            pnl=partial_pnl,
+                            pnl_percent=pnl_pct,
+                            is_take_profit=True,
+                            is_partial=True,
+                        )
+
+                        # 6. Emit Hermes webhook & Telegram notification
+                        try:
+                            from mms4tk.hermes_webhook import HermesWebhookClient
+                            wh_client = HermesWebhookClient()
+                            wh_client.emit_midline_tp_event(
+                                symbol=target_symbol,
+                                side=side_to_close,
+                                entry_price=active_entry_price,
+                                exit_price=tma_mid,
+                                contracts_closed=contracts_to_reduce,
+                                remaining_contracts=remaining_contracts,
+                                pnl_usd=partial_pnl,
+                                fee_usd=0.0,
+                            )
+                        except Exception as whe:
+                            logger.warning(f"Failed to emit midline TP webhook: {whe}")
+
+                        # 7. Update tracker state in inactivity manager
+                        if self.inactivity_manager.is_tracking(target_symbol):
+                            tr = self.inactivity_manager.get_tracker(target_symbol)
+                            if tr:
+                                tr.is_split = True
+                                tr.split_at_candle = tr.candle_count
+
+                        outcome = "MIDLINE_PARTIAL_TP"
+                        details = (
+                            f"Midline Take Profit (T1) executed for {target_symbol} {side_to_close.upper()}: "
+                            f"closed {contracts_to_reduce} contracts at ${tma_mid:,.2f} "
+                            f"(Entry=${active_entry_price:,.2f}, PnL=+${partial_pnl:.2f} USD). "
+                            f"Remaining {remaining_contracts} contracts protected with 2.0% SL."
+                        )
+                        self.logger_db.log_cycle(
+                            symbol=target_symbol,
+                            signal_type="MIDLINE_PARTIAL_TP",
+                            state=sym_state.value,
+                            leverage=sym_leverage,
+                            price=signal.price,
+                            outcome=outcome,
+                            details=details,
+                        )
+                        return {
+                            "symbol": target_symbol,
+                            "timestamp": now_iso,
+                            "signal_type": "MIDLINE_PARTIAL_TP",
+                            "outcome": outcome,
+                            "state": sym_state.value,
+                            "leverage": sym_leverage,
+                            "order": reduce_result,
+                            "reconciliation": reconciliation_events,
+                        }
 
             # Evaluate inactivity rules (only if tracking)
             if self.inactivity_manager.is_tracking(target_symbol):
@@ -1013,6 +1170,7 @@ class MMS4Daemon:
                         # cycle's reconciliation does not mistake this for a stop-out.
                         try:
                             self.logger_db.delete_position_snapshot(target_symbol, t_side)
+                            self.logger_db.clear_midline_tp(target_symbol, t_side)
                         except Exception:
                             pass
                         self._clear_addons(target_symbol, t_side)
@@ -1173,6 +1331,7 @@ class MMS4Daemon:
                         self._clear_addons(target_symbol, side_to_close)
                         try:
                             self.logger_db.delete_position_snapshot(target_symbol, side_to_close)
+                            self.logger_db.clear_midline_tp(target_symbol, side_to_close)
                         except Exception:
                             pass
 
