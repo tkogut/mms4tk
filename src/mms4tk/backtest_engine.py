@@ -17,11 +17,13 @@ the evidence that justified them):
     alone produced the false positive that shipped in PLAN-008 Phase 3 and had to be
     walked back 2026-08-29. `train_test_validate` enforces this structurally: there
     is no code path that reports a verdict from a single direction.
+  * The BASE_MODE/SCOUT_MODE state machine is modeled faithfully (2026-09-02): a
+    real `MMS4StateManager` tracks state across closed trades, so a >=2% stop-loss
+    correctly shrinks subsequent entries the way it does in production, instead of
+    every entry being sized as if BASE_MODE never left.
 """
 import asyncio
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
@@ -54,10 +56,72 @@ BASE_CONTRACTS: Dict[str, float] = {"BTC/USDC": 4.0, "ETH/USDC": 14.0}
 BASE_CONTRACTS_DEFAULT = 2.0
 
 
+def _trade_record_flags(exit_reason: str) -> Dict[str, bool]:
+    """Map a harness `exit_reason` to the `(is_stop_loss, is_take_profit, is_partial)`
+    flags `MMS4StateManager.record_trade()` needs to reproduce the real
+    BASE_MODE/SCOUT_MODE state machine (see `state_manager.py`'s `on_stop_loss_hit`/
+    `on_take_profit_hit`, both invoked from `record_trade`). `sl_percent` is NOT
+    resolved here — the caller passes the trade's actual stop-loss percentage.
+
+    FORCE_CLOSE/FORCE_CLOSE_BE/BE_ESCAPE map to neither SL nor TP: production's own
+    `inactivity_manager.py`/`daemon.py` never call either state hook for these exits
+    (they are inactivity-driven exits, not a signal-driven take-profit or a hard
+    stop-loss fill) — confirmed by grep, not assumed.
+    """
+    table = {
+        "STOP_LOSS":          dict(is_stop_loss=True,  is_take_profit=False, is_partial=False),
+        "TP_AND_FLIP":        dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+        "STALE_SPLIT_50":     dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
+        "MIDLINE_PARTIAL_TP": dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
+        "FORCE_CLOSE":        dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+        "FORCE_CLOSE_BE":     dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+        "BE_ESCAPE":          dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+    }
+    return table[exit_reason]
+
+
+def _size_new_entry(symbol: str, sm: MMS4StateManager) -> Dict[str, Any]:
+    """Contracts + bookkeeping for a fresh BASE entry, scaled by SCOUT_MODE if the
+    state machine is currently in it — mirrors `daemon.py`'s `plan_allocation()`
+    (`margin_base * size_mult * leverage`) for the SIZE axis; the LEVERAGE axis only
+    matters for `notional_weight` (see below), since `pnl_pct` is price-relative,
+    not margin-relative.
+
+    `notional_weight` is a *notional* fraction of a full BASE_MODE entry — NOT a
+    contracts fraction — reusing `get_risk_profile_snapshot()`'s own
+    `notional_reduction_factor` (`base_leverage / (leverage * size_mult)`) rather
+    than re-deriving it, so this can never silently drift from what
+    `state_manager.py` actually computes. ~1.0 for a full BASE entry (matches
+    pre-SCOUT-fidelity behavior exactly), ~0.1 for a SCOUT entry at defaults
+    (leverage 1.0x vs base 3.0x, size 0.3x)."""
+    snap = sm.get_risk_profile_snapshot(symbol)
+    size_mult = float(snap["size_multiplier"])
+    reduction_factor = float(snap["notional_reduction_factor"]) or 1.0
+    # Known simplification: a SCOUT_MODE entry can come out fractional here (e.g.
+    # 4.0 * 0.3 = 1.2 "contracts"), unlike a real order which is always a whole
+    # number. reduction_amount()'s floor() handles it without crashing, but this
+    # is not a claim that SCOUT-sized backtest positions are literally
+    # order-representable — only that their NOTIONAL is proportionally correct.
+    contracts = BASE_CONTRACTS.get(symbol, BASE_CONTRACTS_DEFAULT) * size_mult
+    return {
+        "contracts": contracts,
+        "notional_weight": 1.0 / reduction_factor,
+        "state_at_entry": snap["state"],
+    }
+
+
 def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """pnl/R:R weighted by each trade's `weight` (fraction of the base position size
-    still open at that close) — a SPLIT_50-reduced remainder contributes less than a
-    full-size close once `reduction_amount()` has shrunk it."""
+    """pnl/R:R weighted by each trade's `weight` — a NOTIONAL fraction of a full
+    BASE_MODE entry (see `_size_new_entry`'s `notional_weight`), not a contracts
+    fraction. A SPLIT_50/Midline-TP-reduced remainder, or any entry sized while in
+    SCOUT_MODE, contributes proportionally less than a full-size BASE entry.
+
+    Semantic note: this changed 2026-09 from a pure `contracts/base_contracts`
+    ratio once SCOUT_MODE sizing landed — any `trend_filter_calibration_runs` row
+    persisted before that change is not bit-for-bit comparable to a post-change run
+    for any window that included a >=2% stop-loss (full-BASE-only runs, i.e. ones
+    that never triggered SCOUT_MODE, are unaffected — `notional_weight` was already
+    1.0 there)."""
     if not trades:
         return dict(win_rate=0.0, rr=float("nan"), total_pnl=0.0, full_closes=0)
     for t in trades:
@@ -102,146 +166,173 @@ def run_backtest(
     fail-closed / micro-position guard), hard stop-loss stays at its original
     entry-relative price (NOT moved to break-even) — matching the real
     implementation's choice not to lock in break-even, just to de-risk gains.
+
+    Also models the BASE_MODE/SCOUT_MODE state machine faithfully: `sm` is a real
+    `MMS4StateManager` (no `logger_db` — every write site in that class is already
+    guarded with `if self.logger_db is not None`, so state transitions/sizing work
+    identically without one, and this avoids a synchronous SQLite write per closed
+    trade inside a large grid search). A >=2% stop-loss transitions the symbol to
+    SCOUT_MODE (shrinks new entries via `_size_new_entry`); only a FULL (non-partial)
+    take-profit-flagged close exits it — a partial (SPLIT_50/Midline TP) explicitly
+    preserves SCOUT_MODE, matching `record_trade()`'s own behavior exactly.
     """
-    with tempfile.TemporaryDirectory(prefix="mms4tk_backtest_") as tmp_dir:
-        db = LoggerDB(db_path=os.path.join(tmp_dir, f"bt_{symbol.replace('/', '_')}.db"))
-        sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=db)
-        engine = MMS4SignalEngine()
-        im = MMS4InactivityManager()
-        im.set_symbol_config(symbol, {
-            "stale_candles_threshold": stale_candles_threshold,
-            "stale_atr_threshold": STALE_ATR_THRESHOLD,
-            "impulse_negation_enabled": IMPULSE_NEGATION_ENABLED,
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=None)
+    engine = MMS4SignalEngine()
+    im = MMS4InactivityManager()
+    im.set_symbol_config(symbol, {
+        "stale_candles_threshold": stale_candles_threshold,
+        "stale_atr_threshold": STALE_ATR_THRESHOLD,
+        "impulse_negation_enabled": IMPULSE_NEGATION_ENABLED,
+    })
+
+    # Precompute TMA/slope ONCE over the whole closed-candle history (causal
+    # rolling windows only — no lookahead). evaluate_signals() is still called
+    # incrementally per step for faithful entry/HIGH_RISK_ADD/adaptive-VR decisions.
+    full_df = TMAIndicator.calculate(candles, params)
+    tma_slope = full_df["tma"].pct_change(periods=slope_lookback)
+
+    trades: List[Dict[str, Any]] = []
+    position: Optional[Dict[str, Any]] = None
+    warmup = max(params.tma_length, params.atr_period) + slope_lookback + 2
+
+    def close_position(exit_price: float, reason: str, idx: int) -> None:
+        nonlocal position
+        assert position is not None
+        side = position["side"]
+        entry = position["entry_price"]
+        weight = position["notional_weight"]
+        pnl_pct = (exit_price - entry) / entry if side == "long" else (entry - exit_price) / entry
+        flags = _trade_record_flags(reason)
+        sl_percent = BASE_SL_PCT if reason == "STOP_LOSS" else 0.0
+        sm.record_trade(
+            trade_id=f"{symbol}-{idx}", symbol=symbol, side=side,
+            entry_price=entry, exit_price=exit_price, amount=position["contracts"],
+            pnl=pnl_pct * entry, pnl_percent=pnl_pct, sl_percent=sl_percent, **flags,
+        )
+        trades.append({
+            "side": side, "entry_price": entry, "exit_price": exit_price,
+            "pnl_pct": pnl_pct, "exit_reason": reason, "exit_idx": idx, "weight": weight,
         })
+        im.stop_tracking(symbol)
+        position = None
 
-        base_contracts = BASE_CONTRACTS.get(symbol, BASE_CONTRACTS_DEFAULT)
+    def record_partial(reason: str) -> None:
+        """`sm.record_trade()` call for a partial booking (SPLIT_50/Midline TP) that
+        does NOT close `position` — mirrors `record_trade`'s own is_partial=True
+        branch, which explicitly preserves SCOUT_MODE rather than exiting it."""
+        flags = _trade_record_flags(reason)
+        sm.record_trade(
+            trade_id=f"{symbol}-partial", symbol=symbol, side=position["side"],
+            entry_price=position["entry_price"], exit_price=position["entry_price"],
+            amount=0.0, pnl=0.0, pnl_percent=0.0, sl_percent=0.0, **flags,
+        )
 
-        # Precompute TMA/slope ONCE over the whole closed-candle history (causal
-        # rolling windows only — no lookahead). evaluate_signals() is still called
-        # incrementally per step for faithful entry/HIGH_RISK_ADD/adaptive-VR decisions.
-        full_df = TMAIndicator.calculate(candles, params)
-        tma_slope = full_df["tma"].pct_change(periods=slope_lookback)
+    for i in range(warmup, len(candles) - 1):
+        window = candles[: i + 2]
+        curr_c = candles[i]
 
-        trades: List[Dict[str, Any]] = []
-        position: Optional[Dict[str, Any]] = None
-        warmup = max(params.tma_length, params.atr_period) + slope_lookback + 2
-
-        def close_position(exit_price: float, reason: str, idx: int) -> None:
-            nonlocal position
-            assert position is not None
+        if position is not None:
             side = position["side"]
             entry = position["entry_price"]
-            weight = position["contracts"] / base_contracts
-            pnl_pct = (exit_price - entry) / entry if side == "long" else (entry - exit_price) / entry
-            trades.append({
-                "side": side, "entry_price": entry, "exit_price": exit_price,
-                "pnl_pct": pnl_pct, "exit_reason": reason, "exit_idx": idx, "weight": weight,
-            })
-            im.stop_tracking(symbol)
-            position = None
-
-        for i in range(warmup, len(candles) - 1):
-            window = candles[: i + 2]
-            curr_c = candles[i]
-
-            if position is not None:
-                side = position["side"]
-                entry = position["entry_price"]
-                sl_price = entry * (1 - BASE_SL_PCT) if side == "long" else entry * (1 + BASE_SL_PCT)
-                sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
-                if sl_hit:
-                    close_position(sl_price, "STOP_LOSS", i)
-                    continue
-
-                # ── Midline Partial TP (PLAN-009 v2), evaluated BEFORE inactivity
-                # checks, matching daemon.py's ordering ──
-                if midline_tp_enabled and not position.get("midline_tp_done"):
-                    tma_mid = float(full_df["tma"].iloc[i]) if not pd.isna(full_df["tma"].iloc[i]) else 0.0
-                    if tma_mid > 0:
-                        if side == "long":
-                            midline_hit = (curr_c.high >= tma_mid) and (entry <= tma_mid or curr_c.close > entry)
-                        else:
-                            midline_hit = (curr_c.low <= tma_mid) and (entry >= tma_mid or curr_c.close < entry)
-                        if midline_hit:
-                            contracts = position["contracts"]
-                            reduce_amt = OKXExecutor.reduction_amount(contracts, midline_tp_fraction)
-                            position["midline_tp_done"] = True  # at most once per position, hit or skipped
-                            if reduce_amt is not None and contracts >= 2:
-                                reduced_frac = reduce_amt / contracts
-                                mid_pnl = (tma_mid - entry) / entry if side == "long" else (entry - tma_mid) / entry
-                                trades.append({
-                                    "side": side, "entry_price": entry, "exit_price": tma_mid,
-                                    "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP", "exit_idx": i,
-                                    "partial": True, "weight": reduced_frac,
-                                })
-                                position["contracts"] = contracts - reduce_amt
-                                # Hard SL stays at its original entry-relative price on the
-                                # remainder — the real implementation re-attaches the SAME
-                                # 2% SL, never break-even. `sl_price` above is already
-                                # computed from `entry`, unchanged, so no further action
-                                # needed here — this comment documents that it's deliberate.
-
-                atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
-                action = im.update_and_check(
-                    inst_id=symbol, current_price=curr_c.close, current_atr=atr_now, new_candle_closed=True,
-                )
-                if action in (StaleAction.FORCE_CLOSE, StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE):
-                    close_position(curr_c.close, action.value, i)
-                    continue
-                elif action == StaleAction.SPLIT_50:
-                    # Mirror the REAL reduction_amount() no-op rule: None (or the full
-                    # remainder) means the position can't be halved without fully
-                    # closing it -> HELD, nothing booked, position stays intact.
-                    contracts = position["contracts"]
-                    reduce_amt = OKXExecutor.reduction_amount(contracts, 0.50)
-                    if reduce_amt is not None:
-                        reduced_frac = reduce_amt / contracts
-                        half_pnl = (curr_c.close - entry) / entry if side == "long" else (entry - curr_c.close) / entry
-                        trades.append({
-                            "side": side, "entry_price": entry, "exit_price": curr_c.close,
-                            "pnl_pct": half_pnl, "exit_reason": "STALE_SPLIT_50", "exit_idx": i,
-                            "partial": True, "weight": reduced_frac,
-                        })
-                        position["contracts"] = contracts - reduce_amt
-
-            signal = engine.evaluate_signals(window, sm, params=params, symbol=symbol)
-            slope_now = tma_slope.iloc[i] if i < len(tma_slope) else float("nan")
-            trend_blocked = False
-            if trend_filter_enabled and not pd.isna(slope_now):
-                if signal.signal_type == "BASE_SHORT" and slope_now > slope_threshold:
-                    trend_blocked = True
-                elif signal.signal_type == "BASE_LONG" and slope_now < -slope_threshold:
-                    trend_blocked = True
-
-            if not signal.is_allowed or trend_blocked:
+            sl_price = entry * (1 - BASE_SL_PCT) if side == "long" else entry * (1 + BASE_SL_PCT)
+            sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
+            if sl_hit:
+                close_position(sl_price, "STOP_LOSS", i)
                 continue
 
-            if position is None:
-                if signal.signal_type in ("BASE_LONG", "BASE_SHORT"):
-                    side = "long" if signal.signal_type == "BASE_LONG" else "short"
-                    position = {"side": side, "entry_price": curr_c.close, "entry_idx": i,
-                                "contracts": base_contracts}
+            # ── Midline Partial TP (PLAN-009 v2), evaluated BEFORE inactivity
+            # checks, matching daemon.py's ordering ──
+            if midline_tp_enabled and not position.get("midline_tp_done"):
+                tma_mid = float(full_df["tma"].iloc[i]) if not pd.isna(full_df["tma"].iloc[i]) else 0.0
+                if tma_mid > 0:
+                    if side == "long":
+                        midline_hit = (curr_c.high >= tma_mid) and (entry <= tma_mid or curr_c.close > entry)
+                    else:
+                        midline_hit = (curr_c.low <= tma_mid) and (entry >= tma_mid or curr_c.close < entry)
+                    if midline_hit:
+                        contracts = position["contracts"]
+                        reduce_amt = OKXExecutor.reduction_amount(contracts, midline_tp_fraction)
+                        position["midline_tp_done"] = True  # at most once per position, hit or skipped
+                        if reduce_amt is not None and contracts >= 2:
+                            reduced_frac = reduce_amt / contracts
+                            mid_pnl = (tma_mid - entry) / entry if side == "long" else (entry - tma_mid) / entry
+                            trades.append({
+                                "side": side, "entry_price": entry, "exit_price": tma_mid,
+                                "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP", "exit_idx": i,
+                                "partial": True, "weight": position["notional_weight"] * reduced_frac,
+                            })
+                            record_partial("MIDLINE_PARTIAL_TP")
+                            position["contracts"] = contracts - reduce_amt
+                            position["notional_weight"] *= (1.0 - reduced_frac)
+                            # Hard SL stays at its original entry-relative price on the
+                            # remainder — the real implementation re-attaches the SAME
+                            # 2% SL, never break-even. `sl_price` above is already
+                            # computed from `entry`, unchanged, so no further action
+                            # needed here — this comment documents that it's deliberate.
+
+            atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
+            action = im.update_and_check(
+                inst_id=symbol, current_price=curr_c.close, current_atr=atr_now, new_candle_closed=True,
+            )
+            if action in (StaleAction.FORCE_CLOSE, StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE):
+                close_position(curr_c.close, action.value, i)
+                continue
+            elif action == StaleAction.SPLIT_50:
+                # Mirror the REAL reduction_amount() no-op rule: None (or the full
+                # remainder) means the position can't be halved without fully
+                # closing it -> HELD, nothing booked, position stays intact.
+                contracts = position["contracts"]
+                reduce_amt = OKXExecutor.reduction_amount(contracts, 0.50)
+                if reduce_amt is not None:
+                    reduced_frac = reduce_amt / contracts
+                    half_pnl = (curr_c.close - entry) / entry if side == "long" else (entry - curr_c.close) / entry
+                    trades.append({
+                        "side": side, "entry_price": entry, "exit_price": curr_c.close,
+                        "pnl_pct": half_pnl, "exit_reason": "STALE_SPLIT_50", "exit_idx": i,
+                        "partial": True, "weight": position["notional_weight"] * reduced_frac,
+                    })
+                    record_partial("STALE_SPLIT_50")
+                    position["contracts"] = contracts - reduce_amt
+                    position["notional_weight"] *= (1.0 - reduced_frac)
+
+        signal = engine.evaluate_signals(window, sm, params=params, symbol=symbol)
+        slope_now = tma_slope.iloc[i] if i < len(tma_slope) else float("nan")
+        trend_blocked = False
+        if trend_filter_enabled and not pd.isna(slope_now):
+            if signal.signal_type == "BASE_SHORT" and slope_now > slope_threshold:
+                trend_blocked = True
+            elif signal.signal_type == "BASE_LONG" and slope_now < -slope_threshold:
+                trend_blocked = True
+
+        if not signal.is_allowed or trend_blocked:
+            continue
+
+        if position is None:
+            if signal.signal_type in ("BASE_LONG", "BASE_SHORT"):
+                side = "long" if signal.signal_type == "BASE_LONG" else "short"
+                position = {"side": side, "entry_price": curr_c.close, "entry_idx": i,
+                            **_size_new_entry(symbol, sm)}
+                atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
+                im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),
+                                   side=side, atr=atr_now)
+        else:
+            side = position["side"]
+            opposite_signal = "BASE_SHORT" if side == "long" else "BASE_LONG"
+            if signal.signal_type == opposite_signal:
+                close_position(curr_c.close, "TP_AND_FLIP", i)
+                new_side = "short" if side == "long" else "long"
+                flip_blocked = trend_filter_enabled and not pd.isna(slope_now) and (
+                    (new_side == "short" and slope_now > slope_threshold) or
+                    (new_side == "long" and slope_now < -slope_threshold)
+                )
+                if not flip_blocked:
+                    position = {"side": new_side, "entry_price": curr_c.close, "entry_idx": i,
+                                **_size_new_entry(symbol, sm)}
                     atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
                     im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),
-                                       side=side, atr=atr_now)
-            else:
-                side = position["side"]
-                opposite_signal = "BASE_SHORT" if side == "long" else "BASE_LONG"
-                if signal.signal_type == opposite_signal:
-                    close_position(curr_c.close, "TP_AND_FLIP", i)
-                    new_side = "short" if side == "long" else "long"
-                    flip_blocked = trend_filter_enabled and not pd.isna(slope_now) and (
-                        (new_side == "short" and slope_now > slope_threshold) or
-                        (new_side == "long" and slope_now < -slope_threshold)
-                    )
-                    if not flip_blocked:
-                        position = {"side": new_side, "entry_price": curr_c.close, "entry_idx": i,
-                                    "contracts": base_contracts}
-                        atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
-                        im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),
-                                           side=new_side, atr=atr_now)
+                                       side=new_side, atr=atr_now)
 
-        return trades
+    return trades
 
 
 @dataclass
