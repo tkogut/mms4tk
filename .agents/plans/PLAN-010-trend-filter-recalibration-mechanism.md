@@ -7,6 +7,80 @@
 
 ---
 
+> [!IMPORTANT]
+> **This mechanism is ALREADY BUILT AND DEPLOYED — do not implement Phases 1–3 (§3
+> Tickets 1–5) from scratch.** They shipped 2026-08-29 as v0.37.0–v0.39.0 (PR #12,
+> #13, #14, all merged to `main`), plus a follow-up (v0.40.0, PR #15) this "v2.0"
+> draft doesn't mention at all. This note was added 2026-09-02 after this file was
+> found rewritten as a fresh "Ready for Builder" spec on 2026-09-02 (commit
+> `f1f9890`), which — whatever produced it (Coordinator regen or otherwise) — was
+> not aware the work already existed. Confirmed live in production
+> (`docker exec antigravity_core` on the VPS) as of this note.
+>
+> **Real implementation, for reference (§2/§3 below describe an already-built
+> system, with the specific deltas from this draft listed under each subsection)**:
+> - `ohlcv_cache` table (SQLite, `PRIMARY KEY (symbol, timeframe, timestamp)`) —
+>   matches §2.1 exactly.
+> - `OKXExecutor.fetch_candles_paginated(symbol, timeframe="1h", days=90, logger_db=None)`
+>   in `okx_executor.py` — same caching behavior as §2.1 describes
+>   (`lookback_days` param name differs; behavior is identical).
+> - `src/mms4tk/backtest_engine.py`: `run_backtest()` (real `TMAIndicator` /
+>   `MMS4SignalEngine` / `MMS4InactivityManager`, hard 2.00% SL, SPLIT_50 mirroring
+>   the real `OKXExecutor.reduction_amount()` no-op rule) + `train_test_validate()`
+>   (structurally enforces the §2.3 both-directions OOS methodology — there is no
+>   code path that reports a verdict from one direction or full-window stats alone).
+>   **Gap vs. this draft**: does **not** simulate the BASE_MODE(x1.0)/SCOUT_MODE(x0.1)
+>   leverage state machine §2.2 describes — a live SL hit doesn't reduce simulated
+>   position size on the next entry the way it does in production. Low priority to
+>   close (SL-hit frequency is already visible in the trade list the harness
+>   produces), but a real, not-yet-built delta if `train_test_validate()` output is
+>   ever used to compare *simulated equity curves* rather than per-trade R:R/pnl.
+> - `POST /api/v1/symbols/{symbol}/recalibrate` (202 + `job_id`, `ProcessPoolExecutor`,
+>   never blocks the shared daemon event loop — same async design as §2.4),
+>   `GET /api/v1/symbols/{symbol}/recalibrate/status/{job_id}` (polling),
+>   `GET /api/v1/symbols/{symbol}/recalibrate/history` (§5.2.3's history list,
+>   added in the Phase 3 PR since Phase 2 didn't spec it), backed by a
+>   **`trend_filter_calibration_runs`** table.
+>   **Naming deltas vs. this draft — do NOT create the below as NEW things**:
+>   this draft calls the table `recalibration_jobs` and asks for
+>   `GET /api/v1/recalibration/jobs/{job_id}` and a separate
+>   `POST /api/v1/symbols/{symbol}/recalibration/apply` endpoint. None of those
+>   exist under those names, and none should be created — the live table is
+>   `trend_filter_calibration_runs`, the live status path is
+>   `/api/v1/symbols/{symbol}/recalibrate/status/{job_id}`, and "apply" is
+>   deliberately **not** a separate endpoint: applying a `VALIDATED` result reuses
+>   the existing, already-tested `POST /api/v1/symbols/update` write path (see
+>   §5.2 below) rather than adding a second way to write the same
+>   `tma_trend_filter_enabled`/`tma_slope_lookback`/`tma_slope_threshold` fields.
+>   A Builder must extend the existing table/endpoints, not add parallel ones.
+> - §2.3's grid is close but not identical to what's deployed: live defaults are
+>   `lookback ∈ [3,5,8,12,16,20,24,30]` × `threshold ∈ [0.001,0.002,0.003,0.005,
+>   0.007,0.010,0.015,0.020]` (8×8=64 cells; this draft's 4×4=16-cell grid is a
+>   subset). Not a functional gap, just a spec/reality mismatch to be aware of.
+> - `ui_dashboard/src/components/SymbolsTab.jsx`: `TrendFilterSection` +
+>   `RecalibrationModal` components — matches §2.5/§2.4 in substance (polling
+>   modal, "Zastosuj nowe parametry" rendered **only** on `VALIDATED`). Button
+>   label is "🔬 Rekalibruj", not "Rekalibruj (90D OOS)" — cosmetic only.
+> - **Not in this draft at all**: `data_collection_epoch_start` (per-symbol
+>   `system_settings` marker + `count_clean_closed_trades()` filtering, shipped
+>   v0.40.0/PR #15, 2026-08-29) — excludes trades from a prior trading regime
+>   (allocation size, enabled filters) from the eligibility count. Any Builder
+>   picking this plan back up should know this exists and keep it working; it has
+>   since been bumped twice more (2026-08-31 for PLAN-009 v2's Midline Partial TP,
+>   2026-09-02 for disabling it again) — see `plan008-phase3-trend-filter-overfit`
+>   memory for the up-to-date epoch history if continuing this thread.
+>
+> **Verdict on "will this work as written": not if executed literally.** Building
+> §3's Tickets 1–5 from scratch would create a second, parallel `recalibration_jobs`
+> table and a differently-shaped API next to the live `trend_filter_calibration_runs`
+> one the UI already reads from — a real regression risk (split-brain state, UI
+> pointed at stale data), not merely wasted effort. If further PLAN-010 work is
+> wanted (e.g., closing the SCOUT_MODE-simulation gap above, or tightening the grid
+> to match §2.3 exactly), scope it as a diff against the existing
+> `backtest_engine.py`/`api.py`/`SymbolsTab.jsx`, not a fresh Phase 1–4 build.
+
+---
+
 ## 1. Problem Statement & Background
 
 W ramach PLAN-008 Phase 3 wdrożono filtr nachylenia TMA (TMA Slope Trend Filter), który został skalibrowany jednorazowo na pełnym oknie 90 dni. Późniejszy obiektywny audyt (2026-08-29) wykazał, że parametry te **nie przeszły rygorystycznego testu dwukierunkowego (2-way train/test split)**: parametry wytrenowane na pierwszej połowie (H1) zawodziły na drugiej (H2) i odwrotnie. W rezultacie filtr został wyłączony w `system_settings` dla wszystkich par jako natychmiastowe zabezpieczenie.
