@@ -1,0 +1,199 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MMS4TK Autotrading Swarm (v0.42.0)
+// @version=5
+strategy("MMS v4 — Mastermind Autotrading Strategy (mms4tk)", 
+     overlay=true, 
+     initial_capital=1000, 
+     default_qty_type=strategy.percent_of_equity, 
+     default_qty_value=100, 
+     commission_type=strategy.commission.percent, 
+     commission_value=0.05, 
+     slippage=1,
+     pyramiding=2)
+
+// ==========================================
+// 1. ⚙️ PARAMETRY WEJŚCIOWE (INPUT SETTINGS)
+// ==========================================
+grp_ind = "📊 Wskaźniki TMA & ATR"
+tma_length      = input.int(20, "Okres TMA (Triangular Moving Average)", minval=5, maxval=200, group=grp_ind, tooltip="Domyślnie 20 (lub 56 dla szerszego pasma bazowego)")
+atr_period      = input.int(14, "Okres ATR", minval=1, maxval=100, group=grp_ind)
+atr_mult        = input.float(2.0, "Mnożnik Wstęgi ATR (Band Multiplier)", minval=0.5, step=0.1, group=grp_ind, tooltip="Standardowo 2.0 (BTC/ETH w silnych strefach 2.5 - 3.5)")
+atr_method      = input.string("Wilder", "Metoda ATR", options=["Wilder", "SMA"], group=grp_ind, tooltip="Wilder (RMA standard TV) lub SMA (mms4tk klasyczny)")
+wick_filter     = input.bool(true, "Wymagaj Cienia Odrzucenia (Sweep Rejection Wick)", group=grp_ind)
+min_wick_ratio  = input.float(0.20, "Min. Proporcja Cienia (Wick Ratio)", minval=0.05, maxval=0.60, step=0.05, group=grp_ind)
+
+grp_risk = "🛡️ Zarządzanie Ryzykiem & Wyjścia (MMS v4)"
+base_sl_pct     = input.float(2.00, "Twardy Stop-Loss (%)", minval=0.5, maxval=10.0, step=0.1, group=grp_risk, tooltip="Niezmienny mur obronny od ceny wejścia")
+midline_tp_on   = input.bool(true, "Cząstkowe TP 50% na Linii Środkowej (T1 Midline)", group=grp_risk, tooltip="Zgodnie z PLAN-009 zamyka 50% pozycji bez ruszania SL")
+midline_frac    = input.float(0.50, "Frakcja Zamykana na Midline (T1)", minval=0.1, maxval=0.9, step=0.1, group=grp_risk)
+profit_stall_on = input.bool(true, "Profit Stall Gate (Inactivity Manager)", group=grp_risk, tooltip="Zamyka 50% jeśli zysk >= 0.6 ATR stoi w miejscu przez 4 świece")
+stall_candles_th = input.int(4, "Liczba Świec Stagnacji w Zysku", minval=2, maxval=12, group=grp_risk)
+
+grp_scout = "🤖 Maszyna Stanów & Scout Mode"
+scout_sim_on    = input.bool(true, "Symuluj Redukcję Lewaru Scout Mode (x0.1 po SL)", group=grp_scout, tooltip="Po zaliczeniu SL wielkość kolejnej pozycji spada do 10% aż do pełnej wygranej")
+
+// ==========================================
+// 2. 📐 MATEMATYKA WSKAŹNIKÓW (TMA & ATR)
+// ==========================================
+// Formuła podwójnego SMA dla Triangular Moving Average (TMA)
+half_len = math.ceil(tma_length / 2.0)
+sma1 = ta.sma(close, half_len)
+tma_mid = ta.sma(sma1, half_len)
+
+// Kalkulacja True Range i ATR
+calc_tr = ta.tr(true)
+calc_atr = atr_method == "Wilder" ? ta.rma(calc_tr, atr_period) : ta.sma(calc_tr, atr_period)
+
+// Pasma zmienności
+tma_upper = tma_mid + (calc_atr * atr_mult)
+tma_lower = tma_mid - (calc_atr * atr_mult)
+
+// Wskaźnik Zmienności (Volatility Ratio - VR)
+atr100 = atr_method == "Wilder" ? ta.rma(calc_tr, 100) : ta.sma(calc_tr, 100)
+sma_atr100 = ta.sma(atr100, 14)
+vr = calc_atr / (sma_atr100 + 1e-8)
+
+// ==========================================
+// 3. 🔍 FILTRACJA ŚWIEC (SWEEP REJECTION)
+// ==========================================
+candle_range = high - low
+upper_wick = high - math.max(open, close)
+lower_wick = math.min(open, close) - low
+
+valid_short_wick = candle_range > 0 and (upper_wick / candle_range >= min_wick_ratio) and (close < open)
+valid_long_wick  = candle_range > 0 and (lower_wick / candle_range >= min_wick_ratio) and (close > open)
+
+// Warunki Wybicia Poza Wstęgę TMA
+touch_lower = low <= tma_lower
+touch_upper = high >= tma_upper
+
+long_signal  = touch_lower and (not wick_filter or valid_long_wick)
+short_signal = touch_upper and (not wick_filter or valid_short_wick)
+
+// ==========================================
+// 4. 🤖 SYMULACJA MASZYNY STANÓW (SCOUT MODE)
+// ==========================================
+var bool is_scout_mode = false
+var float position_peak_pnl_atr = 0.0
+var int profit_stall_counter = 0
+var float last_entry_price = 0.0
+var bool midline_tp_done = false
+
+// Wykrywanie czy ostatnia transakcja uderzyła w SL
+if strategy.closedtrades > 0
+    if ta.change(strategy.closedtrades)
+        last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+        if last_trade_profit < 0 and scout_sim_on
+            is_scout_mode := true
+        else if last_trade_profit > 0 and strategy.position_size == 0
+            is_scout_mode := false
+
+qty_multiplier = is_scout_mode ? 0.10 : 1.00
+
+// ==========================================
+// 5. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
+// ==========================================
+// A. Otwieranie Pozycji
+if long_signal and strategy.position_size <= 0
+    strategy.entry("LONG", strategy.long, qty=(100 * qty_multiplier))
+    last_entry_price := close
+    midline_tp_done := false
+    position_peak_pnl_atr := 0.0
+    profit_stall_counter := 0
+
+if short_signal and strategy.position_size >= 0
+    strategy.entry("SHORT", strategy.short, qty=(100 * qty_multiplier))
+    last_entry_price := close
+    midline_tp_done := false
+    position_peak_pnl_atr := 0.0
+    profit_stall_counter := 0
+
+// B. Śledzenie Zysku w Pozycji i Inactivity Profit Stall Gate
+if strategy.position_size > 0
+    cur_pnl_atr = (close - last_entry_price) / calc_atr
+    if cur_pnl_atr >= 0.6
+        if cur_pnl_atr > position_peak_pnl_atr
+            position_peak_pnl_atr := cur_pnl_atr
+            profit_stall_counter := 0
+        else
+            profit_stall_counter += 1
+            
+        // Profit Stall Gate Trigger (4 świece wyhamowania)
+        if profit_stall_on and profit_stall_counter >= stall_candles_th and not midline_tp_done
+            strategy.close("LONG", qty_percent=50, comment="STALL_SPLIT_50")
+            midline_tp_done := true
+            
+    // Cząstkowe TP na Linii Środkowej (T1 Midline)
+    if midline_tp_on and not midline_tp_done and high >= tma_mid and last_entry_price <= tma_mid
+        strategy.close("LONG", qty_percent=int(midline_frac * 100), comment="T1_MIDLINE_TP")
+        midline_tp_done := true
+        
+    // Pełne TP na Przeciwległej Wstędze (T2 Upper Band)
+    if high >= tma_upper
+        strategy.close("LONG", comment="T2_FULL_TP")
+        
+    // Twardy Stop Loss 2.0% (Nienaruszony!)
+    long_sl_price = last_entry_price * (1.0 - (base_sl_pct / 100.0))
+    if low <= long_sl_price
+        strategy.close("LONG", comment="HARD_SL_2.0%")
+
+else if strategy.position_size < 0
+    cur_pnl_atr = (last_entry_price - close) / calc_atr
+    if cur_pnl_atr >= 0.6
+        if cur_pnl_atr > position_peak_pnl_atr
+            position_peak_pnl_atr := cur_pnl_atr
+            profit_stall_counter := 0
+        else
+            profit_stall_counter += 1
+            
+        // Profit Stall Gate Trigger
+        if profit_stall_on and profit_stall_counter >= stall_candles_th and not midline_tp_done
+            strategy.close("SHORT", qty_percent=50, comment="STALL_SPLIT_50")
+            midline_tp_done := true
+            
+    // Cząstkowe TP na Linii Środkowej (T1 Midline)
+    if midline_tp_on and not midline_tp_done and low <= tma_mid and last_entry_price >= tma_mid
+        strategy.close("SHORT", qty_percent=int(midline_frac * 100), comment="T1_MIDLINE_TP")
+        midline_tp_done := true
+        
+    // Pełne TP na Przeciwległej Wstędze (T2 Lower Band)
+    if low <= tma_lower
+        strategy.close("SHORT", comment="T2_FULL_TP")
+        
+    // Twardy Stop Loss 2.0% (Nienaruszony!)
+    short_sl_price = last_entry_price * (1.0 + (base_sl_pct / 100.0))
+    if high >= short_sl_price
+        strategy.close("SHORT", comment="HARD_SL_2.0%")
+
+// ==========================================
+// 6. 🎨 WIZUALIZACJA NA WYKRESIE (PLOTS)
+// ==========================================
+p_mid = plot(tma_mid, "TMA Midline (Mediana)", color=color.new(color.orange, 0), linewidth=2)
+p_up  = plot(tma_upper, "TMA Upper Band (Wyprzedanie)", color=color.new(color.red, 20), linewidth=2)
+p_dn  = plot(tma_lower, "TMA Lower Band (Wykupienie)", color=color.new(color.green, 20), linewidth=2)
+
+fill(p_up, p_mid, color=color.new(color.red, 92), title="Górne Pasmo Zmienności")
+fill(p_dn, p_mid, color=color.new(color.green, 92), title="Dolne Pasmo Zmienności")
+
+// Sygnalizatory wejść na świecach
+plotshape(long_signal and strategy.position_size <= 0, title="Sygnał BASE LONG", 
+          style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="MMS4 LONG")
+plotshape(short_signal and strategy.position_size >= 0, title="Sygnał BASE SHORT", 
+          style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="MMS4 SHORT")
+
+// ==========================================
+// 7. 📊 TABELA INFORMACYJNA (DASHBOARD HUD)
+// ==========================================
+var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
+if barstate.islast
+    table.cell(hud, 0, 0, "Strategia:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 0, "MMS v4 (mms4tk)", text_color=color.yellow, text_size=size.small)
+    table.cell(hud, 0, 1, "Stan Maszyny:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, is_scout_mode ? "SCOUT (x0.1) 🟡" : "BASE (x3.0) 🟢", 
+               text_color=is_scout_mode ? color.yellow : color.green, text_size=size.small)
+    table.cell(hud, 0, 2, "Volatility Ratio (VR):", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, str.tostring(vr, "#.##"), text_color=vr > 1.4 ? color.red : color.white, text_size=size.small)
+    table.cell(hud, 0, 3, "T1 Midline TP:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, midline_tp_done ? "ZREALIZOWANE (50%)" : "CZEKA", text_color=midline_tp_done ? color.green : color.gray, text_size=size.small)
+    table.cell(hud, 0, 4, "Stagnacja w Zysku:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 4, str.tostring(profit_stall_counter) + "/4 świec", text_color=color.white, text_size=size.small)
