@@ -4,6 +4,17 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.43.0] - 2026-09-02
+
+### 🧪 Backtest Engine: BASE_MODE/SCOUT_MODE Fidelity (PR 1/3)
+- 🎯 **`run_backtest()` now models the real state machine**: a real `MMS4StateManager` tracks state across closed trades via `sm.record_trade()` (previously constructed but never actually updated — `sm` stayed pinned to `BASE_MODE` for the entire simulation). A >=2% stop-loss now correctly shrinks subsequent entries to SCOUT_MODE sizing (`SCOUT_SIZE_MULT`/`SCOUT_LEVERAGE`, ~10% notional at defaults); only a FULL (non-partial) take-profit exits it — a partial booking (`STALE_SPLIT_50`/`MIDLINE_PARTIAL_TP`) explicitly preserves SCOUT_MODE, matching `state_manager.py`'s own behavior exactly.
+- 📐 **`weight` redefined as a notional fraction of a full BASE entry** (was a contracts-only fraction) — reuses `get_risk_profile_snapshot()`'s own `notional_reduction_factor` rather than re-deriving it, so `_stats()`'s R:R/pnl aggregation can never silently drift from what the state manager actually computes. Semantic change: any `trend_filter_calibration_runs` row persisted before this lands is not bit-for-bit comparable to a post-change run for any window that included a >=2% stop-loss (full-BASE-only runs are unaffected — `notional_weight` was already 1.0 there).
+- 🐛 **Dropped the `LoggerDB`/`tempfile` scaffold** from `run_backtest()` — every write site `MMS4StateManager` needs is already `logger_db is not None`-guarded, so state transitions/sizing work identically without one. Removes a synchronous SQLite write per closed trade inside a 64-cell × 2-direction grid search — a real throughput win for `train_test_validate()`.
+- 🧪 **13 new tests**: state-machine transitions tested directly against `MMS4StateManager` (SCOUT entered/not-entered at the 2% boundary, partial-TP preserves SCOUT, full TP exits it, `_trade_record_flags`'s table parametrized over every exit reason), `_size_new_entry`'s dynamic sizing, and one candle-driven end-to-end sanity check on real fixture data.
+- 📋 PR 1 of a 3-PR sequence closing backtest-harness fidelity gaps (PR 0: Midline Partial TP, v0.42.1; PR 2: HIGH_RISK_ADD/addon simulation, next) — approved plan, prerequisite for trusting the trend filter's next recalibration once ~175 clean trades accumulate, not urgent standalone work (today's Midline-TP-disable decision does not need re-validation — SCOUT-fidelity only reinforces that finding, per the plan's analysis).
+
+---
+
 ## 🚀 [0.42.1] - 2026-09-02
 
 ### 🧪 Backtest Engine: Midline Partial TP Support (PLAN-009 v2 validation, PR 0)
