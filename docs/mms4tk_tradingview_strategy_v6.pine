@@ -9,8 +9,7 @@ strategy(title="MMS v4 — Mastermind Autotrading Strategy (mms4tk)",
      commission_type=strategy.commission.percent, 
      commission_value=0.05, 
      slippage=1,
-     pyramiding=2,
-     calc_on_every_tick=true)
+     pyramiding=1)
 
 // ==========================================
 // 1. ⚙️ PARAMETRY WEJŚCIOWE (INPUT SETTINGS)
@@ -65,8 +64,8 @@ bool valid_short_wick = candle_range > 0 and (upper_wick / candle_range >= min_w
 bool valid_long_wick  = candle_range > 0 and (lower_wick / candle_range >= min_wick_ratio) and (close > open)
 
 // Warunki Wybicia Poza Wstęgę TMA
-bool touch_lower = low <= tma_lower
-bool touch_upper = high >= tma_upper
+bool touch_lower = low <= tma_lower or close <= tma_lower
+bool touch_upper = high >= tma_upper or close >= tma_upper
 
 bool long_signal  = touch_lower and (not wick_filter or valid_long_wick)
 bool short_signal = touch_upper and (not wick_filter or valid_short_wick)
@@ -90,23 +89,22 @@ if strategy.closedtrades > prev_closed_trades
     else if last_trade_profit > 0 and strategy.position_size == 0
         is_scout_mode := false
 
-float leverage_val = is_scout_mode ? 0.10 : 3.00
-float position_notional_usd = strategy.equity * leverage_val
-float calc_qty = (close > 0) ? (position_notional_usd / close) : 0.0
+// Procent kapitału: 100% dla Base Mode, 10% dla Scout Mode
+float order_pct_equity = is_scout_mode ? 10.0 : 100.0
 
 // ==========================================
 // 5. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
 // ==========================================
 // A. Otwieranie Pozycji
 if long_signal and strategy.position_size <= 0
-    strategy.entry("LONG", strategy.long, qty=calc_qty)
+    strategy.entry("LONG", strategy.long, qty=order_pct_equity)
     last_entry_price := close
     midline_tp_done := false
     position_peak_pnl_atr := 0.0
     profit_stall_counter := 0
 
 if short_signal and strategy.position_size >= 0
-    strategy.entry("SHORT", strategy.short, qty=calc_qty)
+    strategy.entry("SHORT", strategy.short, qty=order_pct_equity)
     last_entry_price := close
     midline_tp_done := false
     position_peak_pnl_atr := 0.0
@@ -114,7 +112,7 @@ if short_signal and strategy.position_size >= 0
 
 // B. Śledzenie Zysku w Pozycji i Inactivity Profit Stall Gate
 if strategy.position_size > 0
-    float cur_pnl_atr = (close - last_entry_price) / calc_atr
+    float cur_pnl_atr = (close - last_entry_price) / (calc_atr + 1e-8)
     if cur_pnl_atr >= 0.6
         if cur_pnl_atr > position_peak_pnl_atr
             position_peak_pnl_atr := cur_pnl_atr
@@ -138,11 +136,10 @@ if strategy.position_size > 0
         
     // Twardy Stop Loss 2.0% (Nienaruszony!)
     float long_sl_price = last_entry_price * (1.0 - (base_sl_pct / 100.0))
-    if low <= long_sl_price
-        strategy.close("LONG", comment="HARD_SL_2.0%")
+    strategy.exit("SL_LONG", "LONG", stop=long_sl_price, comment="HARD_SL_2.0%")
 
 else if strategy.position_size < 0
-    float cur_pnl_atr = (last_entry_price - close) / calc_atr
+    float cur_pnl_atr = (last_entry_price - close) / (calc_atr + 1e-8)
     if cur_pnl_atr >= 0.6
         if cur_pnl_atr > position_peak_pnl_atr
             position_peak_pnl_atr := cur_pnl_atr
@@ -166,8 +163,7 @@ else if strategy.position_size < 0
         
     // Twardy Stop Loss 2.0% (Nienaruszony!)
     float short_sl_price = last_entry_price * (1.0 + (base_sl_pct / 100.0))
-    if high >= short_sl_price
-        strategy.close("SHORT", comment="HARD_SL_2.0%")
+    strategy.exit("SL_SHORT", "SHORT", stop=short_sl_price, comment="HARD_SL_2.0%")
 
 // ==========================================
 // 6. 🎨 WIZUALIZACJA NA WYKRESIE (PLOTS)
