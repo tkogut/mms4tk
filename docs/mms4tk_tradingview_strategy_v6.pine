@@ -9,7 +9,9 @@ strategy(title="MMS v4 — Mastermind Autotrading Strategy (mms4tk)",
      commission_type=strategy.commission.percent, 
      commission_value=0.05, 
      slippage=1,
-     pyramiding=1)
+     pyramiding=1,
+     margin_long=33.33,
+     margin_short=33.33)
 
 // ==========================================
 // 1. ⚙️ PARAMETRY WEJŚCIOWE (INPUT SETTINGS)
