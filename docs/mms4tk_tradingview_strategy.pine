@@ -78,15 +78,16 @@ var float position_peak_pnl_atr = 0.0
 var int profit_stall_counter = 0
 var float last_entry_price = 0.0
 var bool midline_tp_done = false
+var int prev_closed_trades = 0
 
-// Wykrywanie czy ostatnia transakcja uderzyła w SL
-if strategy.closedtrades > 0
-    if ta.change(strategy.closedtrades) > 0
-        float last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
-        if last_trade_profit < 0 and scout_sim_on
-            is_scout_mode := true
-        else if last_trade_profit > 0 and strategy.position_size == 0
-            is_scout_mode := false
+// Wykrywanie czy nowa transakcja została zamknięta i czy uderzyła w SL
+if strategy.closedtrades > prev_closed_trades
+    prev_closed_trades := strategy.closedtrades
+    float last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if last_trade_profit < 0 and scout_sim_on
+        is_scout_mode := true
+    else if last_trade_profit > 0 and strategy.position_size == 0
+        is_scout_mode := false
 
 float qty_multiplier = is_scout_mode ? 0.10 : 1.00
 
