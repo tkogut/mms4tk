@@ -4,14 +4,12 @@
 strategy(title="MMS v4 — Mastermind Autotrading Strategy (mms4tk)", 
      overlay=true, 
      initial_capital=1000, 
-     default_qty_type=strategy.percent_of_equity, 
-     default_qty_value=100, 
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1, 
      commission_type=strategy.commission.percent, 
      commission_value=0.06, 
      slippage=1,
-     pyramiding=1,
-     margin_long=33.33,
-     margin_short=33.33)
+     pyramiding=1)
 
 // ==========================================
 // 1. ⚙️ PARAMETRY WEJŚCIOWE (INPUT SETTINGS)
@@ -32,7 +30,7 @@ bool   profit_stall_on = input.bool(true, "Profit Stall Gate (Inactivity Manager
 int    stall_candles_th = input.int(4, "Liczba Świec Stagnacji w Zysku", minval=2, maxval=12, group=GRP_RISK)
 
 var string GRP_SCOUT = "🤖 Maszyna Stanów (MMS4 State Machine)"
-bool   scout_active    = input.bool(true, "Włącz Maszynę Stanów (Scout Mode x0.1 po SL)", group=GRP_SCOUT, tooltip="Po uderzeniu w SL (strata), kolejna pozycja ma lewar zredukowany 10-krotnie do zwiadowczego x0.1 (10% kapitału), chroniąc przed seriami strat w trendzie.")
+bool   scout_active    = input.bool(true, "Włącz Maszynę Stanów (Scout Mode x0.1 po SL)", group=GRP_SCOUT, tooltip="Po uderzeniu w SL (strata), kolejna pozycja ma wielkość zredukowaną 10-krotnie do zwiadowczego x0.1 (10% kapitału), chroniąc przed seriami strat w trendzie.")
 
 // ==========================================
 // 2. 📐 MATEMATYKA WSKAŹNIKÓW (TMA & ATR)
@@ -81,12 +79,13 @@ if strategy.closedtrades > prev_closed_trades
     // 1. Każde uderzenie w SL aktywuje SCOUT MODE (x0.1)
     if last_trade_profit < 0 and scout_active
         is_scout_mode := true
-    // 2. Powrót do BASE MODE następuje WYŁĄCZNIE po pełnym (100%) zysku przy braku pozycji
+    // 2. Powrót do BASE MODE następuje WYŁĄCZNIE po pełnym (100%) zysku przy braku otwartej pozycji
     else if last_trade_profit > 0 and strategy.position_size == 0
         is_scout_mode := false
 
-// Wielkość pozycji wg Maszyny Stanów: 100% dla Base, 10% dla Scout
-float current_order_qty_pct = (is_scout_mode and scout_active) ? 10.0 : 100.0
+// Dynamiczna kalkulacja liczby jednostek/kontraktów na bazie kapitału i Maszyny Stanów:
+float target_margin_usd = strategy.equity * (is_scout_mode and scout_active ? 0.10 : 1.00)
+float order_contracts = (close > 0) ? (target_margin_usd / close) : 0.0
 
 // ==========================================
 // 5. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
@@ -95,9 +94,9 @@ var float position_peak_pnl_atr = 0.0
 var int profit_stall_counter = 0
 var bool midline_tp_done = false
 
-// A. Otwieranie Pozycji z dynamicznym skalowaniem kapitału (Base vs Scout)
+// A. Otwieranie Pozycji z dynamicznym wymiarowaniem kontraktów
 if long_signal and strategy.position_size <= 0
-    strategy.entry("LONG", strategy.long, qty=current_order_qty_pct)
+    strategy.entry("LONG", strategy.long, qty=order_contracts)
     float sl_long = close * (1.0 - (base_sl_pct / 100.0))
     strategy.exit("SL_LONG", "LONG", stop=sl_long, comment="HARD_SL_2.0%")
     midline_tp_done := false
@@ -105,7 +104,7 @@ if long_signal and strategy.position_size <= 0
     profit_stall_counter := 0
 
 if short_signal and strategy.position_size >= 0
-    strategy.entry("SHORT", strategy.short, qty=current_order_qty_pct)
+    strategy.entry("SHORT", strategy.short, qty=order_contracts)
     float sl_short = close * (1.0 + (base_sl_pct / 100.0))
     strategy.exit("SL_SHORT", "SHORT", stop=sl_short, comment="HARD_SL_2.0%")
     midline_tp_done := false
@@ -183,7 +182,7 @@ if barstate.islast
     table.cell(hud, 0, 0, "Strategia:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 0, "MMS v4 (mms4tk v6)", text_color=color.yellow, text_size=size.small)
     table.cell(hud, 0, 1, "Stan Maszyny:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 1, is_scout_mode ? "SCOUT (x0.1) 🟡" : "BASE (x3.0) 🟢", 
+    table.cell(hud, 1, 1, is_scout_mode ? "SCOUT (x0.1) 🟡" : "BASE (x1.0) 🟢", 
                text_color=is_scout_mode ? color.yellow : color.green, text_size=size.small)
     table.cell(hud, 0, 2, "Pozycja:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 2, strategy.position_size > 0 ? "LONG 🟢" : strategy.position_size < 0 ? "SHORT 🔴" : "FLAT ⚪", 
