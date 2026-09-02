@@ -83,10 +83,26 @@ def run_backtest(
     trend_filter_enabled: bool,
     slope_lookback: int = 5,
     slope_threshold: float = 0.002,
+    midline_tp_enabled: bool = False,
+    midline_tp_fraction: float = 0.50,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
-    pnl_pct, exit_reason, weight, optionally partial=True)."""
+    pnl_pct, exit_reason, weight, optionally partial=True).
+
+    `MMS4InactivityManager` is the same class daemon.py uses in production, so
+    Inactivity v2's Profit Stall Gate and 38.2% Fibonacci impulse negation
+    (PLAN-009 v2, shipped 2026-08-31) are modeled automatically here — no harness
+    change needed for those. Midline Partial TP lives in `daemon.py`'s
+    `execute_symbol_cycle()` instead (not in the inactivity manager), so it IS
+    modeled explicitly below, mirroring that function's exact trigger/guard logic:
+    TMA-midline touch in the position's favor, evaluated BEFORE inactivity checks,
+    fires at most once per position (a fresh position clears the flag), skipped for
+    positions the real `reduction_amount()` can't halve (mirrors the ledger's
+    fail-closed / micro-position guard), hard stop-loss stays at its original
+    entry-relative price (NOT moved to break-even) — matching the real
+    implementation's choice not to lock in break-even, just to de-risk gains.
+    """
     with tempfile.TemporaryDirectory(prefix="mms4tk_backtest_") as tmp_dir:
         db = LoggerDB(db_path=os.path.join(tmp_dir, f"bt_{symbol.replace('/', '_')}.db"))
         sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=db)
@@ -136,6 +152,34 @@ def run_backtest(
                 if sl_hit:
                     close_position(sl_price, "STOP_LOSS", i)
                     continue
+
+                # ── Midline Partial TP (PLAN-009 v2), evaluated BEFORE inactivity
+                # checks, matching daemon.py's ordering ──
+                if midline_tp_enabled and not position.get("midline_tp_done"):
+                    tma_mid = float(full_df["tma"].iloc[i]) if not pd.isna(full_df["tma"].iloc[i]) else 0.0
+                    if tma_mid > 0:
+                        if side == "long":
+                            midline_hit = (curr_c.high >= tma_mid) and (entry <= tma_mid or curr_c.close > entry)
+                        else:
+                            midline_hit = (curr_c.low <= tma_mid) and (entry >= tma_mid or curr_c.close < entry)
+                        if midline_hit:
+                            contracts = position["contracts"]
+                            reduce_amt = OKXExecutor.reduction_amount(contracts, midline_tp_fraction)
+                            position["midline_tp_done"] = True  # at most once per position, hit or skipped
+                            if reduce_amt is not None and contracts >= 2:
+                                reduced_frac = reduce_amt / contracts
+                                mid_pnl = (tma_mid - entry) / entry if side == "long" else (entry - tma_mid) / entry
+                                trades.append({
+                                    "side": side, "entry_price": entry, "exit_price": tma_mid,
+                                    "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP", "exit_idx": i,
+                                    "partial": True, "weight": reduced_frac,
+                                })
+                                position["contracts"] = contracts - reduce_amt
+                                # Hard SL stays at its original entry-relative price on the
+                                # remainder — the real implementation re-attaches the SAME
+                                # 2% SL, never break-even. `sl_price` above is already
+                                # computed from `entry`, unchanged, so no further action
+                                # needed here — this comment documents that it's deliberate.
 
                 atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
                 action = im.update_and_check(

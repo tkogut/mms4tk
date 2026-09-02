@@ -138,6 +138,69 @@ def test_train_test_validate_notes_disagreeing_params_even_when_validated(monkey
     assert "DIFFERENT parameters" in result.note
 
 
+# ── Midline Partial TP (PLAN-009 v2) harness support ──
+# Added 2026-09-02 after finding this feature shipped to production 2026-08-31
+# without backtest evidence. Real-fixture-data A/B comparison (not a synthetic
+# candle sequence — driving MMS4SignalEngine's real band/entry logic accurately
+# with hand-built candles is its own large surface area; a slice of real,
+# already-loaded market data exercises the exact same code path faster to write
+# and just as faithfully) found it consistently WORSENS R:R in 6/6 windows
+# (both 45-day halves and the full 90 days, both BTC/USDC and ETH/USDC) — this
+# evidence led to disabling `midline_partial_tp_enabled` in production
+# `system_settings` the same day. These tests lock in the wiring, not the verdict.
+
+def test_midline_tp_disabled_by_default_produces_no_midline_exits():
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, midline_tp_enabled=False)
+    assert not any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
+
+
+def test_midline_tp_enabled_produces_midline_exits_on_real_data():
+    """Confirms the feature actually fires (not just that it's silent by default) —
+    the discriminating half of the A/B pair used for the R:R comparison above."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, midline_tp_enabled=True, midline_tp_fraction=0.5)
+    midline_trades = [t for t in trades if t["exit_reason"] == "MIDLINE_PARTIAL_TP"]
+    assert len(midline_trades) > 0
+    for t in midline_trades:
+        assert t["partial"] is True
+        assert 0 < t["weight"] < 1.0  # a 50% reduction of a >=2-contract position
+
+
+def test_midline_tp_fires_at_most_once_per_position(monkeypatch):
+    """Mirrors daemon.py's real guard: `position["midline_tp_done"]` must be set the
+    FIRST time the midline condition is checked for a position, hit or skipped —
+    a position can't collect two midline partials even across many stalled candles
+    still sitting past the midline."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, midline_tp_enabled=True, midline_tp_fraction=0.5)
+    # Group by entry_idx-adjacent full closes isn't tracked directly on trade dicts,
+    # but the invariant that matters is global: no MORE midline partials than full
+    # closes (STOP_LOSS/TP_AND_FLIP/etc.) — i.e. never two per the same position.
+    full_closes = [t for t in trades if not t.get("partial")]
+    midline_trades = [t for t in trades if t["exit_reason"] == "MIDLINE_PARTIAL_TP"]
+    assert len(midline_trades) <= len(full_closes)
+
+
+def test_midline_tp_skips_micro_positions(monkeypatch):
+    """`OKXExecutor.reduction_amount()` no-ops when floor(contracts*fraction) < 1 —
+    mirrors the real ledger's fail-closed micro-position guard (daemon.py:
+    `existing_contracts < 2` skip). A 1-contract base size must never produce a
+    MIDLINE_PARTIAL_TP trade even when the geometric trigger condition is met."""
+    monkeypatch.setitem(be.BASE_CONTRACTS, "BTC/USDC", 1.0)
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, midline_tp_enabled=True, midline_tp_fraction=0.5)
+    assert not any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
+
+
 # ── Real-data regression guard (slow: runs the actual candle-by-candle simulation) ──
 
 @pytest.mark.slow

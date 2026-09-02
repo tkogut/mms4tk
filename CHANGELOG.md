@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.42.1] - 2026-09-02
+
+### 🧪 Backtest Engine: Midline Partial TP Support (PLAN-009 v2 validation, PR 0)
+- 🎯 **`run_backtest()` now models Midline Partial TP** (`midline_tp_enabled`, `midline_tp_fraction` params): TMA-midline touch in the position's favor, evaluated before inactivity checks (matches `daemon.py`'s ordering), fires at most once per position, skipped for positions `OKXExecutor.reduction_amount()` can't halve (mirrors the real fail-closed micro-position guard), hard stop-loss stays at its original entry-relative price on the remainder — never moved to break-even, matching production's actual choice.
+- 📊 **Backtest evidence (2026-09-02)**: A/B comparison on the real 90-day BTC/USDC + ETH/USDC fixture data found Midline Partial TP **consistently worsens R:R in 6/6 tested windows** (both 45-day halves and the full 90 days, both symbols) — mechanically, truncating winners at the midline while losses still run to full stop-loss on the remainder. This evidence led to disabling `midline_partial_tp_enabled` in production `system_settings` the same day; PLAN-009 v2 (shipped 2026-08-31, v0.42.0) had gone to production without backtest validation.
+- 🧪 **4 new tests**: disabled-by-default no-op, fires-on-real-data, at-most-once-per-position, micro-position skip.
+- 📋 First of a 3-PR sequence closing backtest-harness fidelity gaps (SCOUT_MODE state machine, HIGH_RISK_ADD addon simulation follow in subsequent PRs) — see the design plan referenced in `plan008-phase3-trend-filter-overfit` memory.
+
+---
+
 ## 🚀 [0.42.0] - 2026-08-31
 
 ### 🎯 Midline Partial Take-Profit (T1 Netting) & Inactivity v2 (PLAN-009)
