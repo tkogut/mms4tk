@@ -20,7 +20,7 @@ int    tma_length      = input.int(20, "Okres TMA (Triangular Moving Average)", 
 int    atr_period      = input.int(14, "Okres ATR", minval=1, maxval=100, group=GRP_IND)
 float  atr_mult        = input.float(2.0, "Mnożnik Wstęgi ATR (Band Multiplier)", minval=0.5, step=0.1, group=GRP_IND, tooltip="Standardowo 2.0 (BTC/ETH w silnych strefach 2.5 - 3.5)")
 string atr_method      = input.string("Wilder", "Metoda ATR", options=["Wilder", "SMA"], group=GRP_IND, tooltip="Wilder (RMA standard TV) lub SMA (mms4tk klasyczny)")
-bool   wick_filter     = input.bool(true, "Wymagaj Cienia Odrzucenia (Sweep Rejection Wick)", group=GRP_IND)
+bool   wick_filter     = input.bool(false, "Wymagaj Cienia Odrzucenia (Sweep Rejection Wick)", group=GRP_IND, tooltip="Włącz, aby wymagać dodatkowo knota odrzucenia na świecy")
 float  min_wick_ratio  = input.float(0.20, "Min. Proporcja Cienia (Wick Ratio)", minval=0.05, maxval=0.60, step=0.05, group=GRP_IND)
 
 var string GRP_RISK = "🛡️ Zarządzanie Ryzykiem & Wyjścia (MMS v4)"
@@ -90,21 +90,23 @@ if strategy.closedtrades > prev_closed_trades
     else if last_trade_profit > 0 and strategy.position_size == 0
         is_scout_mode := false
 
-float qty_multiplier = is_scout_mode ? 0.10 : 1.00
+float leverage_val = is_scout_mode ? 0.10 : 3.00
+float position_notional_usd = strategy.equity * leverage_val
+float calc_qty = (close > 0) ? (position_notional_usd / close) : 0.0
 
 // ==========================================
 // 5. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
 // ==========================================
 // A. Otwieranie Pozycji
 if long_signal and strategy.position_size <= 0
-    strategy.entry("LONG", strategy.long, qty=(100.0 * qty_multiplier))
+    strategy.entry("LONG", strategy.long, qty=calc_qty)
     last_entry_price := close
     midline_tp_done := false
     position_peak_pnl_atr := 0.0
     profit_stall_counter := 0
 
 if short_signal and strategy.position_size >= 0
-    strategy.entry("SHORT", strategy.short, qty=(100.0 * qty_multiplier))
+    strategy.entry("SHORT", strategy.short, qty=calc_qty)
     last_entry_price := close
     midline_tp_done := false
     position_peak_pnl_atr := 0.0
