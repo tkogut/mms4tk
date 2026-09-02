@@ -40,6 +40,12 @@ STALE_ATR_THRESHOLD = 0.5
 IMPULSE_NEGATION_ENABLED = True
 MIN_FULL_CLOSES_HALF = 12  # below this, a half-window config's stats are too noisy to trust
 
+# HIGH_RISK_ADD (addon) constants, mirroring daemon.py's own defaults/env vars exactly
+# so an operator's .env change to the live values is picked up here too.
+BASE_ALLOCATION = 0.70
+ADDON_ALLOCATION = 0.30
+ADDON_SL_PCT = 0.0125  # tighter COMPOSITE stop-loss for the whole position once an addon exists
+
 # Real base-entry contract size per symbol at the CURRENT allocation, from
 # `OKXExecutor.calculate_order_amount()` against the live-resolved XPERP contract
 # size (verified 2026-08-29 via `discover_eea_xperp_symbol()` — NOT the raw OKX
@@ -175,6 +181,18 @@ def run_backtest(
     SCOUT_MODE (shrinks new entries via `_size_new_entry`); only a FULL (non-partial)
     take-profit-flagged close exits it — a partial (SPLIT_50/Midline TP) explicitly
     preserves SCOUT_MODE, matching `record_trade()`'s own behavior exactly.
+
+    Also models HIGH_RISK_ADD (addon) signals, previously silently dropped (the
+    harness only handled BASE_LONG/SHORT for entries — a real, undocumented bias in
+    every prior result, since analytics.py returns HIGH_RISK_ADD *instead of* BASE*
+    on a qualifying continuation candle, not in addition to it): a matching-side
+    addon fires at most once per position (Single Addon Guard, keyed on the
+    position, never reset by the entry-price shift — matching `logger_db.py`'s
+    `get_addon_count` design), blocked entirely in SCOUT_MODE, sized at
+    ADDON_ALLOCATION/BASE_ALLOCATION (30/70 by default) of a full base entry, using
+    a tighter COMPOSITE stop-loss for the whole position (`ADDON_SL_PCT`) and an
+    explicit weighted-average entry-price approximation of OKX's own `avgPx` merge
+    (production has no in-code equivalent — it relies on the exchange).
     """
     sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=None)
     engine = MMS4SignalEngine()
@@ -203,7 +221,11 @@ def run_backtest(
         weight = position["notional_weight"]
         pnl_pct = (exit_price - entry) / entry if side == "long" else (entry - exit_price) / entry
         flags = _trade_record_flags(reason)
-        sl_percent = BASE_SL_PCT if reason == "STOP_LOSS" else 0.0
+        # A composite (addon) SL is TIGHTER (1.25% < 2%) — since on_stop_loss_hit's
+        # own SCOUT_MODE-entry check requires sl_percent >= 0.02, an addon-affected
+        # stop-loss correctly does NOT trigger SCOUT_MODE, matching production
+        # (daemon.py passes the addon-position's real, tighter sl_pct too).
+        sl_percent = position.get("sl_pct_override", BASE_SL_PCT) if reason == "STOP_LOSS" else 0.0
         sm.record_trade(
             trade_id=f"{symbol}-{idx}", symbol=symbol, side=side,
             entry_price=entry, exit_price=exit_price, amount=position["contracts"],
@@ -212,6 +234,7 @@ def run_backtest(
         trades.append({
             "side": side, "entry_price": entry, "exit_price": exit_price,
             "pnl_pct": pnl_pct, "exit_reason": reason, "exit_idx": idx, "weight": weight,
+            "addon_applied": bool(position.get("addon_done", False)),  # test/diagnostic observability only
         })
         im.stop_tracking(symbol)
         position = None
@@ -234,7 +257,8 @@ def run_backtest(
         if position is not None:
             side = position["side"]
             entry = position["entry_price"]
-            sl_price = entry * (1 - BASE_SL_PCT) if side == "long" else entry * (1 + BASE_SL_PCT)
+            sl_pct = position.get("sl_pct_override", BASE_SL_PCT)
+            sl_price = entry * (1 - sl_pct) if side == "long" else entry * (1 + sl_pct)
             sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
             if sl_hit:
                 close_position(sl_price, "STOP_LOSS", i)
@@ -317,8 +341,39 @@ def run_backtest(
                                    side=side, atr=atr_now)
         else:
             side = position["side"]
+            matching_add = "HIGH_RISK_ADD_LONG" if side == "long" else "HIGH_RISK_ADD_SHORT"
             opposite_signal = "BASE_SHORT" if side == "long" else "BASE_LONG"
-            if signal.signal_type == opposite_signal:
+            if (signal.signal_type == matching_add
+                    and sm.get_symbol_state(symbol) == MMS4State.BASE_MODE  # addons blocked in SCOUT — daemon.py
+                    and not position.get("addon_done", False)):             # Single Addon Guard, never reset
+                # Weighted-average entry price: an EXPLICIT APPROXIMATION of OKX's
+                # own avgPx merge — production never computes this in code (relies
+                # on the exchange reporting the merged average for the same-side
+                # same-symbol fill); the harness must, since there is no exchange
+                # to ask.
+                addon_contracts = BASE_CONTRACTS.get(symbol, BASE_CONTRACTS_DEFAULT) * (ADDON_ALLOCATION / BASE_ALLOCATION)
+                old_notional = position["contracts"] * position["entry_price"]
+                add_notional = addon_contracts * curr_c.close
+                new_contracts = position["contracts"] + addon_contracts
+                position["entry_price"] = (old_notional + add_notional) / new_contracts
+                # notional_weight scales with the combined contracts relative to a
+                # full BASE entry, at the state the position was opened in — reuses
+                # the same notional_reduction_factor formula against the new total
+                # rather than trying to sum two separate weighted contributions.
+                position["notional_weight"] = position["notional_weight"] * (new_contracts / position["contracts"])
+                position["contracts"] = new_contracts
+                position["addon_done"] = True
+                # Tighter COMPOSITE stop-loss for the WHOLE position once an addon
+                # exists — matches daemon.py's addon_sl_pct override; the addon
+                # signal's own hardcoded 1% SL (analytics.py) is deliberately
+                # ignored, since production overrides it at execution time too.
+                position["sl_pct_override"] = ADDON_SL_PCT
+                # Inactivity tracker is NOT re-tracked at the new averaged entry —
+                # a documented, lower-distortion approximation (re-tracking would
+                # reset accumulated stagnation/impulse progress that production's
+                # own tracker may or may not reset on an addon fill; unverified
+                # either way, so the choice that erases less state is preferred).
+            elif signal.signal_type == opposite_signal:
                 close_position(curr_c.close, "TP_AND_FLIP", i)
                 new_side = "short" if side == "long" else "long"
                 flip_blocked = trend_filter_enabled and not pd.isna(slope_now) and (
