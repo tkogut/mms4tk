@@ -185,7 +185,7 @@ plotshape(short_signal and strategy.position_size >= 0, title="Sygnał BASE SHOR
 // 7. 📊 TABELA INFORMACYJNA (DASHBOARD HUD)
 // ==========================================
 var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
-if barstate.islast
+if barstate.islast or barstate.islastconfirmedhistory
     table.cell(hud, 0, 0, "Strategia:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 0, "MMS v4 (mms4tk v6)", text_color=color.yellow, text_size=size.small)
     table.cell(hud, 0, 1, "Stan Maszyny:", text_color=color.white, text_size=size.small)
