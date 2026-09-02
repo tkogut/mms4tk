@@ -138,6 +138,112 @@ def test_train_test_validate_notes_disagreeing_params_even_when_validated(monkey
     assert "DIFFERENT parameters" in result.note
 
 
+# ── BASE_MODE/SCOUT_MODE state machine fidelity ──
+# Added 2026-09-02 after finding run_backtest() never actually left BASE_MODE:
+# `sm` was constructed but close_position() never called sm.record_trade(), so
+# every entry was sized as if a hard stop-loss never happened. Tested directly
+# against MMS4StateManager/the two extracted pure helpers wherever possible —
+# avoids synthesizing candles for state-machine logic that doesn't depend on
+# candle shape.
+
+from mms4tk.state_manager import MMS4StateManager, MMS4State
+
+
+def _sm(symbol="BTC/USDC"):
+    return MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=None)
+
+
+@pytest.mark.parametrize("exit_reason,expected", [
+    ("STOP_LOSS", dict(is_stop_loss=True, is_take_profit=False, is_partial=False)),
+    ("TP_AND_FLIP", dict(is_stop_loss=False, is_take_profit=True, is_partial=False)),
+    ("STALE_SPLIT_50", dict(is_stop_loss=False, is_take_profit=True, is_partial=True)),
+    ("MIDLINE_PARTIAL_TP", dict(is_stop_loss=False, is_take_profit=True, is_partial=True)),
+    ("FORCE_CLOSE", dict(is_stop_loss=False, is_take_profit=False, is_partial=False)),
+    ("FORCE_CLOSE_BE", dict(is_stop_loss=False, is_take_profit=False, is_partial=False)),
+    ("BE_ESCAPE", dict(is_stop_loss=False, is_take_profit=False, is_partial=False)),
+])
+def test_trade_record_flags_table(exit_reason, expected):
+    assert be._trade_record_flags(exit_reason) == expected
+
+
+def test_scout_mode_entered_after_hard_sl():
+    sm = _sm()
+    sm.record_trade(trade_id="t1", symbol="BTC/USDC", side="long", entry_price=100.0,
+                     exit_price=98.0, amount=1.0, pnl=-2.0, pnl_percent=-0.02,
+                     is_stop_loss=True, sl_percent=0.02)
+    assert sm.get_symbol_state("BTC/USDC") == MMS4State.SCOUT_MODE
+    assert sm.get_symbol_size_multiplier("BTC/USDC") == pytest.approx(0.3)
+
+
+def test_scout_mode_not_entered_below_2pct_sl():
+    """Boundary case: the real check is `>=`, so exactly 2% DOES enter SCOUT, but
+    1.5% must not."""
+    sm = _sm()
+    sm.record_trade(trade_id="t1", symbol="BTC/USDC", side="long", entry_price=100.0,
+                     exit_price=98.5, amount=1.0, pnl=-1.5, pnl_percent=-0.015,
+                     is_stop_loss=True, sl_percent=0.015)
+    assert sm.get_symbol_state("BTC/USDC") == MMS4State.BASE_MODE
+
+
+def test_partial_tp_preserves_scout_mode():
+    """A partial TP (SPLIT_50/Midline TP) must NOT exit SCOUT_MODE — record_trade's
+    own is_partial=True branch explicitly preserves it."""
+    sm = _sm()
+    sm.record_trade(trade_id="t1", symbol="BTC/USDC", side="long", entry_price=100.0,
+                     exit_price=98.0, amount=1.0, pnl=-2.0, pnl_percent=-0.02,
+                     is_stop_loss=True, sl_percent=0.02)
+    assert sm.get_symbol_state("BTC/USDC") == MMS4State.SCOUT_MODE
+
+    sm.record_trade(trade_id="t2", symbol="BTC/USDC", side="short", entry_price=90.0,
+                     exit_price=90.0, amount=0.0, pnl=0.0, pnl_percent=0.0,
+                     is_take_profit=True, is_partial=True)
+    assert sm.get_symbol_state("BTC/USDC") == MMS4State.SCOUT_MODE
+
+
+def test_full_tp_exits_scout_mode():
+    sm = _sm()
+    sm.record_trade(trade_id="t1", symbol="BTC/USDC", side="long", entry_price=100.0,
+                     exit_price=98.0, amount=1.0, pnl=-2.0, pnl_percent=-0.02,
+                     is_stop_loss=True, sl_percent=0.02)
+    assert sm.get_symbol_state("BTC/USDC") == MMS4State.SCOUT_MODE
+
+    sm.record_trade(trade_id="t2", symbol="BTC/USDC", side="short", entry_price=90.0,
+                     exit_price=85.0, amount=1.0, pnl=5.0, pnl_percent=0.05,
+                     is_take_profit=True, is_partial=False)
+    assert sm.get_symbol_state("BTC/USDC") == MMS4State.BASE_MODE
+
+
+def test_dynamic_sizing_shrinks_in_scout_mode():
+    sm = _sm()
+    base = be._size_new_entry("BTC/USDC", sm)
+    assert base["contracts"] == pytest.approx(be.BASE_CONTRACTS["BTC/USDC"])
+    assert base["notional_weight"] == pytest.approx(1.0)
+    assert base["state_at_entry"] == "BASE_MODE"
+
+    sm.record_trade(trade_id="t1", symbol="BTC/USDC", side="long", entry_price=100.0,
+                     exit_price=98.0, amount=1.0, pnl=-2.0, pnl_percent=-0.02,
+                     is_stop_loss=True, sl_percent=0.02)
+    scout = be._size_new_entry("BTC/USDC", sm)
+    assert scout["contracts"] == pytest.approx(be.BASE_CONTRACTS["BTC/USDC"] * 0.3)
+    # notional_weight ~= SCOUT_SIZE_MULT * SCOUT_LEVERAGE / base_leverage ~= 0.3*1.0/3.0 = 0.1
+    assert scout["notional_weight"] == pytest.approx(0.1, abs=0.01)
+    assert scout["state_at_entry"] == "SCOUT_MODE"
+
+
+def test_run_backtest_shrinks_entries_after_synthetic_stop_loss():
+    """End-to-end (candle-driven) sanity check that the SCOUT_MODE hookup actually
+    reaches run_backtest(), not just the isolated helpers above: on the real 90-day
+    BTC fixture, at least one entry after a STOP_LOSS close must carry a
+    notional_weight below the full-BASE 1.0, and the run must not crash."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:600]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) > 0  # this window has real SL hits — precondition for the check below
+    assert any(t["weight"] < 1.0 for t in trades)
+
+
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
 # Added 2026-09-02 after finding this feature shipped to production 2026-08-31
 # without backtest evidence. Real-fixture-data A/B comparison (not a synthetic
