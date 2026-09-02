@@ -81,7 +81,7 @@ var bool midline_tp_done = false
 
 // Wykrywanie czy ostatnia transakcja uderzyła w SL
 if strategy.closedtrades > 0
-    if ta.change(strategy.closedtrades)
+    if ta.change(strategy.closedtrades) > 0
         float last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
         if last_trade_profit < 0 and scout_sim_on
             is_scout_mode := true
