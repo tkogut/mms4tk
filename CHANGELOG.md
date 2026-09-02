@@ -4,6 +4,19 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.44.0] - 2026-09-02
+
+### 🧪 Backtest Engine: HIGH_RISK_ADD (Addon) Fidelity (PR 2/3)
+- 🎯 **`run_backtest()` now models addon signals**, previously silently dropped: `analytics.py` returns `HIGH_RISK_ADD_LONG/SHORT` *instead of* `BASE_LONG/SHORT` on a qualifying continuation candle, so every such candle was a real, undocumented bias in every prior backtest result (a missed entry the harness never accounted for), not merely a missing nice-to-have.
+- 🔒 **Single Addon Guard**: at most one addon per position, keyed on the position itself and never reset by the entry-price shift — mirrors `logger_db.py`'s `get_addon_count` design exactly (its own docstring documents the real production bug that design avoids).
+- 🚫 **Blocked in SCOUT_MODE**: an addon-qualifying signal while the state machine is in SCOUT_MODE is a no-op — this guard has no meaning until PR 1's SCOUT_MODE fidelity landed, the concrete proof of the two PRs' sequencing dependency.
+- 📐 **Weighted-average entry price**: an explicit, documented approximation of OKX's own `avgPx` merge — production has no in-code equivalent (relies on the exchange reporting the merged average for same-side same-symbol fills).
+- 💰 **Tighter composite stop-loss**: `ADDON_SL_PCT` (1.25%, mirroring `daemon.py`'s default) applies to the WHOLE position once an addon exists, replacing the base 2% threshold — and correctly does NOT retrigger a SCOUT_MODE transition on its own (`on_stop_loss_hit`'s `>=2%` check), matching production exactly.
+- 🧪 **3 new tests**, driven by a scripted `MMS4SignalEngine.evaluate_signals` monkeypatch (deterministic, since replicating `analytics.py`'s real candle-shape detection by hand for addon-qualifying candles is its own large surface): Single Addon Guard holds under repeated qualifying candles, addon is blocked in SCOUT_MODE, composite SL fires at the tighter threshold where the base one would not have.
+- 📋 PR 2 of 3 — closes the backtest-harness fidelity sequence (PR 0: Midline Partial TP, v0.42.1; PR 1: SCOUT_MODE, v0.43.0). Prerequisite for trusting the trend filter's next recalibration once ~175 clean trades accumulate; not urgent standalone work.
+
+---
+
 ## 🚀 [0.43.0] - 2026-09-02
 
 ### 🧪 Backtest Engine: BASE_MODE/SCOUT_MODE Fidelity (PR 1/3)
