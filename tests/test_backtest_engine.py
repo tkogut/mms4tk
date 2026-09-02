@@ -6,6 +6,7 @@ directions).
 """
 import csv
 import os
+from typing import Dict
 
 import pytest
 
@@ -242,6 +243,106 @@ def test_run_backtest_shrinks_entries_after_synthetic_stop_loss():
     stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
     assert len(stop_losses) > 0  # this window has real SL hits — precondition for the check below
     assert any(t["weight"] < 1.0 for t in trades)
+
+
+# ── HIGH_RISK_ADD (addon) simulation ──
+# Added 2026-09-02 (PR 2/3): analytics.py can return HIGH_RISK_ADD_LONG/SHORT
+# *instead of* BASE_LONG/SHORT on a qualifying continuation candle — the harness
+# previously only handled BASE_* for entries, silently dropping every addon
+# candle (a real, undocumented bias in every prior backtest result, not merely a
+# missing feature). Driving analytics.py's real candle-shape detection
+# deterministically by hand is its own large surface; these tests instead
+# monkeypatch `MMS4SignalEngine.evaluate_signals` with a scripted signal sequence
+# keyed by candle index (`len(window) - 2`), so the SIZING/GUARD/STATE logic in
+# run_backtest() itself is exercised precisely and deterministically.
+
+from mms4tk.analytics import MMS4SignalEngine, SignalResult
+
+
+def _flat_candles(n, price=100.0):
+    return [Candle(timestamp=i, open=price, high=price + 0.5, low=price - 0.5, close=price, volume=1.0)
+            for i in range(n)]
+
+
+def _scripted_engine(monkeypatch, script: Dict[int, str]):
+    """`script` maps candle index `i` -> signal_type; anything unlisted returns
+    NONE/is_allowed=False so nothing else fires by accident."""
+    def fake_evaluate_signals(self, candles, state_manager, params=None, symbol=None):
+        i = len(candles) - 2
+        curr_c = candles[i]
+        signal_type = script.get(i, "NONE")
+        return SignalResult(signal_type=signal_type, price=curr_c.close, stop_loss=0.0,
+                             leverage=1.0, is_allowed=signal_type != "NONE")
+    monkeypatch.setattr(MMS4SignalEngine, "evaluate_signals", fake_evaluate_signals)
+
+
+def test_addon_respects_single_addon_guard(monkeypatch):
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2  # default slope_lookback=5
+    candles = _flat_candles(warmup + 10)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",
+        warmup + 1: "HIGH_RISK_ADD_LONG",
+        warmup + 2: "HIGH_RISK_ADD_LONG",  # second candle in a row — must be a no-op
+        warmup + 3: "BASE_SHORT",          # closes the position
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    closing_trades = [t for t in trades if not t.get("partial")]
+    assert len(closing_trades) >= 1
+    assert closing_trades[0]["addon_applied"] is True
+    # Exactly ONE addon's worth of extra notional, not two — if the Single Addon
+    # Guard failed and a second addon applied, weight would be ~1 + 2*(0.3/0.7).
+    assert closing_trades[0]["weight"] == pytest.approx(1.0 + be.ADDON_ALLOCATION / be.BASE_ALLOCATION, abs=0.01)
+
+
+def test_addon_blocked_in_scout_mode(monkeypatch):
+    """The concrete proof of the PR1->PR2 sequencing dependency: this guard has no
+    meaning until SCOUT_MODE exists in the harness at all."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    # SL-trigger candle dips low enough to hit a LONG entered at 100.0 (2% SL = 98.0).
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",          # entry #1, later stopped out -> SCOUT_MODE
+        warmup + 2: "BASE_LONG",      # entry #2, sized under SCOUT_MODE
+        warmup + 3: "HIGH_RISK_ADD_LONG",  # must be BLOCKED — state is SCOUT_MODE
+        warmup + 4: "BASE_SHORT",     # closes entry #2 (still SCOUT-sized)
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1  # confirms entry #1 really was stopped out (precondition)
+    scout_close = [t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]
+    assert len(scout_close) == 1
+    assert scout_close[0]["addon_applied"] is False
+    assert scout_close[0]["weight"] == pytest.approx(0.1, abs=0.01)  # pure SCOUT sizing, no addon bump
+
+
+def test_addon_uses_tighter_composite_sl(monkeypatch):
+    """After an addon fires, the position's SL must move to the tighter 1.25%
+    composite threshold, not stay at the original 2% base threshold."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    # 1.5% below entry: BETWEEN the tight addon SL (1.25%) and the base SL (2%) —
+    # discriminates the two thresholds directly.
+    candles[warmup + 2] = Candle(timestamp=warmup + 2, open=100.0, high=100.5, low=98.5,
+                                  close=100.0, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",
+        warmup + 1: "HIGH_RISK_ADD_LONG",
+        # candle warmup+2 supplies the price dip; no signal needed there
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1
+    assert stop_losses[0]["addon_applied"] is True
+    # exit_price is the computed SL trigger price (entry * (1 - sl_pct)), not the
+    # candle's raw low. Without the addon's 1.25% composite override this would
+    # never have fired at all: the base 2% SL sits at 98.0, below the candle's
+    # 98.5 low, so only the tighter addon threshold (98.75) is actually crossed.
+    assert stop_losses[0]["exit_price"] == pytest.approx(98.75, abs=0.01)
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
