@@ -7,7 +7,7 @@ strategy(title="MMS v4 — Mastermind Autotrading Strategy (mms4tk)",
      default_qty_type=strategy.percent_of_equity, 
      default_qty_value=100, 
      commission_type=strategy.commission.percent, 
-     commission_value=0.05, 
+     commission_value=0.06, 
      slippage=1,
      pyramiding=1,
      margin_long=33.33,
@@ -31,23 +31,22 @@ float  midline_frac    = input.float(0.50, "Frakcja Zamykana na Midline (T1)", m
 bool   profit_stall_on = input.bool(true, "Profit Stall Gate (Inactivity Manager)", group=GRP_RISK, tooltip="Zamyka 50% jeśli zysk >= 0.6 ATR stoi w miejscu przez 4 świece")
 int    stall_candles_th = input.int(4, "Liczba Świec Stagnacji w Zysku", minval=2, maxval=12, group=GRP_RISK)
 
+var string GRP_SCOUT = "🤖 Maszyna Stanów (MMS4 State Machine)"
+bool   scout_active    = input.bool(true, "Włącz Maszynę Stanów (Scout Mode x0.1 po SL)", group=GRP_SCOUT, tooltip="Po uderzeniu w SL (strata), kolejna pozycja ma lewar zredukowany 10-krotnie do zwiadowczego x0.1 (10% kapitału), chroniąc przed seriami strat w trendzie.")
+
 // ==========================================
 // 2. 📐 MATEMATYKA WSKAŹNIKÓW (TMA & ATR)
 // ==========================================
-// Formuła podwójnego SMA dla Triangular Moving Average (TMA)
 int half_len = int(math.ceil(tma_length / 2.0))
 float sma1 = ta.sma(close, half_len)
 float tma_mid = ta.sma(sma1, half_len)
 
-// Kalkulacja True Range i ATR
 float calc_tr = ta.tr(true)
 float calc_atr = atr_method == "Wilder" ? ta.rma(calc_tr, atr_period) : ta.sma(calc_tr, atr_period)
 
-// Pasma zmienności
 float tma_upper = tma_mid + (calc_atr * atr_mult)
 float tma_lower = tma_mid - (calc_atr * atr_mult)
 
-// Wskaźnik Zmienności (Volatility Ratio - VR)
 float atr100 = atr_method == "Wilder" ? ta.rma(calc_tr, 100) : ta.sma(calc_tr, 100)
 float sma_atr100 = ta.sma(atr100, 14)
 float vr = calc_atr / (sma_atr100 + 1e-8)
@@ -62,7 +61,6 @@ float lower_wick = math.min(open, close) - low
 bool valid_short_wick = candle_range > 0 and (upper_wick / candle_range >= min_wick_ratio) and (close < open)
 bool valid_long_wick  = candle_range > 0 and (lower_wick / candle_range >= min_wick_ratio) and (close > open)
 
-// Warunki Wybicia Poza Wstęgę TMA
 bool touch_lower = low <= tma_lower or close <= tma_lower
 bool touch_upper = high >= tma_upper or close >= tma_upper
 
@@ -70,15 +68,36 @@ bool long_signal  = touch_lower and (not wick_filter or valid_long_wick)
 bool short_signal = touch_upper and (not wick_filter or valid_short_wick)
 
 // ==========================================
-// 4. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
+// 4. 🤖 MASZYNA STANÓW MMS v4 (STATE MACHINE)
+// ==========================================
+var bool is_scout_mode = false
+var int prev_closed_trades = 0
+
+// Rejestracja wyniku zamkniętych pozycji:
+if strategy.closedtrades > prev_closed_trades
+    prev_closed_trades := strategy.closedtrades
+    float last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    
+    // 1. Każde uderzenie w SL aktywuje SCOUT MODE (x0.1)
+    if last_trade_profit < 0 and scout_active
+        is_scout_mode := true
+    // 2. Powrót do BASE MODE następuje WYŁĄCZNIE po pełnym (100%) zysku przy braku pozycji
+    else if last_trade_profit > 0 and strategy.position_size == 0
+        is_scout_mode := false
+
+// Wielkość pozycji wg Maszyny Stanów: 100% dla Base, 10% dla Scout
+float current_order_qty_pct = (is_scout_mode and scout_active) ? 10.0 : 100.0
+
+// ==========================================
+// 5. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
 // ==========================================
 var float position_peak_pnl_atr = 0.0
 var int profit_stall_counter = 0
 var bool midline_tp_done = false
 
-// A. Otwieranie Pozycji (BEZ parametru qty -> 100% kapitału automatycznie)
+// A. Otwieranie Pozycji z dynamicznym skalowaniem kapitału (Base vs Scout)
 if long_signal and strategy.position_size <= 0
-    strategy.entry("LONG", strategy.long)
+    strategy.entry("LONG", strategy.long, qty=current_order_qty_pct)
     float sl_long = close * (1.0 - (base_sl_pct / 100.0))
     strategy.exit("SL_LONG", "LONG", stop=sl_long, comment="HARD_SL_2.0%")
     midline_tp_done := false
@@ -86,7 +105,7 @@ if long_signal and strategy.position_size <= 0
     profit_stall_counter := 0
 
 if short_signal and strategy.position_size >= 0
-    strategy.entry("SHORT", strategy.short)
+    strategy.entry("SHORT", strategy.short, qty=current_order_qty_pct)
     float sl_short = close * (1.0 + (base_sl_pct / 100.0))
     strategy.exit("SL_SHORT", "SHORT", stop=sl_short, comment="HARD_SL_2.0%")
     midline_tp_done := false
@@ -143,7 +162,7 @@ else if strategy.position_size < 0
         strategy.close("SHORT", comment="T2_FULL_TP")
 
 // ==========================================
-// 5. 🎨 WIZUALIZACJA NA WYKRESIE (PLOTS)
+// 6. 🎨 WIZUALIZACJA NA WYKRESIE (PLOTS)
 // ==========================================
 plot(tma_mid, "TMA Midline (Mediana)", color=color.new(color.orange, 0), linewidth=2)
 plot_u = plot(tma_upper, "TMA Upper Band (Wyprzedanie)", color=color.new(color.red, 20), linewidth=2)
@@ -151,23 +170,25 @@ plot_d = plot(tma_lower, "TMA Lower Band (Wykupienie)", color=color.new(color.gr
 
 fill(plot_u, plot_d, color=color.new(color.blue, 96), title="Kanał Zmienności TMA")
 
-// Sygnalizatory wejść na świecach
 plotshape(long_signal and strategy.position_size <= 0, title="Sygnał BASE LONG", 
           style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="MMS4 LONG")
 plotshape(short_signal and strategy.position_size >= 0, title="Sygnał BASE SHORT", 
           style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="MMS4 SHORT")
 
 // ==========================================
-// 6. 📊 TABELA INFORMACYJNA (DASHBOARD HUD)
+// 7. 📊 TABELA INFORMACYJNA (DASHBOARD HUD)
 // ==========================================
-var table hud = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
+var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
 if barstate.islast
     table.cell(hud, 0, 0, "Strategia:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 0, "MMS v4 (mms4tk v6)", text_color=color.yellow, text_size=size.small)
-    table.cell(hud, 0, 1, "Pozycja:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 1, strategy.position_size > 0 ? "LONG 🟢" : strategy.position_size < 0 ? "SHORT 🔴" : "FLAT ⚪", 
+    table.cell(hud, 0, 1, "Stan Maszyny:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, is_scout_mode ? "SCOUT (x0.1) 🟡" : "BASE (x3.0) 🟢", 
+               text_color=is_scout_mode ? color.yellow : color.green, text_size=size.small)
+    table.cell(hud, 0, 2, "Pozycja:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, strategy.position_size > 0 ? "LONG 🟢" : strategy.position_size < 0 ? "SHORT 🔴" : "FLAT ⚪", 
                text_color=strategy.position_size != 0 ? color.green : color.white, text_size=size.small)
-    table.cell(hud, 0, 2, "Volatility Ratio (VR):", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 2, str.tostring(vr, "#.##"), text_color=vr > 1.4 ? color.red : color.white, text_size=size.small)
-    table.cell(hud, 0, 3, "T1 Midline TP:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 3, midline_tp_done ? "ZREALIZOWANE (50%)" : "CZEKA", text_color=midline_tp_done ? color.green : color.gray, text_size=size.small)
+    table.cell(hud, 0, 3, "Volatility Ratio (VR):", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, str.tostring(vr, "#.##"), text_color=vr > 1.4 ? color.red : color.white, text_size=size.small)
+    table.cell(hud, 0, 4, "T1 Midline TP:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 4, midline_tp_done ? "ZREALIZOWANE (50%)" : "CZEKA", text_color=midline_tp_done ? color.green : color.gray, text_size=size.small)
