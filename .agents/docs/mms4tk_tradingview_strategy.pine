@@ -31,9 +31,6 @@ float  midline_frac    = input.float(0.50, "Frakcja Zamykana na Midline (T1)", m
 bool   profit_stall_on = input.bool(true, "Profit Stall Gate (Inactivity Manager)", group=GRP_RISK, tooltip="Zamyka 50% jeśli zysk >= 0.6 ATR stoi w miejscu przez 4 świece")
 int    stall_candles_th = input.int(4, "Liczba Świec Stagnacji w Zysku", minval=2, maxval=12, group=GRP_RISK)
 
-var string GRP_SCOUT = "🤖 Maszyna Stanów & Scout Mode"
-bool   scout_sim_on    = input.bool(true, "Symuluj Redukcję Lewaru Scout Mode (x0.1 po SL)", group=GRP_SCOUT, tooltip="Po zaliczeniu SL wielkość kolejnej pozycji spada do 10% aż do pełnej wygranej")
-
 // ==========================================
 // 2. 📐 MATEMATYKA WSKAŹNIKÓW (TMA & ATR)
 // ==========================================
@@ -73,48 +70,33 @@ bool long_signal  = touch_lower and (not wick_filter or valid_long_wick)
 bool short_signal = touch_upper and (not wick_filter or valid_short_wick)
 
 // ==========================================
-// 4. 🤖 SYMULACJA MASZYNY STANÓW (SCOUT MODE)
+// 4. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
 // ==========================================
-var bool is_scout_mode = false
 var float position_peak_pnl_atr = 0.0
 var int profit_stall_counter = 0
-var float last_entry_price = 0.0
 var bool midline_tp_done = false
-var int prev_closed_trades = 0
 
-// Wykrywanie czy nowa transakcja została zamknięta i czy uderzyła w SL
-if strategy.closedtrades > prev_closed_trades
-    prev_closed_trades := strategy.closedtrades
-    float last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
-    if last_trade_profit < 0 and scout_sim_on
-        is_scout_mode := true
-    else if last_trade_profit > 0 and strategy.position_size == 0
-        is_scout_mode := false
-
-// Procent kapitału: 100% dla Base Mode, 10% dla Scout Mode
-float order_pct_equity = is_scout_mode ? 10.0 : 100.0
-
-// ==========================================
-// 5. 🎯 ZARZĄDZANIE POZYCJĄ (STRATEGY LOGIC)
-// ==========================================
-// A. Otwieranie Pozycji
+// A. Otwieranie Pozycji (BEZ parametru qty -> 100% kapitału automatycznie)
 if long_signal and strategy.position_size <= 0
-    strategy.entry("LONG", strategy.long, qty=order_pct_equity)
-    last_entry_price := close
+    strategy.entry("LONG", strategy.long)
+    float sl_long = close * (1.0 - (base_sl_pct / 100.0))
+    strategy.exit("SL_LONG", "LONG", stop=sl_long, comment="HARD_SL_2.0%")
     midline_tp_done := false
     position_peak_pnl_atr := 0.0
     profit_stall_counter := 0
 
 if short_signal and strategy.position_size >= 0
-    strategy.entry("SHORT", strategy.short, qty=order_pct_equity)
-    last_entry_price := close
+    strategy.entry("SHORT", strategy.short)
+    float sl_short = close * (1.0 + (base_sl_pct / 100.0))
+    strategy.exit("SL_SHORT", "SHORT", stop=sl_short, comment="HARD_SL_2.0%")
     midline_tp_done := false
     position_peak_pnl_atr := 0.0
     profit_stall_counter := 0
 
 // B. Śledzenie Zysku w Pozycji i Inactivity Profit Stall Gate
 if strategy.position_size > 0
-    float cur_pnl_atr = (close - last_entry_price) / (calc_atr + 1e-8)
+    float entry_p = strategy.position_avg_price
+    float cur_pnl_atr = (close - entry_p) / (calc_atr + 1e-8)
     if cur_pnl_atr >= 0.6
         if cur_pnl_atr > position_peak_pnl_atr
             position_peak_pnl_atr := cur_pnl_atr
@@ -122,26 +104,23 @@ if strategy.position_size > 0
         else
             profit_stall_counter += 1
             
-        // Profit Stall Gate Trigger (4 świece wyhamowania)
+        // Profit Stall Gate Trigger (4 świece wyhamowania w zysku)
         if profit_stall_on and profit_stall_counter >= stall_candles_th and not midline_tp_done
             strategy.close("LONG", qty_percent=50, comment="STALL_SPLIT_50")
             midline_tp_done := true
             
     // Cząstkowe TP na Linii Środkowej (T1 Midline)
-    if midline_tp_on and not midline_tp_done and high >= tma_mid and last_entry_price <= tma_mid
+    if midline_tp_on and not midline_tp_done and high >= tma_mid and entry_p <= tma_mid
         strategy.close("LONG", qty_percent=int(midline_frac * 100), comment="T1_MIDLINE_TP")
         midline_tp_done := true
         
     // Pełne TP na Przeciwległej Wstędze (T2 Upper Band)
     if high >= tma_upper
         strategy.close("LONG", comment="T2_FULL_TP")
-        
-    // Twardy Stop Loss 2.0% (Nienaruszony!)
-    float long_sl_price = last_entry_price * (1.0 - (base_sl_pct / 100.0))
-    strategy.exit("SL_LONG", "LONG", stop=long_sl_price, comment="HARD_SL_2.0%")
 
 else if strategy.position_size < 0
-    float cur_pnl_atr = (last_entry_price - close) / (calc_atr + 1e-8)
+    float entry_p = strategy.position_avg_price
+    float cur_pnl_atr = (entry_p - close) / (calc_atr + 1e-8)
     if cur_pnl_atr >= 0.6
         if cur_pnl_atr > position_peak_pnl_atr
             position_peak_pnl_atr := cur_pnl_atr
@@ -149,26 +128,22 @@ else if strategy.position_size < 0
         else
             profit_stall_counter += 1
             
-        // Profit Stall Gate Trigger
+        // Profit Stall Gate Trigger (4 świece wyhamowania w zysku)
         if profit_stall_on and profit_stall_counter >= stall_candles_th and not midline_tp_done
             strategy.close("SHORT", qty_percent=50, comment="STALL_SPLIT_50")
             midline_tp_done := true
             
     // Cząstkowe TP na Linii Środkowej (T1 Midline)
-    if midline_tp_on and not midline_tp_done and low <= tma_mid and last_entry_price >= tma_mid
+    if midline_tp_on and not midline_tp_done and low <= tma_mid and entry_p >= tma_mid
         strategy.close("SHORT", qty_percent=int(midline_frac * 100), comment="T1_MIDLINE_TP")
         midline_tp_done := true
         
     // Pełne TP na Przeciwległej Wstędze (T2 Lower Band)
     if low <= tma_lower
         strategy.close("SHORT", comment="T2_FULL_TP")
-        
-    // Twardy Stop Loss 2.0% (Nienaruszony!)
-    float short_sl_price = last_entry_price * (1.0 + (base_sl_pct / 100.0))
-    strategy.exit("SL_SHORT", "SHORT", stop=short_sl_price, comment="HARD_SL_2.0%")
 
 // ==========================================
-// 6. 🎨 WIZUALIZACJA NA WYKRESIE (PLOTS)
+// 5. 🎨 WIZUALIZACJA NA WYKRESIE (PLOTS)
 // ==========================================
 plot(tma_mid, "TMA Midline (Mediana)", color=color.new(color.orange, 0), linewidth=2)
 plot_u = plot(tma_upper, "TMA Upper Band (Wyprzedanie)", color=color.new(color.red, 20), linewidth=2)
@@ -183,18 +158,16 @@ plotshape(short_signal and strategy.position_size >= 0, title="Sygnał BASE SHOR
           style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="MMS4 SHORT")
 
 // ==========================================
-// 7. 📊 TABELA INFORMACYJNA (DASHBOARD HUD)
+// 6. 📊 TABELA INFORMACYJNA (DASHBOARD HUD)
 // ==========================================
-var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
+var table hud = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
 if barstate.islast
     table.cell(hud, 0, 0, "Strategia:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 0, "MMS v4 (mms4tk v6)", text_color=color.yellow, text_size=size.small)
-    table.cell(hud, 0, 1, "Stan Maszyny:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 1, is_scout_mode ? "SCOUT (x0.1) 🟡" : "BASE (x3.0) 🟢", 
-               text_color=is_scout_mode ? color.yellow : color.green, text_size=size.small)
+    table.cell(hud, 0, 1, "Pozycja:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, strategy.position_size > 0 ? "LONG 🟢" : strategy.position_size < 0 ? "SHORT 🔴" : "FLAT ⚪", 
+               text_color=strategy.position_size != 0 ? color.green : color.white, text_size=size.small)
     table.cell(hud, 0, 2, "Volatility Ratio (VR):", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 2, str.tostring(vr, "#.##"), text_color=vr > 1.4 ? color.red : color.white, text_size=size.small)
     table.cell(hud, 0, 3, "T1 Midline TP:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 3, midline_tp_done ? "ZREALIZOWANE (50%)" : "CZEKA", text_color=midline_tp_done ? color.green : color.gray, text_size=size.small)
-    table.cell(hud, 0, 4, "Stagnacja w Zysku:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 4, str.tostring(profit_stall_counter) + "/4 świec", text_color=color.white, text_size=size.small)
