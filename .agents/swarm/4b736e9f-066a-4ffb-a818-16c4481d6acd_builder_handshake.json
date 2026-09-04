@@ -1,0 +1,16 @@
+{
+  "conversation_id": "4b736e9f-066a-4ffb-a818-16c4481d6acd",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/telegram_queue.py",
+    "tests/test_telegram_queue.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-09-04T13:37:19Z",
+  "notes": "Fix: Telegram alerts silently failing since deploy - hermes CLI unreachable from container (no docker binary/socket/CLI). Now dispatches direct Bot API (TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID), CLI kept as fallback only. 7 new tests, 269/269 fast suite passing."
+}
