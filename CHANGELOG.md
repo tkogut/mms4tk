@@ -4,7 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 🚀 [0.44.1] - 2026-09-04
+## 🚀 [0.44.2] - 2026-09-04
+
+### 🐛 Duplicate Telegram Alerts Fixed (POSITION_OPENED, STALE_POSITION_FORCE_CLOSE)
+- 🔎 **Root cause**: after the 0.44.1 direct-Bot-API fix started working, a SECOND, independent Telegram channel was discovered still active — `scripts/hermes/mms4tk_event_dispatcher.py`, a Hermes-side cron (runs every ~1 minute, outside `antigravity_core`) that polls `webhook_events` and, for a hardcoded list of event types, also calls `hermes send --to telegram` itself. Cross-referencing every `HermesWebhookEvent` emission site against that list found exactly two genuine double-sends: `POSITION_OPENED` (every trade entry) and `STALE_POSITION_FORCE_CLOSE`.
+- 🔧 **Fix**: removed both event types from the dispatcher's Telegram-send list — mms4tk's own `daemon.py`/`hermes_webhook.py` already send them immediately via the direct Bot API path, so this cron no longer needs to (and must not). `SCOUT_MODE_ACTIVATED`/`HITL_REVIEW`/`RISK_ALERT`/`MULTI_SYMBOL_DIGEST` are untouched — each has no other Telegram path and this dispatcher remains their sole channel.
+- 🧹 Extracted the routing logic into two pure, testable functions (`is_actionable_event`, `should_send_telegram_directly`) instead of inlining it in `main()`'s loop.
+- 🧪 **21 new tests** (`tests/test_hermes_event_dispatcher.py`) locking in the full routing matrix so this duplication cannot silently regress.
 
 ### 🐛 Telegram Alerts Fixed: Direct Bot API Dispatch
 - 🔎 **Root cause**: `telegram_queue.py` only shelled out to an external `hermes` CLI (local binary path, `docker exec hermes-agent`, or PATH lookup) — all three are structurally unreachable from inside `antigravity_core` (no `docker` binary in the image, no docker socket mounted, no such binary present). Every alert had been silently failing since deployment; confirmed live: both a position-open and a stop-loss notification failed the same day (2026-09-03) with no operator-visible error beyond a debug-level log line.
