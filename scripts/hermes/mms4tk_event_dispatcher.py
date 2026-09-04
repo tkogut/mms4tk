@@ -147,6 +147,44 @@ def mark_dispatched(event_id, kanban_task_id=""):
         print(f"ERROR: Failed to mark event #{event_id} dispatched: {e}", file=sys.stderr)
 
 
+def is_actionable_event(event_type: str, initial_status: str) -> bool:
+    """Actionable events require Kanban cards for Hermes AI analysis or HITL review."""
+    return (
+        event_type in ["SCOUT_MODE_ACTIVATED", "HITL_REVIEW", "RISK_ALERT"] or
+        initial_status in ["blocked", "todo"]
+    ) and event_type not in ["POSITION_OPENED", "MULTI_SYMBOL_DIGEST"]
+
+
+def should_send_telegram_directly(event_type: str, is_actionable: bool) -> bool:
+    """Whether THIS dispatcher should push a Telegram alert via `hermes send --to
+    telegram` for the given event — ONLY for event types that have NO other
+    Telegram channel. MULTI_SYMBOL_DIGEST is handled by its dedicated digest cron
+    job; SCOUT_MODE_ACTIVATED/HITL_REVIEW/RISK_ALERT have no direct alerting path
+    elsewhere, so this dispatcher stays their sole channel.
+
+    2026-09-04: POSITION_OPENED and STALE_POSITION_FORCE_CLOSE were REMOVED from
+    this list — mms4tk's own daemon.py/hermes_webhook.py already send these
+    immediately via TelegramQueueManager's direct Bot API dispatch (fixed the
+    same day; the old CLI-based path was silently failing before that, which is
+    why this duplication was never noticed). Leaving them here would send the
+    SAME event twice: once immediately, once again whenever this cron polls
+    webhook_events. `TAKE_PROFIT` was already dead code (the real event_type is
+    `TAKE_PROFIT_OPPOSITE_BAND`, which never matched this literal string) and is
+    left out for the same reason, not re-added — do not "fix" that string match
+    without first checking whether `emit_take_profit_event()`'s direct send
+    should stay the sole channel for that event too (it should, per the same
+    reasoning above).
+    """
+    return (
+        event_type in [
+            "SCOUT_MODE_ACTIVATED",
+            "HITL_REVIEW",
+            "RISK_ALERT",
+        ]
+        or is_actionable
+    )
+
+
 def main():
     events = fetch_pending_events()
     if not events:
@@ -160,11 +198,7 @@ def main():
         event_body = event.get("body", "")
         print(f"Processing event #{event_id}: {event_title}")
 
-        # Actionable events require Kanban cards for Hermes AI analysis or HITL review
-        is_actionable = (
-            event_type in ["SCOUT_MODE_ACTIVATED", "HITL_REVIEW", "RISK_ALERT"] or
-            event.get("initial_status") in ["blocked", "todo"]
-        ) and event_type not in ["POSITION_OPENED", "MULTI_SYMBOL_DIGEST"]
+        is_actionable = is_actionable_event(event_type, event.get("initial_status"))
 
         task_id = "telegram_only"
         if is_actionable:
@@ -178,22 +212,7 @@ def main():
         mark_dispatched(event_id, task_id)
         dispatched_count += 1
 
-        # Send Telegram alert via hermes send --to telegram for trade and system events
-        # Note: MULTI_SYMBOL_DIGEST is handled by its dedicated digest cron job
-        should_send_telegram = (
-            event_type in [
-                "POSITION_OPENED",
-                "STOP_LOSS",
-                "TAKE_PROFIT",
-                "STALE_POSITION_FORCE_CLOSE",
-                "SCOUT_MODE_ACTIVATED",
-                "HITL_REVIEW",
-                "RISK_ALERT",
-            ]
-            or is_actionable
-        )
-
-        if should_send_telegram:
+        if should_send_telegram_directly(event_type, is_actionable):
             try:
                 alert_msg = f"{event_title}\n\n{event_body}"
                 hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
