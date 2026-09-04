@@ -6,7 +6,16 @@ and deduplication to prevent flood and duplicate alerts.
 
 Design: Uses a thread-safe stdlib queue (not asyncio.PriorityQueue) so it
 can be safely enqueued from both sync and async contexts. A background
-thread drains the queue and dispatches via Hermes CLI.
+thread drains the queue and dispatches directly via the Telegram Bot API.
+
+2026-09-04 fix: dispatch previously ONLY shelled out to an external "hermes" CLI
+(local binary path, `docker exec hermes-agent`, or PATH lookup) — all three are
+structurally unreachable from inside this container (no `docker` binary, no
+docker socket mounted, no such binary present), so every alert had been silently
+failing since deployment (confirmed: both an entry and a stop-loss notification
+failed the same day). Dispatch now calls `api.telegram.org` directly first, using
+`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (already present as env vars) — the
+old CLI candidates are kept as a fallback only, never as the primary path.
 """
 
 import os
@@ -18,6 +27,8 @@ import threading
 import queue as stdlib_queue
 from typing import Optional, Dict
 from dataclasses import dataclass, field
+
+import httpx
 
 logger = logging.getLogger("mms4tk.telegram_queue")
 
@@ -128,9 +139,44 @@ class TelegramQueueManager:
 
         return True
 
+    def _send_via_bot_api(self, notify_msg: str) -> bool:
+        """Dispatch directly via `api.telegram.org` — no subprocess, no dependency
+        on another container's CLI/binary being reachable from this one. Requires
+        `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (both plain env vars, R-SEC-01:
+        read via os.getenv only, never logged — even a failure response body is
+        truncated before logging so a token accidentally echoed by Telegram's own
+        error message can't leak into the logs)."""
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("chat_id")
+        if not token or not chat_id:
+            logger.debug("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured — skipping direct Bot API dispatch.")
+            return False
+        try:
+            resp = httpx.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": notify_msg[:4096]},  # Telegram's own message length cap
+                timeout=10.0,
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                return True
+            logger.debug(f"Telegram Bot API dispatch failed (status={resp.status_code}): {resp.text[:120]}")
+            return False
+        except Exception as e:
+            logger.debug(f"Telegram Bot API dispatch raised: {type(e).__name__}: {e}")
+            return False
+
     def _send_now(self, title: str, body: str) -> bool:
-        """Synchronously dispatch delivery via Hermes CLI."""
+        """Synchronously dispatch delivery — direct Telegram Bot API first, then the
+        legacy Hermes CLI candidates as a fallback (kept in case a future
+        environment makes them reachable again; they are NOT expected to work in
+        the current container setup — see module docstring)."""
         notify_msg = f"{title}\n\n{body}".strip()
+
+        if self._send_via_bot_api(notify_msg):
+            logger.info(f"Telegram alert dispatched via Bot API: {title[:40]}")
+            self._last_send_time = time.time()
+            return True
+
         hermes_cli = os.getenv("HERMES_CLI_PATH", "/docker/hermes-agent/bin/hermes")
         cmd_candidates = []
         if os.path.exists(hermes_cli):
