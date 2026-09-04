@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.44.1] - 2026-09-04
+
+### 🐛 Telegram Alerts Fixed: Direct Bot API Dispatch
+- 🔎 **Root cause**: `telegram_queue.py` only shelled out to an external `hermes` CLI (local binary path, `docker exec hermes-agent`, or PATH lookup) — all three are structurally unreachable from inside `antigravity_core` (no `docker` binary in the image, no docker socket mounted, no such binary present). Every alert had been silently failing since deployment; confirmed live: both a position-open and a stop-loss notification failed the same day (2026-09-03) with no operator-visible error beyond a debug-level log line.
+- 🔧 **Fix**: `_send_now()` now dispatches directly via `api.telegram.org`'s Bot API first (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, both plain env vars, `httpx`, no subprocess) — the legacy CLI candidates remain only as a fallback, never the primary path. Falls back to the lowercase `chat_id` env var too, for a value set under that name before the convention was corrected.
+- 🧪 **7 new tests** (`tests/test_telegram_queue.py`): missing-credentials no-op, successful dispatch, lowercase-env-var fallback, Telegram error response, network exception, confirms the CLI subprocess is never invoked when the Bot API succeeds, confirms the CLI fallback still fires when it doesn't.
+
+---
+
 ## 🚀 [0.44.0] - 2026-09-02
 
 ### 🧪 Backtest Engine: HIGH_RISK_ADD (Addon) Fidelity (PR 2/3)
