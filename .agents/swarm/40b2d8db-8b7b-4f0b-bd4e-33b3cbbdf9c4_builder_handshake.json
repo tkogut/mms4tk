@@ -1,0 +1,16 @@
+{
+  "conversation_id": "40b2d8db-8b7b-4f0b-bd4e-33b3cbbdf9c4",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "scripts/hermes/mms4tk_event_dispatcher.py",
+    "tests/test_hermes_event_dispatcher.py",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-09-04T14:06:06Z",
+  "notes": "Removed POSITION_OPENED and STALE_POSITION_FORCE_CLOSE from Hermes dispatcher's Telegram send list to eliminate duplicate alerts now that mms4tk sends both directly via Bot API (v0.44.1). Extracted routing logic into testable functions, added 21 tests."
+}
