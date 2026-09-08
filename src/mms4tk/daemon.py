@@ -147,8 +147,14 @@ class MMS4Daemon:
         self.total_max_portfolio_margin_usd: float = (
             float(_env_margin_cap) if _env_margin_cap is not None else 300.0
         )
+        # get_setting()'s documented contract is Optional[str] — checking isinstance
+        # rather than just "is not None" matters here: a bare unittest.mock.MagicMock()
+        # passed as logger_db in tests (several construct MMS4Daemon() this way) auto-
+        # fabricates a non-None return for any attribute access, and float() coerces a
+        # MagicMock without raising (it defines __float__), so a naive "not None" check
+        # would silently adopt a bogus cap from an unconfigured mock.
         _db_margin_cap = self.logger_db.get_setting("total_max_portfolio_margin_usd")
-        if _db_margin_cap is not None:
+        if isinstance(_db_margin_cap, str):
             try:
                 self.total_max_portfolio_margin_usd = float(_db_margin_cap)
             except (TypeError, ValueError):

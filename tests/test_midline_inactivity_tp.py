@@ -187,6 +187,10 @@ def test_tp_midline_ledger_fail_closed(tmp_path):
 def test_midline_tp_hard_sl_preservation(tmp_path):
     """Midline TP scales SL order size while preserving exact 2.0% stop loss distance."""
     db = LoggerDB(db_path=os.path.join(tmp_path, "daemon_tp.db"))
+    # Audit P9.1 (2026-09-08): midline_partial_tp_enabled now defaults to False
+    # (rejected 6/6 in backtest) — this test specifically exercises the feature, so
+    # it must opt in explicitly rather than rely on the old fail-open default.
+    db.set_setting("midline_partial_tp_enabled", "true")
     sm = MMS4StateManager(trading_symbol="ETH/USDC")
     
     ex = MagicMock(spec=OKXExecutor)
