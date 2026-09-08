@@ -105,14 +105,12 @@ def test_post_emergency_killall_endpoint(client: TestClient):
 
 
 def test_post_emergency_reverse_endpoint(client: TestClient):
-    """Validate POST /api/v1/emergency/reverse executes emergency position reversal."""
+    """Validate POST /api/v1/emergency/reverse fails closed (audit P9.3, 2026-09-08):
+    not yet implemented, so it always refuses with 501 rather than reporting a fake
+    success."""
     response = client.post("/api/v1/emergency/reverse", headers=AUTH_HEADERS)
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert "message" in data
-    assert "action_taken" in data
-    assert "reversed" in data["action_taken"].lower() or "closed" in data["action_taken"].lower()
+    assert response.status_code == 501
+    assert "not implemented" in response.json()["detail"].lower()
 
 
 def test_post_trade_high_risk_add_endpoint(client: TestClient):

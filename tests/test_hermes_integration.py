@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+from fastapi import HTTPException
 from mms4tk.api import (
     app,
     get_health,
@@ -91,11 +92,21 @@ def test_hermes_endpoints_integration():
         assert "message" in kill_res
         assert "action_taken" in kill_res
 
-        # 6. Emergency reverse tool
-        rev_res = await emergency_reverse()
-        assert rev_res["status"] == "success"
-        assert "message" in rev_res
-        assert "action_taken" in rev_res
+        # 6. Emergency reverse tool — fail-closed (audit P9.3, 2026-09-08): not yet
+        # implemented, so the endpoint always raises 501 rather than reporting a
+        # fake success. A bare-bones fake Request stands in for the real ASGI one
+        # this handler gets in production (this test calls handlers directly,
+        # bypassing the FastAPI router entirely).
+        class _FakeRequest:
+            client = None
+            query_params: dict = {}
+
+            async def body(self) -> bytes:
+                return b""
+
+        with pytest.raises(HTTPException) as exc_info:
+            await emergency_reverse(_FakeRequest())
+        assert exc_info.value.status_code == 501
 
         # 7. High risk add tool
         hra_req = HighRiskAddRequest(side="LONG", size=1.5, stop_loss_pct=0.01)

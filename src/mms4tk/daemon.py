@@ -130,11 +130,31 @@ class MMS4Daemon:
         # ── Portfolio Margin Guard (Circuit Breaker) ────────────────────
         # Global cap on total committed margin across ALL symbols.
         # When > 0, the daemon blocks any new entry whose addition would push
-        # the aggregate portfolio notional above this limit.
-        # Set to 0 (default) to disable the guard entirely.
-        self.total_max_portfolio_margin_usd: float = float(
-            os.getenv("MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD", "0")
+        # the aggregate portfolio notional above this limit. Set to 0 to disable.
+        #
+        # Audit P9.2 (2026-09-08): factory default raised 0 -> 300 USD. At current
+        # ~$100 equity / up-to-$300 notional (2x($105+$45)) this cap is inert today,
+        # but it becomes a real brake once the account scales — a guard that blocks
+        # nothing by default is not a guard. Hybrid resolution, hardcoded default
+        # overridable by persisted config: MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD (if
+        # set) replaces the 300 factory default, and a system_settings row (if an
+        # operator has ever explicitly set one via POST /api/v1/settings/update)
+        # wins over both — same precedence every other runtime-tunable parameter in
+        # this daemon already follows (see _get_indicator_params below), so an
+        # operator's own choice always survives a redeploy while a fresh install
+        # still starts with the guard on.
+        _env_margin_cap = os.getenv("MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD")
+        self.total_max_portfolio_margin_usd: float = (
+            float(_env_margin_cap) if _env_margin_cap is not None else 300.0
         )
+        _db_margin_cap = self.logger_db.get_setting("total_max_portfolio_margin_usd")
+        if _db_margin_cap is not None:
+            try:
+                self.total_max_portfolio_margin_usd = float(_db_margin_cap)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"Ignoring invalid persisted total_max_portfolio_margin_usd={_db_margin_cap!r}"
+                )
 
         # Serializes check-then-commit across concurrently running symbol cycles (see
         # reserve_portfolio_margin below) and protects _reserved_notional_usd.

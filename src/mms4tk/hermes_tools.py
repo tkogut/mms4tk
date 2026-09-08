@@ -126,7 +126,7 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "emergency_reverse",
-                    "description": "Emergency position reversal: closes current position and opens opposite position with SL=2%. Requires X-MMS4-API-KEY header.",
+                    "description": "NOT YET IMPLEMENTED (audit P9.3, 2026-09-08) — always returns HTTP 501 and touches no position. Do not rely on this to reverse a position; use emergency_killall to flatten instead. Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
                         "properties": {
