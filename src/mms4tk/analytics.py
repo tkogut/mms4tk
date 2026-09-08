@@ -533,12 +533,17 @@ class MMS4SignalEngine:
                     volatility_ratio=latest_vr
                 )
 
-            if risk_prof == "CONSERVATIVE":
-                lev = min(active_leverage, 0.5)
-            elif risk_prof == "AGGRESSIVE":
-                lev = 2.0 if active_state == MMS4State.BASE_MODE else active_leverage
-            else:
-                lev = active_leverage
+            # Audit P9.6 (2026-09-08): the risk_prof-based `lev` computation formerly
+            # here (CONSERVATIVE -> 0.5x, AGGRESSIVE -> 2.0x in BASE_MODE) was dead AND
+            # wrong: daemon.py never reads SignalResult.leverage — actual order
+            # leverage always comes from alloc['leverage'], which is state_manager.leverage
+            # (BASE_LEVERAGE_BY_PROFILE, resolved in _resolve_leverage: CONSERVATIVE=1.0,
+            # MODERATE=3.0, AGGRESSIVE=10.0 by default) — a DIFFERENT, already-correct
+            # per-profile leverage than the one `lev` computed here. `active_leverage`
+            # (used below) already equals state_manager.leverage, so it already reflects
+            # risk_profile correctly; the local `lev` was a redundant, inconsistent
+            # second calculation that could mislead a future reader into believing it
+            # drove execution. Removed.
 
             # Adaptive Fast-Path: Time-Lock Window (US Open)
             if is_adaptive and is_in_time_lock_window(curr_c.timestamp, params.time_lock_start, params.time_lock_end):
@@ -548,7 +553,7 @@ class MMS4SignalEngine:
                         signal_type="BASE_SHORT",
                         price=curr_c.close,
                         stop_loss=round(curr_c.close * 1.02, 6),
-                        leverage=lev,
+                        leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_SHORT blocked during US Open Time-Lock ({params.time_lock_start}-{params.time_lock_end} UTC): SKIPPED_TIME_LOCK",
                         volatility_ratio=latest_vr
@@ -569,7 +574,7 @@ class MMS4SignalEngine:
                         signal_type="BASE_SHORT",
                         price=curr_c.close,
                         stop_loss=round(curr_c.close * 1.02, 6),
-                        leverage=lev,
+                        leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_SHORT blocked in high volatility expansion (VR {latest_vr:.2f} > {params.adaptive_vr_high:.2f}): no extreme Sweep Rejection wick (SKIPPED_HIGH_VOLATILITY_BASE)",
                         volatility_ratio=latest_vr
@@ -583,7 +588,7 @@ class MMS4SignalEngine:
                         signal_type="BASE_SHORT",
                         price=curr_c.close,
                         stop_loss=round(curr_c.close * 1.02, 6),
-                        leverage=lev,
+                        leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_SHORT blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
                         volatility_ratio=latest_vr
@@ -593,7 +598,7 @@ class MMS4SignalEngine:
                 signal_type="BASE_SHORT",
                 price=curr_c.close,
                 stop_loss=round(curr_c.close * 1.02, 6),
-                leverage=lev,
+                leverage=active_leverage,
                 is_allowed=True,
                 reason="Base SHORT signal: candle hit upper band and closed down" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
                 volatility_ratio=latest_vr
@@ -620,12 +625,8 @@ class MMS4SignalEngine:
                     volatility_ratio=latest_vr
                 )
 
-            if risk_prof == "CONSERVATIVE":
-                lev = min(active_leverage, 0.5)
-            elif risk_prof == "AGGRESSIVE":
-                lev = 2.0 if active_state == MMS4State.BASE_MODE else active_leverage
-            else:
-                lev = active_leverage
+            # Audit P9.6 (2026-09-08): dead `lev` computation removed here too — see
+            # the identical note in the BASE_SHORT branch above.
 
             # Adaptive Fast-Path: High Volatility Expansion (VR > VR_HIGH) — see the
             # BASE_SHORT branch above for full rationale. BASE_LONG has no Time-Lock
@@ -638,7 +639,7 @@ class MMS4SignalEngine:
                         signal_type="BASE_LONG",
                         price=curr_c.close,
                         stop_loss=round(curr_c.close * 0.98, 6),
-                        leverage=lev,
+                        leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_LONG blocked in high volatility expansion (VR {latest_vr:.2f} > {params.adaptive_vr_high:.2f}): no extreme Sweep Rejection wick (SKIPPED_HIGH_VOLATILITY_BASE)",
                         volatility_ratio=latest_vr
@@ -652,7 +653,7 @@ class MMS4SignalEngine:
                         signal_type="BASE_LONG",
                         price=curr_c.close,
                         stop_loss=round(curr_c.close * 0.98, 6),
-                        leverage=lev,
+                        leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_LONG blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
                         volatility_ratio=latest_vr
@@ -662,7 +663,7 @@ class MMS4SignalEngine:
                 signal_type="BASE_LONG",
                 price=curr_c.close,
                 stop_loss=round(curr_c.close * 0.98, 6),
-                leverage=lev,
+                leverage=active_leverage,
                 is_allowed=True,
                 reason="Base LONG signal: candle hit lower band and closed up" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
                 volatility_ratio=latest_vr
