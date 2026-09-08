@@ -626,6 +626,11 @@ class MMS4Daemon:
         next `load_symbols_config()` call (it prefers SQLite whenever any row exists).
         Falls back to `configured_symbols_store` (same-process-lifetime convenience) and
         then to disabled-by-default.
+
+        `high_vol_base_filter_enabled` follows the exact same per-symbol-qualified,
+        default-OFF pattern for the same reason: a backtest audit (2026-09-08) found
+        it makes results worse in most tested half-windows, so it must stay opt-in
+        pending real validation, not silently on for every ADAPTIVE-mode symbol.
         """
         db_settings: Dict[str, str] = {}
         try:
@@ -679,6 +684,7 @@ class MMS4Daemon:
             tma_trend_filter_enabled=_sym_bool("tma_trend_filter_enabled", defaults.tma_trend_filter_enabled),
             tma_slope_lookback=_sym_int("tma_slope_lookback", defaults.tma_slope_lookback),
             tma_slope_threshold=_sym_float("tma_slope_threshold", defaults.tma_slope_threshold),
+            high_vol_base_filter_enabled=_sym_bool("high_vol_base_filter_enabled", defaults.high_vol_base_filter_enabled),
             midline_partial_tp_enabled=_sym_bool("midline_partial_tp_enabled", defaults.midline_partial_tp_enabled),
             midline_tp_fraction=_sym_float("midline_tp_fraction", defaults.midline_tp_fraction),
         )
