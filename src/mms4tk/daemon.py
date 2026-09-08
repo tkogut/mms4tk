@@ -750,7 +750,11 @@ class MMS4Daemon:
         except Exception:
             pass
 
-        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, timeframe=sym_tf, limit=100)
+        # Audit P9.5 (2026-09-08): 100 -> 150. The VR denominator is a 100-period
+        # rolling ATR mean (analytics.py rolling(window=100)); fetching only exactly
+        # 100 candles left just ~86 usable after indicator warmup, shifting the
+        # VR_HIGH/VR_LOW (1.6/0.8) crossover point away from where it was calibrated.
+        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, timeframe=sym_tf, limit=150)
 
         # 2. Evaluate signals with per-symbol state isolation
         sym_state = self.state_manager.get_symbol_state(target_symbol)
