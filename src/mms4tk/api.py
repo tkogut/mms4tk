@@ -153,6 +153,10 @@ class HighRiskAddRequest(BaseModel):
     side: str = Field(default="LONG", description="Order side: LONG or SHORT")
     size: float = Field(default=1.0, description="Position size multiplier or contracts")
     stop_loss_pct: float = Field(default=0.01, description="Tight stop loss percentage (e.g. 0.01 for 1%)")
+    # Audit P9.7 (2026-09-08): was hardcoded to daemon.symbol regardless of caller
+    # intent. Optional and defaulting to daemon.symbol to stay backward compatible
+    # with existing callers that never set it.
+    symbol: Optional[str] = Field(default=None, description="Target symbol; defaults to the daemon's primary symbol")
 
 
 class HighRiskAddResponse(BaseModel):
@@ -503,7 +507,18 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
     """
     High-risk position add (leverage x1, independent ticket) with tight SL=1%.
     Blocked if strategy is in SCOUT_MODE (REDUCED_RISK).
+
+    Audit P9.7 (2026-09-08): this manual path previously (a) always targeted
+    daemon.symbol regardless of req.symbol, (b) never called daemon._record_addon,
+    so the daemon's own automatic Single Addon Guard (daemon.py ~1506) had no record
+    of a manual add and could add again on its own next cycle, and (c) swallowed
+    execute_order's exception in a bare `except` and still reported
+    executed: True/status: success even when the order failed — the same class of
+    bug as P9.3's emergency/reverse. All three fixed here.
     """
+    target_symbol = req.symbol or daemon.symbol
+    pos_side = "long" if req.side.upper() == "LONG" else "short"
+
     if not state_manager.is_high_risk_add_allowed():
         return {
             "status": "rejected",
@@ -512,23 +527,59 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "details": {"current_state": state_manager.current_state.value, "leverage": state_manager.leverage}
         }
 
-    # Execute high risk add order via OKXExecutor
+    # Single Addon Guard: same persisted ledger the daemon's own automatic
+    # HIGH_RISK_ADD path reads/writes (daemon._addon_count / daemon._record_addon),
+    # keyed on (symbol, side, entry_price) — so a manual add here is visible to it.
+    match_entry = 0.0
+    try:
+        live_positions = await executor.fetch_positions()
+        for p in live_positions:
+            p_side = str(p.get("side") or p.get("info", {}).get("posSide") or "").lower()
+            if p.get("symbol") == target_symbol and p_side == pos_side:
+                match_entry = float(p.get("entryPrice") or p.get("info", {}).get("avgPx") or 0.0)
+                break
+    except Exception as e:
+        logger.warning(f"high_risk_add: failed to fetch live positions for {target_symbol}: {e}")
+
+    addons_done = daemon._addon_count(target_symbol, pos_side, match_entry)
+    if addons_done >= 1:
+        return {
+            "status": "rejected",
+            "executed": False,
+            "reason": (
+                f"HIGH_RISK_ADD already executed on this {pos_side.upper()} position for "
+                f"{target_symbol} (entry=${match_entry:,.4f}). Single Addon Guard active."
+            ),
+            "details": {"symbol": target_symbol, "side": pos_side, "entry_price": match_entry}
+        }
+
+    # Execute high risk add order via OKXExecutor. Failure must never be reported as
+    # executed: True/status: success (audit P9.7c / P9.3).
     try:
         await executor.execute_order(
-            symbol=daemon.symbol,
+            symbol=target_symbol,
             side=req.side,
             amount=req.size,
             stop_loss_pct=req.stop_loss_pct,
             leverage=1.0
         )
     except Exception as e:
-        logger.error(f"Error executing high risk add: {e}")
+        logger.error(f"Error executing high risk add for {target_symbol}: {e}")
+        return {
+            "status": "error",
+            "executed": False,
+            "reason": f"High-risk add order failed: {e}",
+            "details": {"symbol": target_symbol, "side": req.side, "size": req.size}
+        }
+
+    daemon._record_addon(target_symbol, pos_side, match_entry)
 
     return {
         "status": "success",
         "executed": True,
         "reason": "High-risk add order placed successfully.",
         "details": {
+            "symbol": target_symbol,
             "side": req.side,
             "size": req.size,
             "stop_loss_pct": req.stop_loss_pct,

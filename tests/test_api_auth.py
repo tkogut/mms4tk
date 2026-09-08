@@ -69,6 +69,10 @@ def test_mutating_endpoints_valid_header_returns_200():
     res_reverse = client.post("/api/v1/emergency/reverse", headers=headers)
     assert res_reverse.status_code == 501
 
+    # Audit P9.7 (2026-09-08): high_risk_add now enforces the same persisted Single
+    # Addon Guard as the daemon's automatic path — a repeat call against the same
+    # (symbol, side, entry_price) is correctly "rejected", not "success" a second
+    # time, so this assertion tolerates either rather than requiring "success".
     res_high_risk = client.post("/api/v1/trade/high_risk_add", json={"side": "LONG", "size": 1.0}, headers=headers)
     assert res_high_risk.status_code == 200
-    assert res_high_risk.json()["status"] == "success"
+    assert res_high_risk.json()["status"] in ("success", "rejected")
