@@ -310,6 +310,121 @@ def test_adaptive_engine_volatility_ratio_high_blocks_addons_long():
     assert sig.volatility_ratio is not None
 
 
+def test_adaptive_engine_high_volatility_requires_extreme_sweep_for_base_short():
+    """In ADAPTIVE mode, VR > adaptive_vr_high blocks BASE_SHORT unless an EXTREME
+    Sweep Rejection wick (>=40%, same bar as Time-Lock) is present. Added after a
+    90-day backtest audit (2026-09-08) found ETH/USDC BASE entries during ATR spikes
+    (band_width 3x+ normal) getting stopped out disproportionately vs BTC/USDC in the
+    same window — the VR filter previously only protected HIGH_RISK_ADD, never BASE."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # Force the high-volatility branch (vr_high=0.1 -> always exceeded); keep
+    # compression/time-lock out of the way so only this filter is under test.
+    params_high_vol = IndicatorParams(
+        engine_mode="ADAPTIVE", adaptive_vr_high=0.1, adaptive_vr_low=0.0,
+        time_lock_start="00:00", time_lock_end="00:01",
+        high_vol_base_filter_enabled=True,
+    )
+
+    # 1. Moderate upper wick: 3.0 / 9.0 = 33.3% -- passes compression's 20% bar but
+    # not the extreme 40% bar this filter requires.
+    candles_mod_wick = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_mod_wick[-2] = Candle(timestamp=23 * 60, open=105.0, high=108.0, low=99.0, close=99.2)
+    candles_mod_wick[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig_blocked = engine.evaluate_signals(candles_mod_wick, sm, params=params_high_vol)
+    assert sig_blocked.signal_type == "BASE_SHORT"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_HIGH_VOLATILITY_BASE" in sig_blocked.reason
+
+    # 2. Extreme upper wick: 8.0 / 9.0 = 88.9% -> allowed
+    candles_extreme_wick = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_extreme_wick[-2] = Candle(timestamp=23 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
+    candles_extreme_wick[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig_allowed = engine.evaluate_signals(candles_extreme_wick, sm, params=params_high_vol)
+    assert sig_allowed.signal_type == "BASE_SHORT"
+    assert sig_allowed.is_allowed is True
+    assert "Base SHORT signal" in sig_allowed.reason
+
+
+def test_adaptive_engine_high_volatility_base_filter_disabled_by_default():
+    """high_vol_base_filter_enabled defaults to False (like tma_trend_filter_enabled)
+    — a backtest audit (2026-09-08) found the filter itself makes results worse in
+    3 of 4 tested half-windows, so it must stay opt-in, unvalidated-by-default, exactly
+    like the trend filter's own history. The SAME moderate-wick candle that gets
+    blocked when the flag is explicitly on (test above) must be ALLOWED when it is
+    left at its default, even though VR is still > adaptive_vr_high."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    params_default = IndicatorParams(
+        engine_mode="ADAPTIVE", adaptive_vr_high=0.1, adaptive_vr_low=0.0,
+        time_lock_start="00:00", time_lock_end="00:01",
+        # high_vol_base_filter_enabled intentionally omitted -> must default to False
+    )
+    assert params_default.high_vol_base_filter_enabled is False
+
+    candles_mod_wick = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_mod_wick[-2] = Candle(timestamp=23 * 60, open=105.0, high=108.0, low=99.0, close=99.2)
+    candles_mod_wick[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig = engine.evaluate_signals(candles_mod_wick, sm, params=params_default)
+    assert sig.signal_type == "BASE_SHORT"
+    assert sig.is_allowed is True
+    assert "Base SHORT signal" in sig.reason
+
+
+def test_adaptive_engine_high_volatility_requires_extreme_sweep_for_base_long():
+    """LONG mirror of the high-volatility test above — BASE_LONG has its own,
+    separately-coded high-volatility branch (no Time-Lock filter to interleave with,
+    since that one only ever applied to BASE_SHORT per MMS v4 spec)."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    params_high_vol = IndicatorParams(
+        engine_mode="ADAPTIVE", adaptive_vr_high=0.1, adaptive_vr_low=0.0,
+        time_lock_start="00:00", time_lock_end="00:01",
+        high_vol_base_filter_enabled=True,
+    )
+
+    # 1. Moderate lower wick: 3.0 / 9.0 = 33.3% -> blocked
+    candles_mod_wick = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_mod_wick[-2] = Candle(timestamp=23 * 60, open=95.0, high=101.0, low=92.0, close=100.8)
+    candles_mod_wick[-1] = Candle(timestamp=24 * 60, open=100.8, high=101.0, low=100.5, close=100.9)
+
+    sig_blocked = engine.evaluate_signals(candles_mod_wick, sm, params=params_high_vol)
+    assert sig_blocked.signal_type == "BASE_LONG"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_HIGH_VOLATILITY_BASE" in sig_blocked.reason
+
+    # 2. Extreme lower wick: 8.0 / 9.0 = 88.9% -> allowed
+    candles_extreme_wick = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_extreme_wick[-2] = Candle(timestamp=23 * 60, open=100.0, high=101.0, low=92.0, close=100.8)
+    candles_extreme_wick[-1] = Candle(timestamp=24 * 60, open=100.8, high=101.0, low=100.5, close=100.9)
+
+    sig_allowed = engine.evaluate_signals(candles_extreme_wick, sm, params=params_high_vol)
+    assert sig_allowed.signal_type == "BASE_LONG"
+    assert sig_allowed.is_allowed is True
+    assert "Base LONG signal" in sig_allowed.reason
+
+
 def test_adaptive_engine_volatility_ratio_low_requires_sweep_rejection():
     """In ADAPTIVE mode, VR < adaptive_vr_low blocks base entries unless Sweep Rejection is present."""
     engine = MMS4SignalEngine()

@@ -130,6 +130,18 @@ class IndicatorParams(BaseModel):
     tma_slope_lookback: int = 5
     tma_slope_threshold: float = 0.002
 
+    # ── High Volatility Base-Entry Filter ──
+    # Reuses adaptive_vr_high (no separate threshold) — requires an EXTREME sweep
+    # rejection wick for BASE_SHORT/BASE_LONG when VR > adaptive_vr_high, same bar as
+    # the Time-Lock filter. Added 2026-09-08 after a backtest audit found ETH/USDC BASE
+    # entries during ATR spikes getting stopped out disproportionately vs BTC/USDC.
+    # Per-symbol, default OFF: a follow-up 90-day backtest of the filter ITSELF found it
+    # made results worse in 3 of 4 tested half-windows (BTC H1, ETH H1, ETH H2's PnL) —
+    # do not enable without running it through the same 2-way OOS validation
+    # (train_test_validate-style) that governs tma_trend_filter_enabled before trusting
+    # it on a live account.
+    high_vol_base_filter_enabled: bool = False
+
     # ── Midline Partial Take-Profit (PLAN-009) ──
     midline_partial_tp_enabled: bool = True
     midline_tp_fraction: float = 0.50
@@ -538,6 +550,27 @@ class MMS4SignalEngine:
                         volatility_ratio=latest_vr
                     )
 
+            # Adaptive Fast-Path: High Volatility Expansion (VR > VR_HIGH) — same
+            # confirmation bar as the Time-Lock window above: a mere band touch during
+            # a violent expansion is more likely trend continuation than reversion, so
+            # only an EXTREME sweep-rejection wick (>=40%) overrides the block. Added
+            # after a 90-day backtest audit (2026-09-08) found ETH/USDC BASE entries
+            # during ATR spikes (band_width 3x+ normal) getting stopped out at a
+            # disproportionate rate vs BTC/USDC in the same window — the VR filter
+            # previously only protected HIGH_RISK_ADD, never BASE entries.
+            if is_adaptive and params.high_vol_base_filter_enabled and latest_vr > params.adaptive_vr_high:
+                has_extreme_sweep = check_sweep_rejection(curr_c, "SHORT", extreme=True)
+                if not has_extreme_sweep:
+                    return SignalResult(
+                        signal_type="BASE_SHORT",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * 1.02, 6),
+                        leverage=lev,
+                        is_allowed=False,
+                        reason=f"BASE_SHORT blocked in high volatility expansion (VR {latest_vr:.2f} > {params.adaptive_vr_high:.2f}): no extreme Sweep Rejection wick (SKIPPED_HIGH_VOLATILITY_BASE)",
+                        volatility_ratio=latest_vr
+                    )
+
             # Adaptive Fast-Path: Low Volatility Compression (VR < VR_LOW)
             if is_adaptive and latest_vr < params.adaptive_vr_low:
                 has_sweep = check_sweep_rejection(curr_c, "SHORT", extreme=False)
@@ -589,6 +622,23 @@ class MMS4SignalEngine:
                 lev = 2.0 if active_state == MMS4State.BASE_MODE else active_leverage
             else:
                 lev = active_leverage
+
+            # Adaptive Fast-Path: High Volatility Expansion (VR > VR_HIGH) — see the
+            # BASE_SHORT branch above for full rationale. BASE_LONG has no Time-Lock
+            # window (that filter only ever applied to BASE_SHORT per MMS v4 spec), so
+            # this is the first adaptive check on this side.
+            if is_adaptive and params.high_vol_base_filter_enabled and latest_vr > params.adaptive_vr_high:
+                has_extreme_sweep = check_sweep_rejection(curr_c, "LONG", extreme=True)
+                if not has_extreme_sweep:
+                    return SignalResult(
+                        signal_type="BASE_LONG",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * 0.98, 6),
+                        leverage=lev,
+                        is_allowed=False,
+                        reason=f"BASE_LONG blocked in high volatility expansion (VR {latest_vr:.2f} > {params.adaptive_vr_high:.2f}): no extreme Sweep Rejection wick (SKIPPED_HIGH_VOLATILITY_BASE)",
+                        volatility_ratio=latest_vr
+                    )
 
             # Adaptive Fast-Path: Low Volatility Compression (VR < VR_LOW)
             if is_adaptive and latest_vr < params.adaptive_vr_low:
