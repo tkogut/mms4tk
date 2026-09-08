@@ -34,7 +34,12 @@ def get_api_key() -> str:
                                 return val
             except Exception:
                 pass
-    return "acd0f0c03314502a7bf9447956054bb86cd43abb86786b84ba67a6ba9cdb604b"
+    print(
+        "⚠️ MMS4_API_KEY not found in env or any .env candidate path — "
+        "requests will be sent unauthenticated and the API will reject them.",
+        file=sys.stderr,
+    )
+    return ""
 
 
 BASE = os.environ.get("MMS4TK_BASE_URL", "http://antigravity_core:8000")
