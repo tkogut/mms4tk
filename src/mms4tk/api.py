@@ -1219,6 +1219,7 @@ class AddSymbolRequest(BaseModel):
     tma_trend_filter_enabled: bool = Field(default=False, description="PLAN-008 Ph3: block counter-trend BASE entries via TMA slope (per-symbol — calibration showed this helps some symbols and hurts others)")
     tma_slope_lookback: int = Field(default=5, description="PLAN-008 Ph3: candles over which TMA slope (pct_change) is measured")
     tma_slope_threshold: float = Field(default=0.002, description="PLAN-008 Ph3: |TMA slope| above which a counter-trend BASE entry is blocked")
+    high_vol_base_filter_enabled: bool = Field(default=False, description="Require an extreme sweep-rejection wick for BASE entries when VR > adaptive_vr_high (reuses that threshold, no separate one). Per-symbol, default OFF — a 2026-09-08 backtest found it worsens results in most tested windows; do not enable without re-validating.")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -1233,7 +1234,11 @@ def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
     did, 2026-08-29) silently disagree with what the engine actually uses whenever a
     value was written straight to `system_settings` without also updating the
     in-memory store. Mirror the exact same fallback chain here so the API/UI can
-    never again show a different trend-filter state than the live engine."""
+    never again show a different trend-filter state than the live engine.
+
+    Also carries `high_vol_base_filter_enabled` (same per-symbol-qualified pattern,
+    default OFF, added 2026-09-08) — kept in this helper rather than a new one since
+    it's the exact same read/fallback shape, not a separate filter family."""
     db_settings = logger_db.get_all_settings()
 
     def _qualified_bool(key: str, fallback: bool) -> bool:
@@ -1258,6 +1263,7 @@ def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
         "tma_trend_filter_enabled": _qualified_bool("tma_trend_filter_enabled", False),
         "tma_slope_lookback": _qualified_int("tma_slope_lookback", 5),
         "tma_slope_threshold": _qualified_float("tma_slope_threshold", 0.002),
+        "high_vol_base_filter_enabled": _qualified_bool("high_vol_base_filter_enabled", False),
     }
 
 
@@ -1295,6 +1301,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "tma_trend_filter_enabled": trend_filter["tma_trend_filter_enabled"],
             "tma_slope_lookback": trend_filter["tma_slope_lookback"],
             "tma_slope_threshold": trend_filter["tma_slope_threshold"],
+            "high_vol_base_filter_enabled": trend_filter["high_vol_base_filter_enabled"],
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -1339,10 +1346,12 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
         "tma_trend_filter_enabled": bool(req.tma_trend_filter_enabled),
         "tma_slope_lookback": int(req.tma_slope_lookback),
         "tma_slope_threshold": float(req.tma_slope_threshold),
+        "high_vol_base_filter_enabled": bool(req.high_vol_base_filter_enabled),
     }
     save_symbols_config(configured_symbols_store)
 
-    # PLAN-008 Phase 3: persist the trend-filter fields into system_settings under a
+    # PLAN-008 Phase 3: persist the trend-filter fields (plus high_vol_base_filter_
+    # enabled, same shape, added 2026-09-08) into system_settings under a
     # per-symbol-qualified key. The `symbol_configurations` SQLite table has a fixed
     # schema (symbol, is_active, allocation_usd, base_ratio, add_ratio, timeframe) with
     # no column for these — writing only to configured_symbols_store/symbols.json would
@@ -1355,6 +1364,7 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
                 f"tma_trend_filter_enabled:{formatted_sym}": bool(req.tma_trend_filter_enabled),
                 f"tma_slope_lookback:{formatted_sym}": int(req.tma_slope_lookback),
                 f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
+                f"high_vol_base_filter_enabled:{formatted_sym}": bool(req.high_vol_base_filter_enabled),
             },
             updated_by="api_dashboard",
         )
