@@ -143,7 +143,11 @@ class IndicatorParams(BaseModel):
     high_vol_base_filter_enabled: bool = False
 
     # ── Midline Partial Take-Profit (PLAN-009) ──
-    midline_partial_tp_enabled: bool = True
+    # Audit P9.1 (2026-09-08): default False. This feature was rejected 6/6 in
+    # backtest (CHANGELOG 0.42.1) and every other rejected filter in this module
+    # defaults to False — this one was the sole fail-open exception, silently
+    # re-enabling itself on any fresh deploy with no explicit system_settings entry.
+    midline_partial_tp_enabled: bool = False
     midline_tp_fraction: float = 0.50
 
 

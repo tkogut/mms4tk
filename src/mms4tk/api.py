@@ -908,7 +908,10 @@ async def get_settings() -> Dict[str, Any]:
         "adaptive_vr_low": float(db_settings.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
         "time_lock_start": db_settings.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_settings.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
-        "midline_partial_tp_enabled": str(db_settings.get("midline_partial_tp_enabled", "true")).strip().lower() in ("true", "1", "yes", "on"),
+        # Audit P9.1 (2026-09-08): default "false" — rejected 6/6 in backtest (CHANGELOG
+        # 0.42.1); a fresh deploy with no explicit system_settings entry must not silently
+        # re-enable it.
+        "midline_partial_tp_enabled": str(db_settings.get("midline_partial_tp_enabled", "false")).strip().lower() in ("true", "1", "yes", "on"),
         "midline_tp_fraction": float(db_settings.get("midline_tp_fraction", 0.50)),
     }
 
@@ -1042,7 +1045,8 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         "time_lock_start": db_current.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_current.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
         "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
-        "midline_partial_tp_enabled": str(db_current.get("midline_partial_tp_enabled", "true")).strip().lower() in ("true", "1", "yes", "on"),
+        # Audit P9.1 (2026-09-08): default "false" — see get_settings() above for rationale.
+        "midline_partial_tp_enabled": str(db_current.get("midline_partial_tp_enabled", "false")).strip().lower() in ("true", "1", "yes", "on"),
         "midline_tp_fraction": float(db_current.get("midline_tp_fraction", 0.50)),
     }
 
