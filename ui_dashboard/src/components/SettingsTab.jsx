@@ -15,7 +15,8 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   const [timeLockStart, setTimeLockStart] = useState(daemonData?.time_lock_start || '13:30');
   const [timeLockEnd, setTimeLockEnd] = useState(daemonData?.time_lock_end || '14:30');
   const [portfolioMarginCap, setPortfolioMarginCap] = useState(daemonData?.total_max_portfolio_margin_usd ?? 0);
-  const [midlinePartialTpEnabled, setMidlinePartialTpEnabled] = useState(daemonData?.midline_partial_tp_enabled ?? true);
+  // Audit P9.1 (2026-09-08): default false — rejected 6/6 in backtest (CHANGELOG 0.42.1).
+  const [midlinePartialTpEnabled, setMidlinePartialTpEnabled] = useState(daemonData?.midline_partial_tp_enabled ?? false);
   const [midlineTpFraction, setMidlineTpFraction] = useState(daemonData?.midline_tp_fraction ?? 0.50);
 
   // ── Margin & Symbol Allocations for Quick Presets ──

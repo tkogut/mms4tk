@@ -1,81 +1,110 @@
-# 📋 TASK BACKLOG: PLAN-010 (v2.0) — Mechanizm Rekalibracji Filtra Trendu (OOS & Cache)
+# 📋 TASK BACKLOG: Etap 0 — P9 (Higiena) + P7 (Naprawa parametrów silnika rekalibracji)
 
-**Status:** Plan Approved / Ready for Builder  
-**Standard:** AGENTS-OS v6.5 Swarm / MMS4 Strict Compliance  
-**Target Version:** v0.43.0  
-**Git Worktree Target:** `tmp/worktrees/feat-plan-010-trend-filter-recalibration`  
+**Status:** P9 (TICKET-P9.1 do P9.7) ZAIMPLEMENTOWANE i przetestowane — 294/294 testów
+PASS. P7 (TICKET-P7.1) celowo NIERUSZANE, poza zatwierdzonym zakresem tej tury
+("Ticketów 1 do 7" = P9). Decyzje architektoniczne dla P9.2/P9.3 zatwierdzone przez
+usera (patrz commity `21ec44b`). P9.6 miało konflikt ze świadomym testem
+(`test_risk_profile_leverage_modulation`) — rozstrzygnięty przez usera: usunięto martwy
+kod, zaktualizowano test.
+**Źródło:** `docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md`, sekcje P7, P9, §5
+**Standard:** AGENTS-OS v6.5 Swarm / MMS4 Strict Compliance
+**Git Worktree:** `tmp/worktrees/feature/p9-hygiene-p7-recalibration-params`
 
 ---
 
 ## 🎯 Cel
-Zaprojektowanie i wdrożenie produkcyjnego mechanizmu rekalibracji filtra trendu (TMA Slope), eliminującego ryzyko overfittingu poprzez dwukierunkowy podział danych 2-way OOS (H1 $\leftrightarrow$ H2), lokalny cache świec w SQLite (`ohlcv_cache`), asynchroniczne kolejkowanie zadań (`ProcessPoolExecutor`) oraz interfejs React z procedurą Human-in-the-Loop (blokada automatycznego włączania).
+
+Zrealizować **Etap 0** z rekomendowanej kolejności audytu (§5): P9 (7 poprawek
+higienicznych) + P7 (naprawa parametrów silnika rekalibracji). Oba elementy dzieli
+wspólna cecha — **żaden nie wymaga backtestu ani nowej hipotezy**, to naprawy
+poprawności (kod robi coś innego, niż twierdzi jego własna dokumentacja/UI) lub
+bezpieczniki. P7 dodatkowo **warunkuje zaufanie do całej reszty audytu** — bez niego
+każdy przyszły werdykt PLAN-010 jest wyprodukowany dla nieistniejącej konfiguracji.
+
+**Ten dokument to breakdown na tickety do dyskusji architektonicznej — nie zlecenie
+implementacji.** Nikt nie zaczyna kodować, dopóki nie padnie wyraźna zgoda.
 
 ---
 
-## 🏗️ Jednostki Operacyjne Backlogu (Developer Tickets)
+## 🏗️ Jednostki Operacyjne Backlogu
 
-### 🔹 FAZA 1: Cache Danych i Spójność API (Tickets 1–2)
+### 🔹 FAZA 0a: P9 — Higiena i bezpieczeństwo (7 ticketów, każdy niezależny)
 
-#### 🔹 TICKET-1: Tabela `ohlcv_cache` w SQLite & Paginowane Pobieranie Świec
-- **Pliki docelowe:** `src/mms4tk/logger_db.py`, `src/mms4tk/okx_executor.py`
-- **Wymagania:**
-  1. Inicjalizacja tabeli `ohlcv_cache` w SQLite (`PRIMARY KEY (symbol, timeframe, timestamp)`).
-  2. Implementacja metod `LoggerDB.save_candles()`, `LoggerDB.get_cached_candles()`, `LoggerDB.get_latest_cached_timestamp()`.
-  3. W `OKXExecutor`: implementacja `fetch_candles_paginated(symbol, timeframe, lookback_days=90)` — odczytuje cache i dociąga z OKX jedynie brakujące najnowsze świece, omijając limity zapytań (Rate Limits).
+#### ✅ DONE (dcdd33b) TICKET-P9.1: `midline_partial_tp_enabled` default → `False`
+- **Pliki:** `src/mms4tk/analytics.py:146`, `src/mms4tk/api.py:911`, `src/mms4tk/api.py:1045`, `ui_dashboard/src/components/SettingsTab.jsx:18`
+- **Dowód:** audyt §1.6 — funkcja odrzucona 6/6 (CHANGELOG 0.42.1) jest dziś fail-open: świeży deploy bez jawnego wpisu w `system_settings` włącza ją z powrotem. Wszystkie inne odrzucone filtry mają default `False`.
+- **Zakres:** zmiana jednej wartości domyślnej w 4 miejscach, spójnie.
 
-#### 🔹 TICKET-2: Likwidacja Rozjazdu Parametrów Filtra w API
-- **Pliki docelowe:** `src/mms4tk/api.py`, `src/mms4tk/daemon.py`
-- **Wymagania:**
-  1. W `GET /api/v1/symbols`: odczyt `tma_trend_filter_enabled`, `tma_slope_lookback`, `tma_slope_threshold` bezpośrednio z `system_settings` (SSOT), eliminując cichą rozbieżność z konfiguracją daemona.
-  2. W `POST /api/v1/symbols/update`: spójna aktualizacja obu warstw.
+#### ✅ DONE (21ec44b, 4f1c8b2) TICKET-P9.2: Portfolio Margin Guard — ustawić `total_max_portfolio_margin_usd`
+- **Pliki:** dane operacyjne w `system_settings` (nie kod — `daemon.py:150-173`/`api.py:941-949` już poprawne i kompletne, w tym zamknięcie race'u)
+- **Dowód:** audyt §4 poz. 21 — dziś `total_max_portfolio_margin_usd = 0.0` → guard jest de facto wyłączony. Przy notional 2×($105+$45)=$300 na $100 equity próg rzędu 300-400 USD nic dziś nie blokuje, ale jest twardym hamulcem przy skalowaniu konta.
+- **⚠️ Otwarte pytanie do architektury:** to nie jest zmiana kodu, tylko wartości konfiguracyjnej — czy ustawiamy ją operacyjnie (API/DB), czy zmieniamy fabryczny default w `daemon.py:135`? Audyt nie podaje jednej twardej liczby (mówi "300-400"), więc dokładną wartość i miejsce ustawienia trzeba uzgodnić przed implementacją.
 
----
+#### ✅ DONE (21ec44b) TICKET-P9.3: Naprawić `/api/v1/emergency/reverse` (dziś pusty stub)
+- **Plik:** `src/mms4tk/api.py:457-467`
+- **Dowód:** audyt §1.9f — endpoint dziś zwraca `"success"` i nic nie robi. To "najgroźniejszy rodzaj buga" — raportowanie nieprawdy o zamknięciu pozycji w ścieżce awaryjnej.
+- **Zakres (do wyboru na dyskusji):** (a) zaimplementować faktyczne odwrócenie pozycji, albo (b) zwracać `501 Not Implemented` do czasu implementacji. Ten sam problem dotyczy `killall` — sprawdzić analogicznie: albo zamyka pozycje, albo przestaje to twierdzić.
 
-### 🔹 FAZA 2: Silnik OOS i Asynchroniczne API (Tickets 3–4)
+#### ✅ DONE (5c2cbf6) TICKET-P9.4: Rozszerzyć `HigherTimeframeResponse` o pola volatility
+- **Plik:** `src/mms4tk/api.py` (response model), `src/mms4tk/analytics.py` (już liczy te wartości)
+- **Pola do dodania:** `volatility_zone`, `is_volatility_expansion`, `atr_d1_expansion_threshold`
+- **Dowód:** audyt §1.3 pkt 1 — dane są liczone w `analytics.py` i dziś odfiltrowywane przez `response_model` w `api.py:509`. Zero wpływu na egzekucję, ale prerekwizyt dla P5 (krok 0) z dalszej kolejności audytu.
 
-#### 🔹 TICKET-3: Produkcyjny Silnik Symulacyjny & 2-Way OOS Validation
-- **Plik docelowy:** `src/mms4tk/backtest_engine.py`
-- **Wymagania:**
-  1. Integracja produkcyjnych klas: `TMAIndicator`, `MMS4SignalEngine`, `MMS4InactivityManager`.
-  2. Wierna Maszyna Stanów: zrzut lewaru do `SCOUT_MODE (x0.1)` po uderzeniu w 2% SL, bezwzględna blokada dokładek (`add = False`) w trybie Scout, powrót do `BASE_MODE (x1.0)` wyłącznie po 100% zamknięciu z zyskiem netto.
-  3. Obsługa Dual-Stage TP (T1 50% Midline, Profit Stall Gate 4 świece, negacja Fib 38.2%).
-  4. Dwukierunkowa walidacja 2-way OOS (okno 90 dni, podział H1/H2):
-     - Siatka parametrów: lookback $\in [3, 5, 8, 13]$, threshold $\in [0.0010, 0.0015, 0.0020, 0.0030]$.
-     - Werdykt `VALIDATED` tylko jeśli kandydat bije baseline pod kątem Net PnL i R:R w OBU kierunkach niezależnie.
-     - W przeciwnym razie: `OVERFIT_REJECTED`.
+#### ✅ DONE (1597d2e) TICKET-P9.5: Podnieść `limit=100` → `limit=150` w `daemon.py:733`
+- **Plik:** `src/mms4tk/daemon.py:733`
+- **Dowód:** audyt §1.9h — VR (Volatility Ratio) ma dziś mianownik liczony z ~86 okresów zamiast 100 (bo pobierane jest tylko 100 świec, a część idzie na rozgrzewkę wskaźnika), co przesuwa punkt przecięcia progów 1.6/0.8 właśnie wykalibrowanych w innym miejscu audytu.
 
-#### 🔹 TICKET-4: Zarządzanie Zadaniami Asynchronicznymi (`ProcessPoolExecutor`)
-- **Pliki docelowe:** `src/mms4tk/api.py`, `src/mms4tk/logger_db.py`
-- **Wymagania:**
-  1. Utworzenie tabeli `recalibration_jobs` w SQLite (job_id, symbol, status, verdict, candidate_params, h1_metrics, h2_metrics, baseline_metrics, created_at, completed_at, applied_at).
-  2. Endpoint `POST /api/v1/symbols/{symbol}/recalibrate` zwracający natychmiast `202 Accepted` z `job_id`, wykonujący obliczenia w `ProcessPoolExecutor`.
-  3. Endpoint `GET /api/v1/recalibration/jobs/{job_id}` do pollingu stanu.
-  4. Endpoint `GET /api/v1/symbols/{symbol}/recalibration-status` zwracający podsumowanie ostatniego zadania.
-  5. Endpoint `POST /api/v1/symbols/{symbol}/recalibration/apply` do jawnego zaaplikowania parametrów przez operatora.
+#### ✅ DONE (c5e1545) TICKET-P9.6: Usunąć martwe `lev` z `analytics.py:532-537`, `:619-624`
+- **Plik:** `src/mms4tk/analytics.py`
+- **Dowód:** audyt §1.9b / §4 poz. 19 — wartości nieużywane w praktyce (`daemon.py` bierze lewar ze `state_manager`, nie stąd), a układ `AGGRESSIVE(2.0) < MODERATE(3.0)` jest mylący dla każdego przyszłego czytelnika, bo sugeruje odwrotną hierarchię ryzyka niż faktycznie obowiązująca.
+
+#### ✅ DONE (8b0a993) TICKET-P9.7: `high_risk_add` — wołać `_record_addon`, gate per-symbol, nie łykać wyjątków
+- **Plik:** `src/mms4tk/api.py:470`
+- **Dowód:** audyt §1.9g — dzisiejsza implementacja omija Single Addon Guard i raportuje `executed: True` nawet gdy w środku wystąpił wyjątek połknięty przez `except`.
 
 ---
 
-### 🔹 FAZA 3: Interfejs React & Human-in-the-Loop (Ticket 5)
+### 🔹 FAZA 0b: P7 — Naprawić parametry silnika rekalibracji 🟠 (SZYBKA WYGRANA, WYSOKI PRIORYTET)
 
-#### 🔹 TICKET-5: Panel Filtra Trendu w `SymbolsTab.jsx`
-- **Plik docelowy:** `ui_dashboard/src/components/SymbolsTab.jsx`
-- **Wymagania:**
-  1. Dodanie dedykowanej sekcji "Filtr Trendu (TMA Slope)" per symbol.
-  2. Wyświetlanie aktualnego stanu filtra, parametrów i daty ostatniej walidacji.
-  3. Przycisk "Rekalibruj (90D OOS)" uruchamiający polling zadania ze wskaźnikiem postępu (*Pending* $\rightarrow$ *Running* $\rightarrow$ *Completed*).
-  4. Prezentacja wyników walidacji: karty porównawcze H1 i H2 vs Baseline.
-  5. **Bramka Bezpieczeństwa:** Przycisk "Zastosuj nowe parametry" renderuje się **wyłącznie** przy statusie `VALIDATED`. Przy `OVERFIT_REJECTED` wyświetlane jest wyraźne czerwone ostrzeżenie bez możliwości aktywacji.
+#### ⏸ NOT STARTED (poza zakresem tej tury) TICKET-P7.1: `train_test_validate` ma czytać VR z `system_settings`, nie z hardcoded defaultów
+- **Plik:** `src/mms4tk/backtest_engine.py:457` (defaulty), `:549` (`run_calibration_job`, wchodzi w default bez `params`)
+- **Dowód:** audyt §1.5 / P7(a) — hardcoded `adaptive_vr_high=1.0, adaptive_vr_low=0.75` to progi już zresetowane na produkcji w tej sesji audytowej. Silnik rekalibracji dziś symuluje strategię, która **już nie istnieje**.
+- **Mechanizm (P7(b)):** nie podnosi PnL bezpośrednio — przywraca wiarygodność jedynego mechanizmu chroniącego strategię przed overfittingiem. Bez tego każdy przyszły werdykt PLAN-010 jest bezwartościowy.
+- **Wzorzec implementacyjny (P7(c)):** czytać `engine_mode`/`adaptive_vr_*`/`time_lock_*` z `system_settings` przez `LoggerDB.get_all_settings()` — dokładnie tak jak `daemon._get_indicator_params` (`daemon.py:678-690`, gotowy wzorzec do skopiowania/reużycia).
+- **Test wymagany:** dwa uruchomienia z jawnie różnymi progami VR muszą dać różne `full_closes` — to jedyny dowód, że parametr faktycznie dotarł do silnika. Dodatkowo assert: `train_test_validate` wywołany bez `params` **nie może** cicho spaść na literały.
+
+**Przy tej samej okazji, ten sam plik (P7 "same file" follow-ons — do decyzji czy wchodzą w ten ticket czy osobny):**
+- Dodać **gate na liczbę transakcji** (nie świec) przed werdyktem `VALIDATED` — dziś jedyne zabezpieczenie to próg 48 świec (`:541`). Rekomendacja audytu: min. 30 `full_closes` per połowa okresu (H1/H2).
+- Zredukować siatkę parametrów do zatwierdzonych **4×4** (zgodnie z `TICKET-3` w starym `task.md`/PLAN-010) zamiast dzisiejszych **64 komórek** — 4× nadmiarowa ekspozycja na multiple testing, albo dodać wymóg płaskowyżu parametrów.
+- Dodać model **Post-SL Cooldown (3 świece)** — audyt §2.1.
+- **Szacowany wysiłek całości P7 wg audytu: ~3h.**
 
 ---
 
-### 🔹 FAZA 4: Test Suite & Weryfikacja SemVer (Ticket 6)
+## ⚠️ Uwaga przekrojowa (z audytu, sekcja końcowa)
 
-#### 🔹 TICKET-6: Adversarial Test Suite & Version Bump
-- **Pliki docelowe:** `tests/test_trend_filter_recalibration.py`, `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `ui_dashboard/package.json`, `CHANGELOG.md`
-- **Wymagania:**
-  1. Testy jednostkowe dla `ohlcv_cache` (zapis, odczyt, incremental delta fetch).
-  2. Testy wierności Maszyny Stanów w `backtest_engine.py` (Scout Mode x0.1 po SL, blokada add-ons).
-  3. Testy dwukierunkowej walidacji OOS (`VALIDATED` vs `OVERFIT_REJECTED`).
-  4. Testy endpointów asynchronicznych i tabeli `recalibration_jobs`.
-  5. 100% zaliczenia pełnej bazy testowej (245+ testów).
-  6. Podbicie wersji do **`v0.43.0`** (MINOR) we wszystkich 5 plikach wersji.
+P9 i P7 to **naprawy poprawności** — kod robi coś innego, niż twierdzi jego własna
+dokumentacja/UI, nie ma tu hipotezy do zwalidowania, jest błąd do usunięcia. To
+odróżnia je od P1/P3 (przywrócenie porzuconej specyfikacji) i od P4/P5/P6/P8 (nowe
+hipotezy optymalizacyjne wymagające pełnej ostrożności backtestowej). **Ten backlog
+celowo nie miesza kategorii** — Etap 0 to wyłącznie P9+P7.
+
+---
+
+## 🔗 Relacja do istniejącego `PLAN-010` / poprzedniego `task.md`
+
+Poprzednia zawartość tego pliku (backlog `PLAN-010 v2.0` — mechanizm rekalibracji
+filtra trendu, 6 ticketów, `.agents/plans/PLAN-010-trend-filter-recalibration-mechanism.md`)
+**nie jest usunięta z historii Git**, tylko zastąpiona w tym pliku — audyt (§1.5)
+stwierdza wprost, że silnik rekalibracji z PLAN-010 symuluje strategię, która już nie
+istnieje (patrz P7 wyżej), więc dokończenie PLAN-010 przed P7 byłoby pracą na
+niewłaściwym fundamencie. Kolejność z audytu (§5) stawia P9+P7 jako Etap 0, przed
+jakąkolwiek kontynuacją PLAN-010.
+
+---
+
+## ✅ Następny krok
+
+P9 (TICKET-P9.1–P9.7) zaimplementowane, przetestowane (294/294 PASS), handshake
+wygenerowany, PR otwarty do `main` — **niezmergowany** bez wyraźnej zgody. P7
+(TICKET-P7.1) czeka na osobną turę zgody, poza zakresem obecnego zlecenia.

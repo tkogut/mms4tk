@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 import pandas as pd
-from fastapi import FastAPI, HTTPException, status, Header, Depends
+from fastapi import FastAPI, HTTPException, status, Header, Depends, Request
 from pydantic import BaseModel, Field
 
 from mms4tk.logger_db import LoggerDB
@@ -144,17 +144,19 @@ class EmergencyKillallResponse(BaseModel):
     message: str
     action_taken: str
 
-
-class EmergencyReverseResponse(BaseModel):
-    status: str
-    message: str
-    action_taken: str
+# EmergencyReverseResponse removed (audit P9.3, 2026-09-08): /api/v1/emergency/reverse
+# now always raises HTTPException(501) — fail-closed, never returns a success shape —
+# so a dedicated response_model would be dead code.
 
 
 class HighRiskAddRequest(BaseModel):
     side: str = Field(default="LONG", description="Order side: LONG or SHORT")
     size: float = Field(default=1.0, description="Position size multiplier or contracts")
     stop_loss_pct: float = Field(default=0.01, description="Tight stop loss percentage (e.g. 0.01 for 1%)")
+    # Audit P9.7 (2026-09-08): was hardcoded to daemon.symbol regardless of caller
+    # intent. Optional and defaulting to daemon.symbol to stay backward compatible
+    # with existing callers that never set it.
+    symbol: Optional[str] = Field(default=None, description="Target symbol; defaults to the daemon's primary symbol")
 
 
 class HighRiskAddResponse(BaseModel):
@@ -454,17 +456,50 @@ async def emergency_killall() -> Dict[str, str]:
     }
 
 
-@app.post("/api/v1/emergency/reverse", response_model=EmergencyReverseResponse, tags=["Emergency"], dependencies=[Depends(verify_api_key)])
-async def emergency_reverse() -> Dict[str, str]:
+@app.post("/api/v1/emergency/reverse", tags=["Emergency"], dependencies=[Depends(verify_api_key)])
+async def emergency_reverse(request: Request) -> Dict[str, str]:
     """
-    Emergency position reversal triggered by Hermes agent.
-    Closes current position immediately and opens opposite position with SL=2%.
+    Emergency position reversal triggered by Hermes agent. NOT YET IMPLEMENTED.
+
+    Audit P9.3 (2026-09-08), fail-closed: the previous version of this endpoint
+    unconditionally returned {"status": "success", ...} without closing or opening
+    anything — reporting a false safety action on the emergency path, the most
+    dangerous class of bug this repo has. Until a real implementation lands (its own
+    ticket), this endpoint refuses with 501 rather than lie about having acted, and
+    logs every call attempt as a CRITICAL security event — a caller hitting this
+    endpoint believes a live risk event is happening right now.
     """
-    return {
-        "status": "success",
-        "message": "Emergency reverse order executed.",
-        "action_taken": "Closed existing position, opened reversed position with hard SL=2%."
-    }
+    client_ip = request.client.host if request.client else "unknown"
+    query_params = dict(request.query_params)
+    raw_body = ""
+    try:
+        raw_body = (await request.body()).decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    # Deliberately NOT logging headers here (would include X-MMS4-API-KEY).
+    request_params = json.dumps({"query": query_params, "body": raw_body[:2000]})
+
+    logger.critical(
+        f"🚨 EMERGENCY REVERSE CALLED but NOT IMPLEMENTED — refusing (fail-closed, 501). "
+        f"client_ip={client_ip}"
+    )
+    try:
+        logger_db.log_emergency_attempt(
+            endpoint="/api/v1/emergency/reverse",
+            outcome="REFUSED_NOT_IMPLEMENTED",
+            client_ip=client_ip,
+            request_params=request_params,
+        )
+    except Exception as log_err:
+        logger.error(f"Failed to persist emergency/reverse attempt to SQLite: {log_err}")
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "Emergency reverse is not implemented. Fail-closed by design (audit P9.3, "
+            "2026-09-08) — no position was touched. This attempt has been logged."
+        ),
+    )
 
 
 @app.post("/api/v1/trade/high_risk_add", response_model=HighRiskAddResponse, tags=["Trading"], dependencies=[Depends(verify_api_key)])
@@ -472,7 +507,18 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
     """
     High-risk position add (leverage x1, independent ticket) with tight SL=1%.
     Blocked if strategy is in SCOUT_MODE (REDUCED_RISK).
+
+    Audit P9.7 (2026-09-08): this manual path previously (a) always targeted
+    daemon.symbol regardless of req.symbol, (b) never called daemon._record_addon,
+    so the daemon's own automatic Single Addon Guard (daemon.py ~1506) had no record
+    of a manual add and could add again on its own next cycle, and (c) swallowed
+    execute_order's exception in a bare `except` and still reported
+    executed: True/status: success even when the order failed — the same class of
+    bug as P9.3's emergency/reverse. All three fixed here.
     """
+    target_symbol = req.symbol or daemon.symbol
+    pos_side = "long" if req.side.upper() == "LONG" else "short"
+
     if not state_manager.is_high_risk_add_allowed():
         return {
             "status": "rejected",
@@ -481,23 +527,59 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "details": {"current_state": state_manager.current_state.value, "leverage": state_manager.leverage}
         }
 
-    # Execute high risk add order via OKXExecutor
+    # Single Addon Guard: same persisted ledger the daemon's own automatic
+    # HIGH_RISK_ADD path reads/writes (daemon._addon_count / daemon._record_addon),
+    # keyed on (symbol, side, entry_price) — so a manual add here is visible to it.
+    match_entry = 0.0
+    try:
+        live_positions = await executor.fetch_positions()
+        for p in live_positions:
+            p_side = str(p.get("side") or p.get("info", {}).get("posSide") or "").lower()
+            if p.get("symbol") == target_symbol and p_side == pos_side:
+                match_entry = float(p.get("entryPrice") or p.get("info", {}).get("avgPx") or 0.0)
+                break
+    except Exception as e:
+        logger.warning(f"high_risk_add: failed to fetch live positions for {target_symbol}: {e}")
+
+    addons_done = daemon._addon_count(target_symbol, pos_side, match_entry)
+    if addons_done >= 1:
+        return {
+            "status": "rejected",
+            "executed": False,
+            "reason": (
+                f"HIGH_RISK_ADD already executed on this {pos_side.upper()} position for "
+                f"{target_symbol} (entry=${match_entry:,.4f}). Single Addon Guard active."
+            ),
+            "details": {"symbol": target_symbol, "side": pos_side, "entry_price": match_entry}
+        }
+
+    # Execute high risk add order via OKXExecutor. Failure must never be reported as
+    # executed: True/status: success (audit P9.7c / P9.3).
     try:
         await executor.execute_order(
-            symbol=daemon.symbol,
+            symbol=target_symbol,
             side=req.side,
             amount=req.size,
             stop_loss_pct=req.stop_loss_pct,
             leverage=1.0
         )
     except Exception as e:
-        logger.error(f"Error executing high risk add: {e}")
+        logger.error(f"Error executing high risk add for {target_symbol}: {e}")
+        return {
+            "status": "error",
+            "executed": False,
+            "reason": f"High-risk add order failed: {e}",
+            "details": {"symbol": target_symbol, "side": req.side, "size": req.size}
+        }
+
+    daemon._record_addon(target_symbol, pos_side, match_entry)
 
     return {
         "status": "success",
         "executed": True,
         "reason": "High-risk add order placed successfully.",
         "details": {
+            "symbol": target_symbol,
             "side": req.side,
             "size": req.size,
             "stop_loss_pct": req.stop_loss_pct,
@@ -509,6 +591,13 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
 class HigherTimeframeResponse(BaseModel):
     atr_d1: float
     atr_d1_expansion_ratio: float
+    # Audit P9.4 (2026-09-08): these 3 fields were already computed by
+    # HigherTimeframeAnalytics.calculate_higher_tf but silently dropped by this
+    # response_model. Prerequisite for P5 step 0 (consuming volatility_zone) —
+    # zero effect on execution, this endpoint is read-only analytics.
+    atr_d1_expansion_threshold: float = Field(description="htf_expansion_threshold used to classify volatility_zone")
+    volatility_zone: str = Field(description="EXPANSION | NORMAL | COMPRESSION | UNKNOWN")
+    is_volatility_expansion: bool
     h4_tma_position: str = Field(description="ABOVE | BELOW | INSIDE")
     h4_candle_formation: str = Field(description="SWEEP_WICK | MARUBOZU_BREAKOUT | NEUTRAL")
     h4_tma: float
@@ -908,7 +997,10 @@ async def get_settings() -> Dict[str, Any]:
         "adaptive_vr_low": float(db_settings.get("adaptive_vr_low", os.getenv("MMS4_ADAPTIVE_VR_LOW", "0.8"))),
         "time_lock_start": db_settings.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_settings.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
-        "midline_partial_tp_enabled": str(db_settings.get("midline_partial_tp_enabled", "true")).strip().lower() in ("true", "1", "yes", "on"),
+        # Audit P9.1 (2026-09-08): default "false" — rejected 6/6 in backtest (CHANGELOG
+        # 0.42.1); a fresh deploy with no explicit system_settings entry must not silently
+        # re-enable it.
+        "midline_partial_tp_enabled": str(db_settings.get("midline_partial_tp_enabled", "false")).strip().lower() in ("true", "1", "yes", "on"),
         "midline_tp_fraction": float(db_settings.get("midline_tp_fraction", 0.50)),
     }
 
@@ -1042,7 +1134,8 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         "time_lock_start": db_current.get("time_lock_start", os.getenv("MMS4_TIME_LOCK_START", "13:30")),
         "time_lock_end": db_current.get("time_lock_end", os.getenv("MMS4_TIME_LOCK_END", "14:30")),
         "total_max_portfolio_margin_usd": daemon.total_max_portfolio_margin_usd,
-        "midline_partial_tp_enabled": str(db_current.get("midline_partial_tp_enabled", "true")).strip().lower() in ("true", "1", "yes", "on"),
+        # Audit P9.1 (2026-09-08): default "false" — see get_settings() above for rationale.
+        "midline_partial_tp_enabled": str(db_current.get("midline_partial_tp_enabled", "false")).strip().lower() in ("true", "1", "yes", "on"),
         "midline_tp_fraction": float(db_current.get("midline_tp_fraction", 0.50)),
     }
 

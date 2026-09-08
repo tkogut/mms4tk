@@ -208,6 +208,40 @@ class LoggerDB:
                     PRIMARY KEY (symbol, timeframe, timestamp)
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS emergency_action_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    endpoint TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    client_ip TEXT,
+                    request_params TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+
+    # ── Audit P9.3 (2026-09-08): fail-closed emergency endpoint attempt log ──
+
+    def log_emergency_attempt(
+        self, endpoint: str, outcome: str, client_ip: str = "", request_params: str = ""
+    ) -> None:
+        """Persist a call attempt against a fail-closed emergency endpoint (e.g.
+        /api/v1/emergency/reverse while unimplemented). This is a security/audit
+        trail, not operational telemetry — a caller hitting one of these endpoints
+        believes a live risk event is happening right now, so every attempt is kept,
+        never rotated out by this class. `request_params` MUST already be scrubbed of
+        secrets by the caller (never pass auth headers here — see api.py)."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO emergency_action_log
+                    (endpoint, outcome, client_ip, request_params, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(endpoint), str(outcome), str(client_ip), str(request_params), now_str),
+            )
             conn.commit()
 
     # ── PLAN-010 Phase 2: trend-filter recalibration job tracking ──
