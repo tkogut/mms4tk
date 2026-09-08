@@ -63,9 +63,11 @@ def test_mutating_endpoints_valid_header_returns_200():
     assert res_killall.status_code == 200
     assert res_killall.json()["status"] == "success"
 
+    # Audit P9.3 (2026-09-08): fail-closed — auth passes (verify_api_key runs before
+    # the handler body), but the endpoint itself is not yet implemented and always
+    # refuses with 501 rather than reporting a fake success.
     res_reverse = client.post("/api/v1/emergency/reverse", headers=headers)
-    assert res_reverse.status_code == 200
-    assert res_reverse.json()["status"] == "success"
+    assert res_reverse.status_code == 501
 
     res_high_risk = client.post("/api/v1/trade/high_risk_add", json={"side": "LONG", "size": 1.0}, headers=headers)
     assert res_high_risk.status_code == 200

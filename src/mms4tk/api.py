@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 import pandas as pd
-from fastapi import FastAPI, HTTPException, status, Header, Depends
+from fastapi import FastAPI, HTTPException, status, Header, Depends, Request
 from pydantic import BaseModel, Field
 
 from mms4tk.logger_db import LoggerDB
@@ -144,11 +144,9 @@ class EmergencyKillallResponse(BaseModel):
     message: str
     action_taken: str
 
-
-class EmergencyReverseResponse(BaseModel):
-    status: str
-    message: str
-    action_taken: str
+# EmergencyReverseResponse removed (audit P9.3, 2026-09-08): /api/v1/emergency/reverse
+# now always raises HTTPException(501) — fail-closed, never returns a success shape —
+# so a dedicated response_model would be dead code.
 
 
 class HighRiskAddRequest(BaseModel):
@@ -454,17 +452,50 @@ async def emergency_killall() -> Dict[str, str]:
     }
 
 
-@app.post("/api/v1/emergency/reverse", response_model=EmergencyReverseResponse, tags=["Emergency"], dependencies=[Depends(verify_api_key)])
-async def emergency_reverse() -> Dict[str, str]:
+@app.post("/api/v1/emergency/reverse", tags=["Emergency"], dependencies=[Depends(verify_api_key)])
+async def emergency_reverse(request: Request) -> Dict[str, str]:
     """
-    Emergency position reversal triggered by Hermes agent.
-    Closes current position immediately and opens opposite position with SL=2%.
+    Emergency position reversal triggered by Hermes agent. NOT YET IMPLEMENTED.
+
+    Audit P9.3 (2026-09-08), fail-closed: the previous version of this endpoint
+    unconditionally returned {"status": "success", ...} without closing or opening
+    anything — reporting a false safety action on the emergency path, the most
+    dangerous class of bug this repo has. Until a real implementation lands (its own
+    ticket), this endpoint refuses with 501 rather than lie about having acted, and
+    logs every call attempt as a CRITICAL security event — a caller hitting this
+    endpoint believes a live risk event is happening right now.
     """
-    return {
-        "status": "success",
-        "message": "Emergency reverse order executed.",
-        "action_taken": "Closed existing position, opened reversed position with hard SL=2%."
-    }
+    client_ip = request.client.host if request.client else "unknown"
+    query_params = dict(request.query_params)
+    raw_body = ""
+    try:
+        raw_body = (await request.body()).decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    # Deliberately NOT logging headers here (would include X-MMS4-API-KEY).
+    request_params = json.dumps({"query": query_params, "body": raw_body[:2000]})
+
+    logger.critical(
+        f"🚨 EMERGENCY REVERSE CALLED but NOT IMPLEMENTED — refusing (fail-closed, 501). "
+        f"client_ip={client_ip}"
+    )
+    try:
+        logger_db.log_emergency_attempt(
+            endpoint="/api/v1/emergency/reverse",
+            outcome="REFUSED_NOT_IMPLEMENTED",
+            client_ip=client_ip,
+            request_params=request_params,
+        )
+    except Exception as log_err:
+        logger.error(f"Failed to persist emergency/reverse attempt to SQLite: {log_err}")
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "Emergency reverse is not implemented. Fail-closed by design (audit P9.3, "
+            "2026-09-08) — no position was touched. This attempt has been logged."
+        ),
+    )
 
 
 @app.post("/api/v1/trade/high_risk_add", response_model=HighRiskAddResponse, tags=["Trading"], dependencies=[Depends(verify_api_key)])
