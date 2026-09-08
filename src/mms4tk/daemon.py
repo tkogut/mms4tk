@@ -130,11 +130,37 @@ class MMS4Daemon:
         # ── Portfolio Margin Guard (Circuit Breaker) ────────────────────
         # Global cap on total committed margin across ALL symbols.
         # When > 0, the daemon blocks any new entry whose addition would push
-        # the aggregate portfolio notional above this limit.
-        # Set to 0 (default) to disable the guard entirely.
-        self.total_max_portfolio_margin_usd: float = float(
-            os.getenv("MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD", "0")
+        # the aggregate portfolio notional above this limit. Set to 0 to disable.
+        #
+        # Audit P9.2 (2026-09-08): factory default raised 0 -> 300 USD. At current
+        # ~$100 equity / up-to-$300 notional (2x($105+$45)) this cap is inert today,
+        # but it becomes a real brake once the account scales — a guard that blocks
+        # nothing by default is not a guard. Hybrid resolution, hardcoded default
+        # overridable by persisted config: MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD (if
+        # set) replaces the 300 factory default, and a system_settings row (if an
+        # operator has ever explicitly set one via POST /api/v1/settings/update)
+        # wins over both — same precedence every other runtime-tunable parameter in
+        # this daemon already follows (see _get_indicator_params below), so an
+        # operator's own choice always survives a redeploy while a fresh install
+        # still starts with the guard on.
+        _env_margin_cap = os.getenv("MMS4_TOTAL_MAX_PORTFOLIO_MARGIN_USD")
+        self.total_max_portfolio_margin_usd: float = (
+            float(_env_margin_cap) if _env_margin_cap is not None else 300.0
         )
+        # get_setting()'s documented contract is Optional[str] — checking isinstance
+        # rather than just "is not None" matters here: a bare unittest.mock.MagicMock()
+        # passed as logger_db in tests (several construct MMS4Daemon() this way) auto-
+        # fabricates a non-None return for any attribute access, and float() coerces a
+        # MagicMock without raising (it defines __float__), so a naive "not None" check
+        # would silently adopt a bogus cap from an unconfigured mock.
+        _db_margin_cap = self.logger_db.get_setting("total_max_portfolio_margin_usd")
+        if isinstance(_db_margin_cap, str):
+            try:
+                self.total_max_portfolio_margin_usd = float(_db_margin_cap)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"Ignoring invalid persisted total_max_portfolio_margin_usd={_db_margin_cap!r}"
+                )
 
         # Serializes check-then-commit across concurrently running symbol cycles (see
         # reserve_portfolio_margin below) and protects _reserved_notional_usd.
@@ -730,7 +756,11 @@ class MMS4Daemon:
         except Exception:
             pass
 
-        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, timeframe=sym_tf, limit=100)
+        # Audit P9.5 (2026-09-08): 100 -> 150. The VR denominator is a 100-period
+        # rolling ATR mean (analytics.py rolling(window=100)); fetching only exactly
+        # 100 candles left just ~86 usable after indicator warmup, shifting the
+        # VR_HIGH/VR_LOW (1.6/0.8) crossover point away from where it was calibrated.
+        candles: List[Candle] = await self.executor.fetch_candles(target_symbol, timeframe=sym_tf, limit=150)
 
         # 2. Evaluate signals with per-symbol state isolation
         sym_state = self.state_manager.get_symbol_state(target_symbol)

@@ -1,0 +1,21 @@
+{
+  "conversation_id": "p9-hygiene-recalibration-params-20260908",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/analytics.py",
+    "src/mms4tk/api.py",
+    "src/mms4tk/daemon.py",
+    "src/mms4tk/logger_db.py",
+    "src/mms4tk/hermes_tools.py",
+    "ui_dashboard/src/components/SettingsTab.jsx",
+    "tests/test_api_auth.py",
+    "tests/test_hermes_network.py",
+    "tests/test_hermes_integration.py",
+    "tests/test_adaptive_tactics.py",
+    "tests/test_midline_inactivity_tp.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-08T20:56:57Z",
+  "notes": "Audyt docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md, Etap 0 (P9, 7 tickety, decyzje architektoniczne P9.2/P9.3 zatwierdzone przez usera): P9.1 midline_partial_tp_enabled default false (4 miejsca); P9.2 Portfolio Margin Guard hybrid default 300 USD + system_settings override (isinstance(str) guard przeciw MagicMock coercji float()); P9.3 /api/v1/emergency/reverse fail-closed 501 + CRITICAL log + nowa tabela emergency_action_log; P9.4 HigherTimeframeResponse eksponuje volatility_zone/is_volatility_expansion/atr_d1_expansion_threshold; P9.5 candle fetch limit 100->150 (VR window fix); P9.6 usuniety martwy risk_prof-based lev w analytics.py (zastapiony active_leverage, ktory juz odzwierciedla state_manager per-profile leverage) - decyzja usera po ujawnieniu konfliktu z test_risk_profile_leverage_modulation, test zaktualizowany; P9.7 high_risk_add: per-symbol gate, Single Addon Guard (_addon_count/_record_addon), wyjatki juz nie sa polykane. Pelny test suite: 294/294 PASS (221s). P7 (silnik rekalibracji) celowo NIERUSZANY - poza zatwierdzonym zakresem tej tury."
+}

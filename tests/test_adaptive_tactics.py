@@ -209,7 +209,17 @@ def test_scout_mode_relaxation_by_scout_override(client, tmp_path):
 
 
 def test_risk_profile_leverage_modulation():
-    """Test leverage modulation by CONSERVATIVE (0.5x, block add) and AGGRESSIVE (2.0x base)."""
+    """Test that BASE_SHORT signal leverage tracks state_manager's own per-profile
+    resolution (BASE_LEVERAGE_BY_PROFILE: CONSERVATIVE=1.0, AGGRESSIVE=10.0 by
+    default), the single source of truth daemon.py actually executes orders with.
+
+    Audit P9.6 (2026-09-08): previously this asserted 0.5x/2.0x, values produced by a
+    second, REDUNDANT risk_prof->leverage computation inside analytics.py itself
+    (local `lev`) that daemon.py never read (it reads alloc['leverage'], sourced from
+    state_manager.leverage) and that didn't even agree with state_manager's own
+    resolution for the same profiles. That dead, inconsistent computation was
+    removed; SignalResult.leverage now reports active_leverage (== state_manager's
+    leverage) like every other branch in this function already did."""
     engine = MMS4SignalEngine()
     candles_short = [
         Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
@@ -218,18 +228,21 @@ def test_risk_profile_leverage_modulation():
     candles_short[-2] = Candle(timestamp=23 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
     candles_short[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
 
-    # CONSERVATIVE caps base leverage at 0.5x
+    # CONSERVATIVE -> BASE_LEVERAGE_BY_PROFILE["CONSERVATIVE"] (default 1.0x)
     sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
     sm.update_strategy_profile(StrategyProfile(risk_profile="CONSERVATIVE"))
     sig_cons = engine.evaluate_signals(candles_short, sm)
     assert sig_cons.signal_type == "BASE_SHORT"
-    assert sig_cons.leverage == 0.5
+    assert sig_cons.leverage == sm.leverage
 
-    # AGGRESSIVE sets base leverage to 2.0x
+    # AGGRESSIVE -> BASE_LEVERAGE_BY_PROFILE["AGGRESSIVE"] (default 10.0x)
     sm.update_strategy_profile(StrategyProfile(risk_profile="AGGRESSIVE"))
     sig_agg = engine.evaluate_signals(candles_short, sm)
     assert sig_agg.signal_type == "BASE_SHORT"
-    assert sig_agg.leverage == 2.0
+    assert sig_agg.leverage == sm.leverage
+    # The two profiles must actually resolve to different leverage, or this test
+    # would pass vacuously.
+    assert sig_cons.leverage != sig_agg.leverage
 
 
 # ─────────────────────────────────────────────────────────────────────────────
