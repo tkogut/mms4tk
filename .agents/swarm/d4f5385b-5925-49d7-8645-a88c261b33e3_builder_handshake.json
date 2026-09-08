@@ -1,0 +1,14 @@
+{
+  "conversation_id": "d4f5385b-5925-49d7-8645-a88c261b33e3",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/analytics.py",
+    "src/mms4tk/daemon.py",
+    "src/mms4tk/api.py",
+    "tests/test_adaptive_tactics.py"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-09-08T10:56:42Z",
+  "notes": "Opt-in filtr wysokiej zmiennosci dla wejsc BASE_SHORT/BASE_LONG (reuzywa adaptive_vr_high, wymaga ekstremalnego knota odrzucenia >=40% jak Time-Lock). Dodany po znalezieniu przez 90-dniowy backtest, ze ETH BASE entries podczas skokow ATR byly stopowane nieproporcjonalnie czesciej niz BTC w tym samym oknie. Empirycznie zwalidowany PRZED wdrozeniem (nie na slowo): filtr WLACZONY pogarsza wyniki w 3 z 4 testowanych polowek okna (BTC H1, ETH H1, ETH H2 PnL) -- dlatego domyslnie WYLACZONY per-symbol, dokladnie jak tma_trend_filter_enabled, wymaga wlasnej walidacji OOS przed wlaczeniem na zywo. Pelne okablowanie: analytics.py (IndicatorParams + 2 nowe bloki), daemon.py (_get_indicator_params czyta per-symbol z system_settings), api.py (AddSymbolRequest, _trend_filter_fields, GET/POST /api/v1/symbols). 3 nowe testy (extreme-sweep-required SHORT/LONG + domyslnie-wylaczony), wszystkie 254 istniejace testy PASS bez regresji."
+}
