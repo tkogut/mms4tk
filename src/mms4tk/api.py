@@ -540,6 +540,13 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
 class HigherTimeframeResponse(BaseModel):
     atr_d1: float
     atr_d1_expansion_ratio: float
+    # Audit P9.4 (2026-09-08): these 3 fields were already computed by
+    # HigherTimeframeAnalytics.calculate_higher_tf but silently dropped by this
+    # response_model. Prerequisite for P5 step 0 (consuming volatility_zone) —
+    # zero effect on execution, this endpoint is read-only analytics.
+    atr_d1_expansion_threshold: float = Field(description="htf_expansion_threshold used to classify volatility_zone")
+    volatility_zone: str = Field(description="EXPANSION | NORMAL | COMPRESSION | UNKNOWN")
+    is_volatility_expansion: bool
     h4_tma_position: str = Field(description="ABOVE | BELOW | INSIDE")
     h4_candle_formation: str = Field(description="SWEEP_WICK | MARUBOZU_BREAKOUT | NEUTRAL")
     h4_tma: float
