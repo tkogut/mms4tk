@@ -105,8 +105,20 @@ jakąkolwiek kontynuacją PLAN-010.
 
 ---
 
+## 🔹 Etap 1 (poza pierwotnym zakresem tego dokumentu, dodane 2026-09-09)
+
+### ✅ DONE (9fe9879, fcecab0) P2 — Model prowizji i fundingu w `_stats()` 🔴 PREREKWIZYT
+- **Plik:** `src/mms4tk/backtest_engine.py`
+- **Dowód:** audyt §2.1 — zero `fee`/`funding`/`slippage` w silniku backtestu, mimo pełnej księgowości netto na produkcji (PLAN-011). Trzy decyzje produkcyjne (Midline TP off, trend filter off, high-vol filter off) podjęte na przyrządzie mierzącym brutto.
+- **Zaimplementowane:** `ROUND_TRIP_FEE_PCT=0.0010` (OKX taker 0.05%×2, reużyte z już istniejącej stałej `inactivity_manager.py::DEFAULT_ROUND_TRIP_COST_PCT`, nie zgadywane) + `FUNDING_RATE_PCT_PER_INTERVAL=0.0001` per 8 świec (ceil division na czas trzymania pozycji). Nowy helper `_round_trip_cost_pct(candles_held)`. `_stats()` liczy win/loss/R:R/total_pnl na NET pnl, z defaultem `0.0` dla `fee_pct`/`funding_pct` → pełna wsteczna zgodność (syntetyczne testy bez tych pól dają identyczny wynik jak przed P2).
+- **Test regresji (wymagany przez audyt), policzony naprawdę na fixture'ach:** ponowna walidacja Midline TP (6 okien BTC/ETH × H1/H2/full) i high-vol base filter (4 okna) pod NET pnl. **Wynik: żaden werdykt się nie odwrócił** — Midline TP nadal przegrywa 6/6, high-vol filter nadal bije baseline w dokładnie tych samych 2/4 oknach (BTC_H2, ETH_H2) co brutto. Przyrząd wykalibrowany; oba filtry NIE wracają do kolejki kandydatów.
+- 8 nowych testów, pełny suite: **307/307 PASS**.
+
+**Kolejność dalej wg audytu §5 (dla orientacji, nie zlecone jeszcze):** Etap 2 = P1 (SL dokładki, V0/V1/V2 — teraz może korzystać z wykalibrowanego przyrządu) → Etap 3 = P4 krok 0 + P6.1 → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
+
+---
+
 ## ✅ Następny krok
 
-P9 (TICKET-P9.1–P9.7) zaimplementowane, przetestowane (294/294 PASS), handshake
-wygenerowany, PR otwarty do `main` — **niezmergowany** bez wyraźnej zgody. P7
-(TICKET-P7.1) czeka na osobną turę zgody, poza zakresem obecnego zlecenia.
+P9, P7 i P2 zaimplementowane, przetestowane, PR-y otwarte/zmergowane. Etap 2 (P1)
+czeka na osobne polecenie.
