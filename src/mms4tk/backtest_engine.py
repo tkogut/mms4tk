@@ -38,7 +38,12 @@ from mms4tk.state_manager import MMS4StateManager, MMS4State
 BASE_SL_PCT = 0.02
 STALE_ATR_THRESHOLD = 0.5
 IMPULSE_NEGATION_ENABLED = True
-MIN_FULL_CLOSES_HALF = 12  # below this, a half-window config's stats are too noisy to trust
+MIN_FULL_CLOSES_HALF = 30  # below this, a half-window config's stats are too noisy to trust
+# Audit P7 "same file" follow-on (2026-09-08): raised 12 -> 30. 12 was the only
+# sample-size floor gating a TRAIN-half candidate; the TEST-half "generalizes" check
+# had none at all (see the full_closes gate added below in _direction) — a test half
+# with a handful of lucky trades could pass purely on variance and help produce a
+# VALIDATED verdict. Applies to both halves via this shared constant.
 
 # HIGH_RISK_ADD (addon) constants, mirroring daemon.py's own defaults/env vars exactly
 # so an operator's .env change to the live values is picked up here too.
@@ -485,7 +490,16 @@ def train_test_validate(
                                     trend_filter_enabled=True, slope_lookback=best["lookback"],
                                     slope_threshold=best["threshold"])
         test_stats = _stats(test_trades)
-        generalizes = test_stats["rr"] > baseline_test["rr"] and test_stats["total_pnl"] > baseline_test["total_pnl"]
+        # Audit P7 "same file" follow-on (2026-09-08): gate on TEST-half transaction
+        # count too, not just R:R/total_pnl — previously the only sample-size floor
+        # anywhere in this function applied to the TRAIN half (_grid_search_train's
+        # own MIN_FULL_CLOSES_HALF check); a test half could "generalize" on a
+        # handful of trades whose R:R/pnl beat baseline by pure variance.
+        generalizes = (
+            test_stats["full_closes"] >= MIN_FULL_CLOSES_HALF
+            and test_stats["rr"] > baseline_test["rr"]
+            and test_stats["total_pnl"] > baseline_test["total_pnl"]
+        )
         return DirectionResult(
             train_window=train_label, candidate_found=True,
             chosen_lookback=best["lookback"], chosen_threshold=best["threshold"],
