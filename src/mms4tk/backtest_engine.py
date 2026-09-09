@@ -454,7 +454,19 @@ def train_test_validate(
     train/test validation in both directions (see module docstring). There is no
     function in this module that returns a verdict from full-window stats alone."""
     if params is None:
-        params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+        # Audit P7 (2026-09-08): previously hardcoded adaptive_vr_high=1.0,
+        # adaptive_vr_low=0.75 here — those exact thresholds were reset to 1.6/0.8 in
+        # production during this same audit session, so any caller that didn't
+        # explicitly pass params (chiefly run_calibration_job, fixed below) silently
+        # calibrated against a VR fast-path that no longer exists live. Falling back
+        # to IndicatorParams()'s own field defaults instead: those already resolve
+        # from MMS4_ADAPTIVE_VR_HIGH/_LOW (and MMS4_TIME_LOCK_*) env vars, the same
+        # fallback every other component in this codebase uses when system_settings
+        # has no override (see daemon._get_indicator_params, daemon.py:636).
+        # engine_mode is still forced to ADAPTIVE here — that is this function's
+        # deliberate contract (it exists to evaluate the adaptive VR fast-path
+        # itself), not part of the stale-settings bug.
+        params = IndicatorParams(engine_mode="ADAPTIVE")
 
     mid = len(candles) // 2
     h1, h2 = candles[:mid], candles[mid:]
@@ -517,6 +529,36 @@ DEFAULT_THRESHOLDS = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020]
 CALIBRATION_WINDOW_DAYS = 90
 
 
+def _live_indicator_params(db: LoggerDB) -> IndicatorParams:
+    """Build the IndicatorParams a calibration job should validate against, from live
+    SQLite system_settings — mirroring daemon._get_indicator_params (daemon.py:636)
+    for the fields that matter to the adaptive VR fast-path.
+
+    Audit P7 (2026-09-08): run_calibration_job previously called train_test_validate()
+    without `params` at all, so it always fell through to that function's internal
+    default — literals that had already drifted from the live production values by
+    the time of this audit. system_settings is this codebase's SSOT for these values
+    (every other read path — daemon, the API — treats it that way), so a calibration
+    job that doesn't consult it is validating a strategy that no longer runs live.
+
+    engine_mode is forced to ADAPTIVE regardless of the live setting: calibration
+    exists specifically to evaluate the adaptive VR fast-path, not to replay whatever
+    mode happens to be live.
+    """
+    try:
+        db_settings = db.get_all_settings()
+    except Exception:
+        db_settings = {}
+    defaults = IndicatorParams()
+    return IndicatorParams(
+        engine_mode="ADAPTIVE",
+        adaptive_vr_high=float(db_settings.get("adaptive_vr_high", defaults.adaptive_vr_high)),
+        adaptive_vr_low=float(db_settings.get("adaptive_vr_low", defaults.adaptive_vr_low)),
+        time_lock_start=str(db_settings.get("time_lock_start", defaults.time_lock_start)),
+        time_lock_end=str(db_settings.get("time_lock_end", defaults.time_lock_end)),
+    )
+
+
 def run_calibration_job(job_id: str, symbol: str, db_path: str) -> None:
     """PLAN-010 §4.2: the ProcessPoolExecutor worker entry point. MUST be a
     module-level function (picklable) and MUST open its own DB connection — SQLite
@@ -546,7 +588,8 @@ def run_calibration_job(job_id: str, symbol: str, db_path: str) -> None:
             )
             return
 
-        result = train_test_validate(symbol, candles, DEFAULT_LOOKBACKS, DEFAULT_THRESHOLDS)
+        params = _live_indicator_params(db)
+        result = train_test_validate(symbol, candles, DEFAULT_LOOKBACKS, DEFAULT_THRESHOLDS, params=params)
         db.update_calibration_run(
             job_id, status="done",
             window_start=result.window_start, window_end=result.window_end,

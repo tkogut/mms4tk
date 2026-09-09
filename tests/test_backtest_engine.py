@@ -6,7 +6,7 @@ directions).
 """
 import csv
 import os
-from typing import Dict
+from typing import Any, Dict
 
 import pytest
 
@@ -421,6 +421,101 @@ def test_real_btc_90day_data_does_not_validate_with_small_grid():
     candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")
     result = be.train_test_validate("BTC/USDC", candles, lookbacks=[3, 12], thresholds=[0.001, 0.002])
     assert result.verdict != "VALIDATED"
+
+
+# ── P7 (audit 2026-09-08): calibration engine must validate against LIVE params,
+# not stale hardcoded literals ──
+
+def test_different_vr_thresholds_yield_different_full_closes():
+    """Required regression test (audit P7): two identical-candle runs with
+    explicitly different adaptive VR thresholds must produce different
+    full_closes counts — the only direct proof a VR parameter change actually
+    reaches and changes engine behavior, rather than being silently ignored
+    behind a hardcoded default."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+
+    params_tight = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.05, adaptive_vr_low=0.95,
+                                    high_vol_base_filter_enabled=True)
+    params_wide = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=9.9, adaptive_vr_low=0.01,
+                                   high_vol_base_filter_enabled=True)
+
+    trades_tight = be.run_backtest("BTC/USDC", candles, params_tight, stale_candles_threshold=12,
+                                    trend_filter_enabled=False)
+    trades_wide = be.run_backtest("BTC/USDC", candles, params_wide, stale_candles_threshold=12,
+                                   trend_filter_enabled=False)
+
+    fc_tight = be._stats(trades_tight)["full_closes"]
+    fc_wide = be._stats(trades_wide)["full_closes"]
+    assert fc_tight != fc_wide
+
+
+def test_train_test_validate_without_params_reads_env_not_hardcoded_literals(monkeypatch):
+    """train_test_validate() called without `params` must NOT silently fall back to
+    the old hardcoded adaptive_vr_high=1.0/adaptive_vr_low=0.75 literals (stale —
+    production runs 1.6/0.8 by default). It must fall back to IndicatorParams()'s own
+    env-var-resolved defaults instead, same as every other component in this
+    codebase."""
+    monkeypatch.setenv("MMS4_ADAPTIVE_VR_HIGH", "9.9")
+    monkeypatch.setenv("MMS4_ADAPTIVE_VR_LOW", "0.05")
+
+    captured: Dict[str, Any] = {}
+    real_run_backtest = be.run_backtest
+
+    def _spy(symbol, candles, params, **kwargs):
+        captured["adaptive_vr_high"] = params.adaptive_vr_high
+        captured["adaptive_vr_low"] = params.adaptive_vr_low
+        captured["engine_mode"] = params.engine_mode
+        return real_run_backtest(symbol, candles, params, **kwargs)
+
+    monkeypatch.setattr(be, "run_backtest", _spy)
+
+    candles = [
+        Candle(timestamp=i * 3600, open=100.0, high=100.5, low=99.5, close=100.0, volume=1.0)
+        for i in range(60)
+    ]
+    be.train_test_validate("BTC/USDC", candles, lookbacks=[5], thresholds=[0.002])
+
+    assert captured["adaptive_vr_high"] == 9.9
+    assert captured["adaptive_vr_low"] == 0.05
+    assert captured["engine_mode"] == "ADAPTIVE"
+
+
+def test_run_calibration_job_passes_live_system_settings_params(tmp_path, monkeypatch):
+    """run_calibration_job must read adaptive_vr_high/_low (and engine_mode/
+    time_lock_*) from system_settings via LoggerDB.get_all_settings() and pass them
+    explicitly to train_test_validate — not rely on that function's internal
+    default, which previously meant a calibration job silently validated against
+    since-reset-in-production literals instead of whatever is actually configured."""
+    from mms4tk.logger_db import LoggerDB
+
+    db_path = str(tmp_path / "job_params.db")
+    db = LoggerDB(db_path=db_path)
+    db.create_calibration_run("job_params", "BTC/USDC")
+    db.set_setting("adaptive_vr_high", "4.2")
+    db.set_setting("adaptive_vr_low", "0.15")
+
+    fake_candles = [Candle(timestamp=i * 3600, open=1, high=1, low=1, close=1, volume=1) for i in range(100)]
+    monkeypatch.setattr(be, "_fetch_calibration_candles", lambda symbol, db_: _async_return(fake_candles))
+
+    captured: Dict[str, Any] = {}
+
+    def _spy(symbol, candles, lookbacks, thresholds, params=None):
+        captured["params"] = params
+        return be.CalibrationResult(
+            symbol=symbol, window_start="0", window_end="99", lookbacks=lookbacks, thresholds=thresholds,
+            h1_to_h2=be.DirectionResult(train_window="H1", candidate_found=False),
+            h2_to_h1=be.DirectionResult(train_window="H2", candidate_found=False),
+            verdict="NO_CANDIDATE",
+        )
+
+    monkeypatch.setattr(be, "train_test_validate", _spy)
+
+    be.run_calibration_job("job_params", "BTC/USDC", db_path)
+
+    assert captured["params"] is not None
+    assert captured["params"].adaptive_vr_high == 4.2
+    assert captured["params"].adaptive_vr_low == 0.15
+    assert captured["params"].engine_mode == "ADAPTIVE"
 
 
 # ── run_calibration_job: the ProcessPoolExecutor worker entry point ──
