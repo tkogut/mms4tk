@@ -38,7 +38,12 @@ from mms4tk.state_manager import MMS4StateManager, MMS4State
 BASE_SL_PCT = 0.02
 STALE_ATR_THRESHOLD = 0.5
 IMPULSE_NEGATION_ENABLED = True
-MIN_FULL_CLOSES_HALF = 12  # below this, a half-window config's stats are too noisy to trust
+MIN_FULL_CLOSES_HALF = 30  # below this, a half-window config's stats are too noisy to trust
+# Audit P7 "same file" follow-on (2026-09-08): raised 12 -> 30. 12 was the only
+# sample-size floor gating a TRAIN-half candidate; the TEST-half "generalizes" check
+# had none at all (see the full_closes gate added below in _direction) — a test half
+# with a handful of lucky trades could pass purely on variance and help produce a
+# VALIDATED verdict. Applies to both halves via this shared constant.
 
 # HIGH_RISK_ADD (addon) constants, mirroring daemon.py's own defaults/env vars exactly
 # so an operator's .env change to the live values is picked up here too.
@@ -155,6 +160,7 @@ def run_backtest(
     slope_threshold: float = 0.002,
     midline_tp_enabled: bool = False,
     midline_tp_fraction: float = 0.50,
+    sl_cooldown_candles: int = 3,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -181,6 +187,16 @@ def run_backtest(
     SCOUT_MODE (shrinks new entries via `_size_new_entry`); only a FULL (non-partial)
     take-profit-flagged close exits it — a partial (SPLIT_50/Midline TP) explicitly
     preserves SCOUT_MODE, matching `record_trade()`'s own behavior exactly.
+
+    Audit P7 "same file" follow-on (2026-09-08): also models daemon.py's Post-SL
+    Cooldown (PLAN-008 Phase 2, `_sl_cooldown_until`) — after a genuine STOP_LOSS
+    close, new BASE_LONG/BASE_SHORT entries are blocked for `sl_cooldown_candles`
+    candles (default 3, matching `MMS4_SL_COOLDOWN_CANDLES`'s default), mirroring
+    exactly the one branch daemon.py gates on it (a fresh position open when none
+    exists) — TP_AND_FLIP re-entries and HIGH_RISK_ADD are untouched, matching
+    production. Without this, the calibration engine could validate a filter whose
+    apparent edge is partly just re-entering immediately after every stop-out, a
+    behavior production does not actually allow.
 
     Also models HIGH_RISK_ADD (addon) signals, previously silently dropped (the
     harness only handled BASE_LONG/SHORT for entries — a real, undocumented bias in
@@ -212,6 +228,17 @@ def run_backtest(
     trades: List[Dict[str, Any]] = []
     position: Optional[Dict[str, Any]] = None
     warmup = max(params.tma_length, params.atr_period) + slope_lookback + 2
+
+    # Post-SL Cooldown (PLAN-008 Phase 2 fidelity, see docstring): timestamp until
+    # which new BASE_LONG/BASE_SHORT entries are blocked, set below on a genuine
+    # STOP_LOSS close. 0 means no cooldown currently active.
+    sl_cooldown_until_ts: float = 0.0
+    candle_interval = 0.0
+    if len(candles) >= 2:
+        try:
+            candle_interval = abs(float(candles[1].timestamp) - float(candles[0].timestamp))
+        except (TypeError, ValueError):
+            candle_interval = 0.0
 
     def close_position(exit_price: float, reason: str, idx: int) -> None:
         nonlocal position
@@ -262,6 +289,8 @@ def run_backtest(
             sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
             if sl_hit:
                 close_position(sl_price, "STOP_LOSS", i)
+                if sl_cooldown_candles > 0 and candle_interval > 0:
+                    sl_cooldown_until_ts = float(curr_c.timestamp) + (sl_cooldown_candles * candle_interval)
                 continue
 
             # ── Midline Partial TP (PLAN-009 v2), evaluated BEFORE inactivity
@@ -332,7 +361,8 @@ def run_backtest(
             continue
 
         if position is None:
-            if signal.signal_type in ("BASE_LONG", "BASE_SHORT"):
+            cooldown_active = sl_cooldown_until_ts > 0 and float(curr_c.timestamp) < sl_cooldown_until_ts
+            if signal.signal_type in ("BASE_LONG", "BASE_SHORT") and not cooldown_active:
                 side = "long" if signal.signal_type == "BASE_LONG" else "short"
                 position = {"side": side, "entry_price": curr_c.close, "entry_idx": i,
                             **_size_new_entry(symbol, sm)}
@@ -454,7 +484,19 @@ def train_test_validate(
     train/test validation in both directions (see module docstring). There is no
     function in this module that returns a verdict from full-window stats alone."""
     if params is None:
-        params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+        # Audit P7 (2026-09-08): previously hardcoded adaptive_vr_high=1.0,
+        # adaptive_vr_low=0.75 here — those exact thresholds were reset to 1.6/0.8 in
+        # production during this same audit session, so any caller that didn't
+        # explicitly pass params (chiefly run_calibration_job, fixed below) silently
+        # calibrated against a VR fast-path that no longer exists live. Falling back
+        # to IndicatorParams()'s own field defaults instead: those already resolve
+        # from MMS4_ADAPTIVE_VR_HIGH/_LOW (and MMS4_TIME_LOCK_*) env vars, the same
+        # fallback every other component in this codebase uses when system_settings
+        # has no override (see daemon._get_indicator_params, daemon.py:636).
+        # engine_mode is still forced to ADAPTIVE here — that is this function's
+        # deliberate contract (it exists to evaluate the adaptive VR fast-path
+        # itself), not part of the stale-settings bug.
+        params = IndicatorParams(engine_mode="ADAPTIVE")
 
     mid = len(candles) // 2
     h1, h2 = candles[:mid], candles[mid:]
@@ -473,7 +515,16 @@ def train_test_validate(
                                     trend_filter_enabled=True, slope_lookback=best["lookback"],
                                     slope_threshold=best["threshold"])
         test_stats = _stats(test_trades)
-        generalizes = test_stats["rr"] > baseline_test["rr"] and test_stats["total_pnl"] > baseline_test["total_pnl"]
+        # Audit P7 "same file" follow-on (2026-09-08): gate on TEST-half transaction
+        # count too, not just R:R/total_pnl — previously the only sample-size floor
+        # anywhere in this function applied to the TRAIN half (_grid_search_train's
+        # own MIN_FULL_CLOSES_HALF check); a test half could "generalize" on a
+        # handful of trades whose R:R/pnl beat baseline by pure variance.
+        generalizes = (
+            test_stats["full_closes"] >= MIN_FULL_CLOSES_HALF
+            and test_stats["rr"] > baseline_test["rr"]
+            and test_stats["total_pnl"] > baseline_test["total_pnl"]
+        )
         return DirectionResult(
             train_window=train_label, candidate_found=True,
             chosen_lookback=best["lookback"], chosen_threshold=best["threshold"],
@@ -512,9 +563,44 @@ def train_test_validate(
     )
 
 
-DEFAULT_LOOKBACKS = [3, 5, 8, 12, 16, 20, 24, 30]
-DEFAULT_THRESHOLDS = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020]
+# Audit P7 "same file" follow-on (2026-09-08): reduced from the original 8x8 (64
+# cells) to the approved 4x4 (16 cells) grid from PLAN-010 TICKET-3 / task.md. 64
+# cells is a 4x multiple-testing exposure over the reviewed/approved grid with no
+# corresponding benefit — more cells only inflate the chance some (lookback,
+# threshold) pair beats baseline by chance in the train half.
+DEFAULT_LOOKBACKS = [3, 5, 8, 13]
+DEFAULT_THRESHOLDS = [0.0010, 0.0015, 0.0020, 0.0030]
 CALIBRATION_WINDOW_DAYS = 90
+
+
+def _live_indicator_params(db: LoggerDB) -> IndicatorParams:
+    """Build the IndicatorParams a calibration job should validate against, from live
+    SQLite system_settings — mirroring daemon._get_indicator_params (daemon.py:636)
+    for the fields that matter to the adaptive VR fast-path.
+
+    Audit P7 (2026-09-08): run_calibration_job previously called train_test_validate()
+    without `params` at all, so it always fell through to that function's internal
+    default — literals that had already drifted from the live production values by
+    the time of this audit. system_settings is this codebase's SSOT for these values
+    (every other read path — daemon, the API — treats it that way), so a calibration
+    job that doesn't consult it is validating a strategy that no longer runs live.
+
+    engine_mode is forced to ADAPTIVE regardless of the live setting: calibration
+    exists specifically to evaluate the adaptive VR fast-path, not to replay whatever
+    mode happens to be live.
+    """
+    try:
+        db_settings = db.get_all_settings()
+    except Exception:
+        db_settings = {}
+    defaults = IndicatorParams()
+    return IndicatorParams(
+        engine_mode="ADAPTIVE",
+        adaptive_vr_high=float(db_settings.get("adaptive_vr_high", defaults.adaptive_vr_high)),
+        adaptive_vr_low=float(db_settings.get("adaptive_vr_low", defaults.adaptive_vr_low)),
+        time_lock_start=str(db_settings.get("time_lock_start", defaults.time_lock_start)),
+        time_lock_end=str(db_settings.get("time_lock_end", defaults.time_lock_end)),
+    )
 
 
 def run_calibration_job(job_id: str, symbol: str, db_path: str) -> None:
@@ -546,7 +632,8 @@ def run_calibration_job(job_id: str, symbol: str, db_path: str) -> None:
             )
             return
 
-        result = train_test_validate(symbol, candles, DEFAULT_LOOKBACKS, DEFAULT_THRESHOLDS)
+        params = _live_indicator_params(db)
+        result = train_test_validate(symbol, candles, DEFAULT_LOOKBACKS, DEFAULT_THRESHOLDS, params=params)
         db.update_calibration_run(
             job_id, status="done",
             window_start=result.window_start, window_end=result.window_end,

@@ -6,7 +6,7 @@ directions).
 """
 import csv
 import os
-from typing import Dict
+from typing import Any, Dict
 
 import pytest
 
@@ -89,6 +89,31 @@ def test_train_test_validate_overfit_rejected_when_direction_fails_to_generalize
     assert result.h1_to_h2.candidate_found and not result.h1_to_h2.generalizes
 
 
+def test_train_test_validate_rejects_test_half_with_too_few_trades(monkeypatch):
+    """Audit P7 'same file' follow-on (2026-09-08): a test half that beats baseline
+    on R:R and total_pnl but with too few trades (< MIN_FULL_CLOSES_HALF) must NOT
+    count as generalizing — otherwise a handful of lucky trades could pass purely on
+    variance. Without this gate, this exact scenario (great R:R, only 3 trades)
+    would have generalized."""
+    monkeypatch.setattr(
+        be, "_grid_search_train",
+        lambda *a, **k: {"lookback": 5, "threshold": 0.002, "stats": {"rr": 2.0, "total_pnl": 0.3, "full_closes": 30}},
+    )
+
+    def fake_run_backtest(symbol, candles, params, stale_candles_threshold, trend_filter_enabled, **kw):
+        if not trend_filter_enabled:
+            return _trades([0.01] * 5 + [-0.02] * 5)  # baseline: mediocre, 10 trades
+        return _trades([0.05, 0.05, 0.05])  # test half: great R:R/pnl, only 3 trades
+
+    monkeypatch.setattr(be, "run_backtest", fake_run_backtest)
+
+    candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(20)]
+    result = be.train_test_validate("BTC/USDC", candles, lookbacks=[5], thresholds=[0.002])
+
+    assert result.verdict == "OVERFIT_REJECTED"
+    assert result.h1_to_h2.candidate_found and not result.h1_to_h2.generalizes
+
+
 def test_train_test_validate_validated_when_both_directions_generalize(monkeypatch):
     monkeypatch.setattr(
         be, "_grid_search_train",
@@ -98,7 +123,8 @@ def test_train_test_validate_validated_when_both_directions_generalize(monkeypat
     def fake_run_backtest(symbol, candles, params, stale_candles_threshold, trend_filter_enabled, **kw):
         if not trend_filter_enabled:
             return _trades([0.01] * 5 + [-0.02] * 5)  # baseline: mediocre
-        return _trades([0.02] * 5 + [-0.01] * 5)  # filtered/test: BETTER than baseline
+        # filtered/test: BETTER than baseline, and >= MIN_FULL_CLOSES_HALF (30) trades
+        return _trades([0.02] * 15 + [-0.01] * 15)
 
     monkeypatch.setattr(be, "run_backtest", fake_run_backtest)
 
@@ -128,7 +154,7 @@ def test_train_test_validate_notes_disagreeing_params_even_when_validated(monkey
     def fake_run_backtest(symbol, candles, params, stale_candles_threshold, trend_filter_enabled, **kw):
         if not trend_filter_enabled:
             return _trades([0.01] * 5 + [-0.02] * 5)
-        return _trades([0.02] * 5 + [-0.01] * 5)
+        return _trades([0.02] * 15 + [-0.01] * 15)  # >= MIN_FULL_CLOSES_HALF (30) trades
 
     monkeypatch.setattr(be, "run_backtest", fake_run_backtest)
 
@@ -310,7 +336,12 @@ def test_addon_blocked_in_scout_mode(monkeypatch):
         warmup + 3: "HIGH_RISK_ADD_LONG",  # must be BLOCKED — state is SCOUT_MODE
         warmup + 4: "BASE_SHORT",     # closes entry #2 (still SCOUT-sized)
     })
-    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    # sl_cooldown_candles=0: this test is scripting entry #2 for the very next candle
+    # after the SL that enters SCOUT_MODE, to isolate the Single Addon Guard/SCOUT_MODE
+    # sequencing — not Post-SL Cooldown fidelity (covered separately), which would
+    # otherwise block entry #2 outright and make this scenario untestable.
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, sl_cooldown_candles=0)
     stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
     assert len(stop_losses) == 1  # confirms entry #1 really was stopped out (precondition)
     scout_close = [t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]
@@ -343,6 +374,64 @@ def test_addon_uses_tighter_composite_sl(monkeypatch):
     # never have fired at all: the base 2% SL sits at 98.0, below the candle's
     # 98.5 low, so only the tighter addon threshold (98.75) is actually crossed.
     assert stop_losses[0]["exit_price"] == pytest.approx(98.75, abs=0.01)
+
+
+# ── Post-SL Cooldown (audit P7 "same file" follow-on, 2026-09-08) ──
+# Mirrors daemon.py's PLAN-008 Phase 2 mechanism (_sl_cooldown_until): after a
+# genuine STOP_LOSS close, new BASE_LONG/BASE_SHORT entries are blocked for
+# sl_cooldown_candles candles (default 3). Both tests below place a SECOND price
+# dip at the candle a blocked-but-not-actually-blocked re-entry would occupy —
+# if the cooldown fails to block it, that second dip stops it out too, giving a
+# second STOP_LOSS; if correctly blocked, no position exists there to be stopped.
+
+def test_post_sl_cooldown_blocks_immediate_reentry(monkeypatch):
+    """With the default 3-candle cooldown active, a re-entry attempted 2 candles
+    after the stop-out must be blocked entirely — only entry #1's STOP_LOSS shows
+    up, never a second one."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    # Entry #1 (opened at warmup, price 100.0) is stopped out here (SL@98.0).
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    # Would ALSO stop out a LONG entered at warmup+2 (100.0 -> SL@98.0) if the
+    # cooldown (active until ts=warmup+4) failed to block that re-entry. A LONG
+    # entered only at warmup+4, once cooldown clears, is unaffected — this candle
+    # has already passed by then.
+    candles[warmup + 3] = Candle(timestamp=warmup + 3, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",       # entry #1
+        warmup + 2: "BASE_LONG",   # within cooldown (until ts=warmup+4) -> must be BLOCKED
+        warmup + 4: "BASE_LONG",   # cooldown just cleared -> allowed, no more dips ahead
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, sl_cooldown_candles=3)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1  # only entry #1 — entry attempted at warmup+2 never opened
+
+
+def test_post_sl_cooldown_disabled_lets_second_stop_loss_through(monkeypatch):
+    """Sanity check for the test above: with sl_cooldown_candles=0 (disabled) on the
+    IDENTICAL scenario, the re-entry at warmup+2 DOES open and DOES get stopped out
+    by the second dip — proving the scenario is capable of detecting the cooldown's
+    absence, not just always producing one STOP_LOSS regardless."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    candles[warmup + 3] = Candle(timestamp=warmup + 3, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",
+        warmup + 2: "BASE_LONG",
+        warmup + 4: "BASE_LONG",
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, sl_cooldown_candles=0)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 2
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
@@ -423,6 +512,112 @@ def test_real_btc_90day_data_does_not_validate_with_small_grid():
     assert result.verdict != "VALIDATED"
 
 
+# ── P7 (audit 2026-09-08): calibration engine must validate against LIVE params,
+# not stale hardcoded literals ──
+
+def test_different_vr_thresholds_yield_different_full_closes():
+    """Required regression test (audit P7): two identical-candle runs with
+    explicitly different adaptive VR thresholds must produce different
+    full_closes counts — the only direct proof a VR parameter change actually
+    reaches and changes engine behavior, rather than being silently ignored
+    behind a hardcoded default."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+
+    params_tight = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.05, adaptive_vr_low=0.95,
+                                    high_vol_base_filter_enabled=True)
+    params_wide = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=9.9, adaptive_vr_low=0.01,
+                                   high_vol_base_filter_enabled=True)
+
+    trades_tight = be.run_backtest("BTC/USDC", candles, params_tight, stale_candles_threshold=12,
+                                    trend_filter_enabled=False)
+    trades_wide = be.run_backtest("BTC/USDC", candles, params_wide, stale_candles_threshold=12,
+                                   trend_filter_enabled=False)
+
+    fc_tight = be._stats(trades_tight)["full_closes"]
+    fc_wide = be._stats(trades_wide)["full_closes"]
+    assert fc_tight != fc_wide
+
+
+def test_train_test_validate_without_params_reads_env_not_hardcoded_literals(monkeypatch):
+    """train_test_validate() called without `params` must NOT silently fall back to
+    the old hardcoded adaptive_vr_high=1.0/adaptive_vr_low=0.75 literals (stale —
+    production runs 1.6/0.8 by default). It must fall back to IndicatorParams()'s own
+    env-var-resolved defaults instead, same as every other component in this
+    codebase."""
+    monkeypatch.setenv("MMS4_ADAPTIVE_VR_HIGH", "9.9")
+    monkeypatch.setenv("MMS4_ADAPTIVE_VR_LOW", "0.05")
+
+    captured: Dict[str, Any] = {}
+    real_run_backtest = be.run_backtest
+
+    def _spy(symbol, candles, params, **kwargs):
+        captured["adaptive_vr_high"] = params.adaptive_vr_high
+        captured["adaptive_vr_low"] = params.adaptive_vr_low
+        captured["engine_mode"] = params.engine_mode
+        return real_run_backtest(symbol, candles, params, **kwargs)
+
+    monkeypatch.setattr(be, "run_backtest", _spy)
+
+    candles = [
+        Candle(timestamp=i * 3600, open=100.0, high=100.5, low=99.5, close=100.0, volume=1.0)
+        for i in range(60)
+    ]
+    be.train_test_validate("BTC/USDC", candles, lookbacks=[5], thresholds=[0.002])
+
+    assert captured["adaptive_vr_high"] == 9.9
+    assert captured["adaptive_vr_low"] == 0.05
+    assert captured["engine_mode"] == "ADAPTIVE"
+
+
+def test_run_calibration_job_passes_live_system_settings_params(tmp_path, monkeypatch):
+    """run_calibration_job must read adaptive_vr_high/_low (and engine_mode/
+    time_lock_*) from system_settings via LoggerDB.get_all_settings() and pass them
+    explicitly to train_test_validate — not rely on that function's internal
+    default, which previously meant a calibration job silently validated against
+    since-reset-in-production literals instead of whatever is actually configured."""
+    from mms4tk.logger_db import LoggerDB
+
+    db_path = str(tmp_path / "job_params.db")
+    db = LoggerDB(db_path=db_path)
+    db.create_calibration_run("job_params", "BTC/USDC")
+    db.set_setting("adaptive_vr_high", "4.2")
+    db.set_setting("adaptive_vr_low", "0.15")
+
+    fake_candles = [Candle(timestamp=i * 3600, open=1, high=1, low=1, close=1, volume=1) for i in range(150)]
+    monkeypatch.setattr(be, "_fetch_calibration_candles", lambda symbol, db_: _async_return(fake_candles))
+
+    captured: Dict[str, Any] = {}
+
+    def _spy(symbol, candles, lookbacks, thresholds, params=None):
+        captured["params"] = params
+        return be.CalibrationResult(
+            symbol=symbol, window_start="0", window_end="99", lookbacks=lookbacks, thresholds=thresholds,
+            h1_to_h2=be.DirectionResult(train_window="H1", candidate_found=False),
+            h2_to_h1=be.DirectionResult(train_window="H2", candidate_found=False),
+            verdict="NO_CANDIDATE",
+        )
+
+    monkeypatch.setattr(be, "train_test_validate", _spy)
+
+    be.run_calibration_job("job_params", "BTC/USDC", db_path)
+
+    assert captured["params"] is not None
+    assert captured["params"].adaptive_vr_high == 4.2
+    assert captured["params"].adaptive_vr_low == 0.15
+    assert captured["params"].engine_mode == "ADAPTIVE"
+
+
+def test_default_grid_is_the_approved_4x4():
+    """Audit P7 'same file' follow-on (2026-09-08) regression guard: the default
+    calibration grid must stay at the reviewed/approved 4x4 (16 cells, PLAN-010
+    TICKET-3) — if this ever grows again without a deliberate, reviewed change,
+    treat it as reintroducing the 4x multiple-testing exposure the reduction from
+    8x8 (64 cells) fixed."""
+    assert be.DEFAULT_LOOKBACKS == [3, 5, 8, 13]
+    assert be.DEFAULT_THRESHOLDS == [0.0010, 0.0015, 0.0020, 0.0030]
+    assert len(be.DEFAULT_LOOKBACKS) * len(be.DEFAULT_THRESHOLDS) == 16
+
+
 # ── run_calibration_job: the ProcessPoolExecutor worker entry point ──
 
 def test_run_calibration_job_marks_done_on_success(tmp_path, monkeypatch):
@@ -432,7 +627,7 @@ def test_run_calibration_job_marks_done_on_success(tmp_path, monkeypatch):
     db = LoggerDB(db_path=db_path)
     db.create_calibration_run("job1", "BTC/USDC")
 
-    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(100)]
+    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(150)]
     monkeypatch.setattr(be, "_fetch_calibration_candles",
                          lambda symbol, db_: _async_return(fake_candles))
     fake_result = be.CalibrationResult(
@@ -498,7 +693,7 @@ def test_run_calibration_job_never_touches_system_settings(tmp_path, monkeypatch
     db.create_calibration_run("job4", "BTC/USDC")
     db.set_setting("tma_trend_filter_enabled:BTC/USDC", "False")
 
-    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(100)]
+    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(150)]
     monkeypatch.setattr(be, "_fetch_calibration_candles", lambda symbol, db_: _async_return(fake_candles))
     fake_result = be.CalibrationResult(
         symbol="BTC/USDC", window_start="0", window_end="99", lookbacks=[5], thresholds=[0.002],

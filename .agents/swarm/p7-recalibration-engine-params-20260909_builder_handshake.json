@@ -1,0 +1,12 @@
+{
+  "conversation_id": "p7-recalibration-engine-params-20260909",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/backtest_engine.py",
+    "tests/test_backtest_engine.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-09T15:56:52Z",
+  "notes": "Audyt docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md, P7 (naprawa parametrow silnika rekalibracji), wykonane po kolei 4 kroki: (1) train_test_validate() default fallback zamieniony z hardcoded adaptive_vr_high=1.0/adaptive_vr_low=0.75 (stale) na IndicatorParams()-owe env-var defaults; run_calibration_job() teraz buduje params jawnie z system_settings przez nowy helper _live_indicator_params() (mirror daemon._get_indicator_params); (2) gate na test-half full_closes przed VALIDATED, MIN_FULL_CLOSES_HALF 12->30, zastosowany zarowno do train- jak i test-connected strony; (3) siatka kalibracji zredukowana 64->16 komorek (zatwierdzone 4x4: lookback[3,5,8,13] x threshold[0.0010,0.0015,0.0020,0.0030]); (4) Post-SL Cooldown (3 swiece, mirror daemon.py PLAN-008 Ph2 _sl_cooldown_until) zamodelowany w run_backtest(), nowy param sl_cooldown_candles=3 default. 7 nowych testow (3 wymagane przez audyt P7 + txn-gate + grid-size guard + 2 cooldown). Pelny test suite: 301/301 PASS (175s, w tym znany wolny real-90-day regression guard 78s)."
+}
