@@ -538,8 +538,13 @@ def train_test_validate(
     )
 
 
-DEFAULT_LOOKBACKS = [3, 5, 8, 12, 16, 20, 24, 30]
-DEFAULT_THRESHOLDS = [0.001, 0.002, 0.003, 0.005, 0.007, 0.010, 0.015, 0.020]
+# Audit P7 "same file" follow-on (2026-09-08): reduced from the original 8x8 (64
+# cells) to the approved 4x4 (16 cells) grid from PLAN-010 TICKET-3 / task.md. 64
+# cells is a 4x multiple-testing exposure over the reviewed/approved grid with no
+# corresponding benefit — more cells only inflate the chance some (lookback,
+# threshold) pair beats baseline by chance in the train half.
+DEFAULT_LOOKBACKS = [3, 5, 8, 13]
+DEFAULT_THRESHOLDS = [0.0010, 0.0015, 0.0020, 0.0030]
 CALIBRATION_WINDOW_DAYS = 90
 
 

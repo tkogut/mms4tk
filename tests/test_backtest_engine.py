@@ -544,6 +544,17 @@ def test_run_calibration_job_passes_live_system_settings_params(tmp_path, monkey
     assert captured["params"].engine_mode == "ADAPTIVE"
 
 
+def test_default_grid_is_the_approved_4x4():
+    """Audit P7 'same file' follow-on (2026-09-08) regression guard: the default
+    calibration grid must stay at the reviewed/approved 4x4 (16 cells, PLAN-010
+    TICKET-3) — if this ever grows again without a deliberate, reviewed change,
+    treat it as reintroducing the 4x multiple-testing exposure the reduction from
+    8x8 (64 cells) fixed."""
+    assert be.DEFAULT_LOOKBACKS == [3, 5, 8, 13]
+    assert be.DEFAULT_THRESHOLDS == [0.0010, 0.0015, 0.0020, 0.0030]
+    assert len(be.DEFAULT_LOOKBACKS) * len(be.DEFAULT_THRESHOLDS) == 16
+
+
 # ── run_calibration_job: the ProcessPoolExecutor worker entry point ──
 
 def test_run_calibration_job_marks_done_on_success(tmp_path, monkeypatch):
