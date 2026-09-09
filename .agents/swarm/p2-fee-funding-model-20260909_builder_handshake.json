@@ -1,0 +1,12 @@
+{
+  "conversation_id": "p2-fee-funding-model-20260909",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/backtest_engine.py",
+    "tests/test_backtest_engine.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-09T18:38:11Z",
+  "notes": "Audyt docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md, P2 (model prowizji+fundingu w _stats, Etap 1). Dodano ROUND_TRIP_FEE_PCT=0.0010 (OKX taker 0.05% x2, reuzyte z inactivity_manager.py DEFAULT_ROUND_TRIP_COST_PCT) + FUNDING_RATE_PCT_PER_INTERVAL=0.0001 per 8 swiec (ceil division na candles_held). Nowy helper _round_trip_cost_pct(candles_held). _stats() liczy teraz win/loss/rr/total_pnl na NET pnl (pnl_pct - fee_pct - funding_pct), z defaultem 0.0 dla obu pol -> pelna wsteczna zgodnosc, kazdy syntetyczny test _trades() bez tych pol daje identyczny wynik jak przed P2. Wszystkie 3 realne miejsca budowy trade dict w run_backtest (close_position, MIDLINE_PARTIAL_TP, STALE_SPLIT_50) teraz ustawiaja oba pola z candles_held = exit_idx - position['entry_idx']. Wymagany przez audyt test regresji: ponowna walidacja Midline TP (6 okien BTC/ETH x H1/H2/full) i high-vol base filter (4 okna) pod NET pnl - policzone naprawde na fixture'ach: Midline TP nadal przegrywa 6/6 (bez zmiany), high-vol filter nadal bije baseline w dokladnie tych samych 2/4 oknach (BTC_H2, ETH_H2) co brutto - zaden werdykt sie NIE odwrocil, przyrzad wykalibrowany, oba filtry NIE wracaja do kolejki kandydatow. 8 nowych testow (2 P2 regresyjne oznaczone @pytest.mark.slow + 4 unit dla helpera/_stats + 1 run_backtest field-carrying + wliczajac). Pelny test suite: 307/307 PASS (376s)."
+}
