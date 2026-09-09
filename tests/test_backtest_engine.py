@@ -89,6 +89,31 @@ def test_train_test_validate_overfit_rejected_when_direction_fails_to_generalize
     assert result.h1_to_h2.candidate_found and not result.h1_to_h2.generalizes
 
 
+def test_train_test_validate_rejects_test_half_with_too_few_trades(monkeypatch):
+    """Audit P7 'same file' follow-on (2026-09-08): a test half that beats baseline
+    on R:R and total_pnl but with too few trades (< MIN_FULL_CLOSES_HALF) must NOT
+    count as generalizing — otherwise a handful of lucky trades could pass purely on
+    variance. Without this gate, this exact scenario (great R:R, only 3 trades)
+    would have generalized."""
+    monkeypatch.setattr(
+        be, "_grid_search_train",
+        lambda *a, **k: {"lookback": 5, "threshold": 0.002, "stats": {"rr": 2.0, "total_pnl": 0.3, "full_closes": 30}},
+    )
+
+    def fake_run_backtest(symbol, candles, params, stale_candles_threshold, trend_filter_enabled, **kw):
+        if not trend_filter_enabled:
+            return _trades([0.01] * 5 + [-0.02] * 5)  # baseline: mediocre, 10 trades
+        return _trades([0.05, 0.05, 0.05])  # test half: great R:R/pnl, only 3 trades
+
+    monkeypatch.setattr(be, "run_backtest", fake_run_backtest)
+
+    candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(20)]
+    result = be.train_test_validate("BTC/USDC", candles, lookbacks=[5], thresholds=[0.002])
+
+    assert result.verdict == "OVERFIT_REJECTED"
+    assert result.h1_to_h2.candidate_found and not result.h1_to_h2.generalizes
+
+
 def test_train_test_validate_validated_when_both_directions_generalize(monkeypatch):
     monkeypatch.setattr(
         be, "_grid_search_train",
@@ -98,7 +123,8 @@ def test_train_test_validate_validated_when_both_directions_generalize(monkeypat
     def fake_run_backtest(symbol, candles, params, stale_candles_threshold, trend_filter_enabled, **kw):
         if not trend_filter_enabled:
             return _trades([0.01] * 5 + [-0.02] * 5)  # baseline: mediocre
-        return _trades([0.02] * 5 + [-0.01] * 5)  # filtered/test: BETTER than baseline
+        # filtered/test: BETTER than baseline, and >= MIN_FULL_CLOSES_HALF (30) trades
+        return _trades([0.02] * 15 + [-0.01] * 15)
 
     monkeypatch.setattr(be, "run_backtest", fake_run_backtest)
 
@@ -128,7 +154,7 @@ def test_train_test_validate_notes_disagreeing_params_even_when_validated(monkey
     def fake_run_backtest(symbol, candles, params, stale_candles_threshold, trend_filter_enabled, **kw):
         if not trend_filter_enabled:
             return _trades([0.01] * 5 + [-0.02] * 5)
-        return _trades([0.02] * 5 + [-0.01] * 5)
+        return _trades([0.02] * 15 + [-0.01] * 15)  # >= MIN_FULL_CLOSES_HALF (30) trades
 
     monkeypatch.setattr(be, "run_backtest", fake_run_backtest)
 
@@ -494,7 +520,7 @@ def test_run_calibration_job_passes_live_system_settings_params(tmp_path, monkey
     db.set_setting("adaptive_vr_high", "4.2")
     db.set_setting("adaptive_vr_low", "0.15")
 
-    fake_candles = [Candle(timestamp=i * 3600, open=1, high=1, low=1, close=1, volume=1) for i in range(100)]
+    fake_candles = [Candle(timestamp=i * 3600, open=1, high=1, low=1, close=1, volume=1) for i in range(150)]
     monkeypatch.setattr(be, "_fetch_calibration_candles", lambda symbol, db_: _async_return(fake_candles))
 
     captured: Dict[str, Any] = {}
@@ -527,7 +553,7 @@ def test_run_calibration_job_marks_done_on_success(tmp_path, monkeypatch):
     db = LoggerDB(db_path=db_path)
     db.create_calibration_run("job1", "BTC/USDC")
 
-    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(100)]
+    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(150)]
     monkeypatch.setattr(be, "_fetch_calibration_candles",
                          lambda symbol, db_: _async_return(fake_candles))
     fake_result = be.CalibrationResult(
@@ -593,7 +619,7 @@ def test_run_calibration_job_never_touches_system_settings(tmp_path, monkeypatch
     db.create_calibration_run("job4", "BTC/USDC")
     db.set_setting("tma_trend_filter_enabled:BTC/USDC", "False")
 
-    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(100)]
+    fake_candles = [Candle(timestamp=i, open=1, high=1, low=1, close=1, volume=1) for i in range(150)]
     monkeypatch.setattr(be, "_fetch_calibration_candles", lambda symbol, db_: _async_return(fake_candles))
     fake_result = be.CalibrationResult(
         symbol="BTC/USDC", window_start="0", window_end="99", lookbacks=[5], thresholds=[0.002],
