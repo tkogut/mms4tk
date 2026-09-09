@@ -336,7 +336,12 @@ def test_addon_blocked_in_scout_mode(monkeypatch):
         warmup + 3: "HIGH_RISK_ADD_LONG",  # must be BLOCKED — state is SCOUT_MODE
         warmup + 4: "BASE_SHORT",     # closes entry #2 (still SCOUT-sized)
     })
-    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    # sl_cooldown_candles=0: this test is scripting entry #2 for the very next candle
+    # after the SL that enters SCOUT_MODE, to isolate the Single Addon Guard/SCOUT_MODE
+    # sequencing — not Post-SL Cooldown fidelity (covered separately), which would
+    # otherwise block entry #2 outright and make this scenario untestable.
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, sl_cooldown_candles=0)
     stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
     assert len(stop_losses) == 1  # confirms entry #1 really was stopped out (precondition)
     scout_close = [t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]
@@ -369,6 +374,64 @@ def test_addon_uses_tighter_composite_sl(monkeypatch):
     # never have fired at all: the base 2% SL sits at 98.0, below the candle's
     # 98.5 low, so only the tighter addon threshold (98.75) is actually crossed.
     assert stop_losses[0]["exit_price"] == pytest.approx(98.75, abs=0.01)
+
+
+# ── Post-SL Cooldown (audit P7 "same file" follow-on, 2026-09-08) ──
+# Mirrors daemon.py's PLAN-008 Phase 2 mechanism (_sl_cooldown_until): after a
+# genuine STOP_LOSS close, new BASE_LONG/BASE_SHORT entries are blocked for
+# sl_cooldown_candles candles (default 3). Both tests below place a SECOND price
+# dip at the candle a blocked-but-not-actually-blocked re-entry would occupy —
+# if the cooldown fails to block it, that second dip stops it out too, giving a
+# second STOP_LOSS; if correctly blocked, no position exists there to be stopped.
+
+def test_post_sl_cooldown_blocks_immediate_reentry(monkeypatch):
+    """With the default 3-candle cooldown active, a re-entry attempted 2 candles
+    after the stop-out must be blocked entirely — only entry #1's STOP_LOSS shows
+    up, never a second one."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    # Entry #1 (opened at warmup, price 100.0) is stopped out here (SL@98.0).
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    # Would ALSO stop out a LONG entered at warmup+2 (100.0 -> SL@98.0) if the
+    # cooldown (active until ts=warmup+4) failed to block that re-entry. A LONG
+    # entered only at warmup+4, once cooldown clears, is unaffected — this candle
+    # has already passed by then.
+    candles[warmup + 3] = Candle(timestamp=warmup + 3, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",       # entry #1
+        warmup + 2: "BASE_LONG",   # within cooldown (until ts=warmup+4) -> must be BLOCKED
+        warmup + 4: "BASE_LONG",   # cooldown just cleared -> allowed, no more dips ahead
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, sl_cooldown_candles=3)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1  # only entry #1 — entry attempted at warmup+2 never opened
+
+
+def test_post_sl_cooldown_disabled_lets_second_stop_loss_through(monkeypatch):
+    """Sanity check for the test above: with sl_cooldown_candles=0 (disabled) on the
+    IDENTICAL scenario, the re-entry at warmup+2 DOES open and DOES get stopped out
+    by the second dip — proving the scenario is capable of detecting the cooldown's
+    absence, not just always producing one STOP_LOSS regardless."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    candles[warmup + 3] = Candle(timestamp=warmup + 3, open=100.0, high=100.5, low=95.0,
+                                  close=100.0, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",
+        warmup + 2: "BASE_LONG",
+        warmup + 4: "BASE_LONG",
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, sl_cooldown_candles=0)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 2
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──

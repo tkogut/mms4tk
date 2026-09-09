@@ -160,6 +160,7 @@ def run_backtest(
     slope_threshold: float = 0.002,
     midline_tp_enabled: bool = False,
     midline_tp_fraction: float = 0.50,
+    sl_cooldown_candles: int = 3,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -186,6 +187,16 @@ def run_backtest(
     SCOUT_MODE (shrinks new entries via `_size_new_entry`); only a FULL (non-partial)
     take-profit-flagged close exits it — a partial (SPLIT_50/Midline TP) explicitly
     preserves SCOUT_MODE, matching `record_trade()`'s own behavior exactly.
+
+    Audit P7 "same file" follow-on (2026-09-08): also models daemon.py's Post-SL
+    Cooldown (PLAN-008 Phase 2, `_sl_cooldown_until`) — after a genuine STOP_LOSS
+    close, new BASE_LONG/BASE_SHORT entries are blocked for `sl_cooldown_candles`
+    candles (default 3, matching `MMS4_SL_COOLDOWN_CANDLES`'s default), mirroring
+    exactly the one branch daemon.py gates on it (a fresh position open when none
+    exists) — TP_AND_FLIP re-entries and HIGH_RISK_ADD are untouched, matching
+    production. Without this, the calibration engine could validate a filter whose
+    apparent edge is partly just re-entering immediately after every stop-out, a
+    behavior production does not actually allow.
 
     Also models HIGH_RISK_ADD (addon) signals, previously silently dropped (the
     harness only handled BASE_LONG/SHORT for entries — a real, undocumented bias in
@@ -217,6 +228,17 @@ def run_backtest(
     trades: List[Dict[str, Any]] = []
     position: Optional[Dict[str, Any]] = None
     warmup = max(params.tma_length, params.atr_period) + slope_lookback + 2
+
+    # Post-SL Cooldown (PLAN-008 Phase 2 fidelity, see docstring): timestamp until
+    # which new BASE_LONG/BASE_SHORT entries are blocked, set below on a genuine
+    # STOP_LOSS close. 0 means no cooldown currently active.
+    sl_cooldown_until_ts: float = 0.0
+    candle_interval = 0.0
+    if len(candles) >= 2:
+        try:
+            candle_interval = abs(float(candles[1].timestamp) - float(candles[0].timestamp))
+        except (TypeError, ValueError):
+            candle_interval = 0.0
 
     def close_position(exit_price: float, reason: str, idx: int) -> None:
         nonlocal position
@@ -267,6 +289,8 @@ def run_backtest(
             sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
             if sl_hit:
                 close_position(sl_price, "STOP_LOSS", i)
+                if sl_cooldown_candles > 0 and candle_interval > 0:
+                    sl_cooldown_until_ts = float(curr_c.timestamp) + (sl_cooldown_candles * candle_interval)
                 continue
 
             # ── Midline Partial TP (PLAN-009 v2), evaluated BEFORE inactivity
@@ -337,7 +361,8 @@ def run_backtest(
             continue
 
         if position is None:
-            if signal.signal_type in ("BASE_LONG", "BASE_SHORT"):
+            cooldown_active = sl_cooldown_until_ts > 0 and float(curr_c.timestamp) < sl_cooldown_until_ts
+            if signal.signal_type in ("BASE_LONG", "BASE_SHORT") and not cooldown_active:
                 side = "long" if signal.signal_type == "BASE_LONG" else "short"
                 position = {"side": side, "entry_price": curr_c.close, "entry_idx": i,
                             **_size_new_entry(symbol, sm)}
