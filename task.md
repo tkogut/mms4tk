@@ -132,6 +132,24 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 - **Wynik bramki kroku 0** (audyt: "jeśli różnica okaże się mała, hipoteza upada i tu kończymy"): różnica **NIE jest mała** (26-27% ≫ 15% przyjęte jako konserwatywny próg "nie-mały") → **hipoteza NIE upada**. To NIE oznacza automatycznego przejścia do wariantu #2 (per-symbol `base_sl_pct` grid, 2-way OOS) ani #3 (`SL=k·ATR`, zmiana doktryny KB 1.4) — to osobna, większa decyzja wymagająca zgody właściciela strategii, poza zakresem kroku 0.
 - 2 nowe testy: jeden lockuje pomiar z konserwatywnym progiem 15% (nie dokładną wartością — nie sflaczeje na drobnych zmianach fixture/wskaźnika), drugi to sanity check zgodności z produkcyjnymi defaultami. Pełny suite: **309/309 PASS**.
 - **Niezależna recenzja (Opus, drugi agent, 2026-09-10):** liczby przeliczone niezależnie, zgodne co do 4. cyfry znaczącej. Metodologia potwierdzona jako zgodna z produkcją. Zero zastrzeżeń poza kosmetyką opisu (poprawione powyżej). Rekomendacja: **MERGE**. Bonus finding: BTC SL/ATR≈4.02 to praktycznie cała szerokość wstęgi (4·ATR) — stop na BTC jest wręcz *za szeroki*, co wzmacnia hipotezę P4 mocniej niż oryginalnie napisano.
+## 🔹 Etap 2: P1 — Odseparować SL dokładki od SL bazy 🔴 PRIORYTET NAJWYŻSZY
+
+### ✅ DONE, WYNIK: V0 ZOSTAJE — ani V1, ani V2 nie przechodzi bramki (4dd327e, f0a9e9f)
+- **Plik:** `src/mms4tk/backtest_engine.py`
+- **Dowód:** audyt §1.1+§1.2 — `closeFraction="1"` + kasowanie poprzednich algo + `entry_price = cena dokładki` = de facto stop BE ~0.5% na całej pozycji przy ~70% pozycji. Narusza "Żelazną Regułę" ze spec.
+- **Zaimplementowane (harness, `76e79d3`):** `run_backtest(addon_sl_variant="V0"|"V1"|"V2")`.
+  - **V0** (domyślny, = obecna produkcja, niezmieniony): kompozyt 1.25% od uśrednionej (avgPx) ceny wejścia.
+  - **V1**: kompozyt 2.0% od avgPx — ten sam mechanizm, szerszy próg.
+  - **V2**: SL bazy zostaje przypięty do ORYGINALNEJ ceny wejścia bazy (nowe pole `position["base_entry_price"]`, nigdy nieaktualizowane przez uśrednienie dokładki), dokładka bez własnego SL — najbliższe intencji spec.
+- **Analiza (wymagany przez audyt gate, policzona naprawdę na fixture'ach, 18 przebiegów = 3 warianty × 6 okien BTC/ETH × H1/H2/full):**
+  - V1 bije V0 na R:R **i** total_pnl NETTO w **3/6** okien (BTC_H2, ETH_H1, ETH_full).
+  - V2 bije V0 w **2/6** okien (ETH_H1, ETH_full).
+  - **Bramka wdrożenia wymaga ≥5/6 — ani V1, ani V2 jej nie przechodzi.**
+- **Decyzja (zgodnie z jawnym fallbackiem audytu: "poniżej — zostaje V0 i dokumentujemy dryf jako świadomy"):** **V0 (obecna produkcja) zostaje bez zmian.** Zero zmian w kodzie produkcyjnym — `daemon.py`/`okx_executor.py`/`attach_stop_loss` nietknięte. To nie jest niedokończone zadanie — gate zaprojektowany przez audyt właśnie po to, żeby uczciwa hipoteza mogła empirycznie przegrać, i tu przegrała.
+- Wynik zablokowany testem regresyjnym `test_p1_addon_sl_gate_v0_stays_neither_variant_clears_5_of_6` (`@pytest.mark.slow`) — jeśli kiedyś zacznie failować, oznacza to, że jeden z wariantów faktycznie przeszedł bramkę i decyzja produkcyjna wymaga ponownego rozpatrzenia.
+- 9 nowych testów (4 unit dla wariantów SL/walidacji + 1 gate regression), pełny suite: **312/312 PASS**.
+
+**Kolejność dalej wg audytu §5 (dla orientacji, nie zlecone jeszcze):** Etap 3 = P4 krok 0 (pomiar ATR%/SL per symbol) + P6.1 (naprawa buga persystencji) → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 (logowanie `volatility_zone`) → Etap 6 = P8 (analiza sesyjna).
 
 ---
 
@@ -140,3 +158,7 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 P9, P7, P2, P1, P6.1 i P4-krok-0 zaimplementowane. PR-y #28/#29/(ten) do
 sprawdzenia/merge. Decyzja o P4 wariancie #2 (per-symbol SL grid) — czeka na
 osobne polecenie, bo to głębsza zmiana doktryny.
+P9, P7, P2 i P1 zaimplementowane, przetestowane, PR-y otwarte/zmergowane. P1
+zakończyło się wynikiem "V0 zostaje" (gate nie przeszedł) — to prawidłowe,
+kompletne zamknięcie ticketu, nie odłożenie. Etap 3 (P4 krok 0 + P6.1) czeka na
+osobne polecenie.
