@@ -607,6 +607,47 @@ def test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees():
     assert beats == expected, f"High-vol filter NET verdict changed: {beats} vs expected {expected}"
 
 
+@pytest.mark.slow
+def test_p1_addon_sl_gate_v0_stays_neither_variant_clears_5_of_6():
+    """Audit P1 (2026-09-08): required gate for implementing V1 or V2 in production
+    — V1 OR V2 must beat V0 on BOTH R:R and total_pnl (NET) in >= 5/6 windows
+    (BTC/ETH x H1/H2/full). Computed 2026-09-09, real fixture data:
+        V1 beats V0 in 3/6 windows (BTC_H2, ETH_H1, ETH_full)
+        V2 beats V0 in 2/6 windows (ETH_H1, ETH_full)
+    Neither clears the gate — per the audit's own explicit fallback ("poniżej —
+    zostaje V0 i dokumentujemy dryf jako świadomy"), V0 (current production
+    composite 1.25% SL from avgPx) stays. This test locks in that finding: if it
+    ever fails, a real change to run_backtest's addon/SL/signal logic moved one of
+    the variants past the gate — that is grounds to REVISIT the P1 production
+    decision, not to "fix" this test back to passing."""
+    windows = []
+    for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
+                                  ("ETH", "ohlcv_ETH_USDC_1h.csv", "ETH/USDC")]:
+        candles = load_fixture_candles(fname)
+        mid = len(candles) // 2
+        windows.append((f"{label}_H1", symbol, candles[:mid]))
+        windows.append((f"{label}_H2", symbol, candles[mid:]))
+        windows.append((f"{label}_full", symbol, candles))
+
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    v1_wins = 0
+    v2_wins = 0
+    for label, symbol, candles in windows:
+        v0 = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                        trend_filter_enabled=False, addon_sl_variant="V0"))
+        v1 = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                        trend_filter_enabled=False, addon_sl_variant="V1"))
+        v2 = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                        trend_filter_enabled=False, addon_sl_variant="V2"))
+        if v1["rr"] > v0["rr"] and v1["total_pnl"] > v0["total_pnl"]:
+            v1_wins += 1
+        if v2["rr"] > v0["rr"] and v2["total_pnl"] > v0["total_pnl"]:
+            v2_wins += 1
+
+    assert v1_wins < 5, f"V1 now clears the P1 gate ({v1_wins}/6) — production decision needs revisiting"
+    assert v2_wins < 5, f"V2 now clears the P1 gate ({v2_wins}/6) — production decision needs revisiting"
+
+
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
 # Added 2026-09-02 after finding this feature shipped to production 2026-08-31
 # without backtest evidence. Real-fixture-data A/B comparison (not a synthetic
