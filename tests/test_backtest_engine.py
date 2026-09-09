@@ -55,6 +55,52 @@ def test_stats_weights_partial_closes_by_remaining_fraction():
     assert s["total_pnl"] == pytest.approx(0.02 * 1.0 + (-0.02) * 0.5)
 
 
+def test_stats_defaults_fee_and_funding_to_zero_for_backward_compatibility():
+    """Audit P2 (2026-09-08): any trade dict without fee_pct/funding_pct — every
+    synthetic `_trades()`-built test trade in this file, and anything hand-built
+    elsewhere — must produce IDENTICAL _stats() output to before P2 (net == gross
+    when those fields are absent). Only real trades from run_backtest() (which now
+    set both fields) actually become net."""
+    trades = _trades([0.02, -0.01])
+    s = be._stats(trades)
+    assert s["total_pnl"] == pytest.approx(0.02 - 0.01)
+
+
+def test_stats_subtracts_fee_and_funding_when_present():
+    trades = _trades([0.02])
+    trades[0]["fee_pct"] = 0.0010
+    trades[0]["funding_pct"] = 0.0002
+    s = be._stats(trades)
+    assert s["total_pnl"] == pytest.approx(0.02 - 0.0010 - 0.0002)
+
+
+# ── P2 (audit 2026-09-08): round-trip fee + funding cost helper ──
+
+def test_round_trip_cost_pct_fee_is_flat_funding_scales_with_hold_duration():
+    zero_hold = be._round_trip_cost_pct(0)
+    short_hold = be._round_trip_cost_pct(3)   # < 8 candles -> 1 funding interval (ceil)
+    long_hold = be._round_trip_cost_pct(9)    # > 8 candles -> 2 funding intervals
+
+    # fee_pct is flat — duration-independent — regardless of hold length.
+    assert zero_hold["fee_pct"] == short_hold["fee_pct"] == long_hold["fee_pct"] == be.ROUND_TRIP_FEE_PCT
+    assert zero_hold["funding_pct"] == 0.0
+    assert short_hold["funding_pct"] == pytest.approx(be.FUNDING_RATE_PCT_PER_INTERVAL)
+    assert long_hold["funding_pct"] == pytest.approx(be.FUNDING_RATE_PCT_PER_INTERVAL * 2)
+
+
+def test_run_backtest_trades_carry_fee_and_funding_fields():
+    """Real trades produced by run_backtest() must set fee_pct/funding_pct — this is
+    what makes _stats() on real results actually net, not silently gross by
+    omission."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    assert len(trades) > 0
+    for t in trades:
+        assert t["fee_pct"] == pytest.approx(be.ROUND_TRIP_FEE_PCT)
+        assert t["funding_pct"] >= 0.0
+
+
 # ── train_test_validate: decision logic, isolated from the real simulation ──
 
 def test_train_test_validate_no_candidate(monkeypatch):
@@ -432,6 +478,74 @@ def test_post_sl_cooldown_disabled_lets_second_stop_loss_through(monkeypatch):
                               trend_filter_enabled=False, sl_cooldown_candles=0)
     stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
     assert len(stop_losses) == 2
+
+
+# ── P2 (audit 2026-09-08): NET-pnl re-validation of two already-decided filters ──
+# These are regression tests, not new analysis: the audit's own required step for
+# this ticket is proving the fee/funding model does NOT silently change a decision
+# that was made on gross pnl. If either of these ever starts failing because a
+# verdict genuinely flipped, that filter needs re-review as a fresh candidate
+# (audit §5 stage 1) — do not "fix" this test to force it back to passing without
+# that review.
+
+@pytest.mark.slow
+def test_p2_midline_tp_still_loses_all_6_windows_net_of_fees():
+    """Re-validates the Midline TP decision (BTC/ETH x H1/H2/full = 6 windows,
+    matching the original 2026-09-02 review below) under NET pnl. Computed
+    2026-09-09: Midline TP does not beat baseline on BOTH R:R and total_pnl in any
+    of the 6 windows, gross or net — the fee/funding model does not change this
+    conclusion. `system_settings`'s `midline_partial_tp_enabled=False` stays correct."""
+    windows = []
+    for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
+                                  ("ETH", "ohlcv_ETH_USDC_1h.csv", "ETH/USDC")]:
+        candles = load_fixture_candles(fname)
+        mid = len(candles) // 2
+        windows.append((f"{label}_H1", symbol, candles[:mid]))
+        windows.append((f"{label}_H2", symbol, candles[mid:]))
+        windows.append((f"{label}_full", symbol, candles))
+
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    beats: Dict[str, bool] = {}
+    for label, symbol, candles in windows:
+        off = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                         trend_filter_enabled=False, midline_tp_enabled=False))
+        on = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                        trend_filter_enabled=False, midline_tp_enabled=True,
+                                        midline_tp_fraction=0.5))
+        beats[label] = on["rr"] > off["rr"] and on["total_pnl"] > off["total_pnl"]
+
+    assert not any(beats.values()), f"Midline TP beat baseline (NET) in: {[k for k, v in beats.items() if v]}"
+
+
+@pytest.mark.slow
+def test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees():
+    """Re-validates the high-vol base filter decision (BTC/ETH x H1/H2 = 4 windows)
+    under NET pnl. Computed 2026-09-09: beats baseline in exactly BTC_H2 and ETH_H2
+    (2/4), the SAME pattern gross and net — the fee/funding model does not flip
+    this verdict either way. Stays opt-in (`high_vol_base_filter_enabled=False`
+    default) in `system_settings`."""
+    windows = []
+    for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
+                                  ("ETH", "ohlcv_ETH_USDC_1h.csv", "ETH/USDC")]:
+        candles = load_fixture_candles(fname)
+        mid = len(candles) // 2
+        windows.append((f"{label}_H1", symbol, candles[:mid]))
+        windows.append((f"{label}_H2", symbol, candles[mid:]))
+
+    beats: Dict[str, bool] = {}
+    for label, symbol, candles in windows:
+        params_off = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.6, adaptive_vr_low=0.8,
+                                      high_vol_base_filter_enabled=False)
+        params_on = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.6, adaptive_vr_low=0.8,
+                                     high_vol_base_filter_enabled=True)
+        off = be._stats(be.run_backtest(symbol, candles, params_off, stale_candles_threshold=12,
+                                         trend_filter_enabled=False))
+        on = be._stats(be.run_backtest(symbol, candles, params_on, stale_candles_threshold=12,
+                                        trend_filter_enabled=False))
+        beats[label] = on["rr"] > off["rr"] and on["total_pnl"] > off["total_pnl"]
+
+    expected = {"BTC_H1": False, "BTC_H2": True, "ETH_H1": False, "ETH_H2": True}
+    assert beats == expected, f"High-vol filter NET verdict changed: {beats} vs expected {expected}"
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──

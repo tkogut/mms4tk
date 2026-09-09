@@ -38,6 +38,44 @@ from mms4tk.state_manager import MMS4StateManager, MMS4State
 BASE_SL_PCT = 0.02
 STALE_ATR_THRESHOLD = 0.5
 IMPULSE_NEGATION_ENABLED = True
+
+# Audit P2 (2026-09-08): round-trip fee + funding cost model. Previously this engine
+# had ZERO fee/funding/slippage modeling despite production tracking full net PnL
+# (PLAN-011, fee_usd/pnl_net_usd) — every calibration/backtest verdict to date
+# (Midline TP off, trend filter off, high-vol filter off) was measured on GROSS pnl,
+# a systematically biased instrument: gross overstates the edge of anything that
+# trades MORE (filters that let more entries through look relatively better than
+# they are) and understates anything that trades LESS (a filter that reduces churn
+# looks relatively worse than it is).
+#
+# TAKER_FEE_PCT: OKX taker fee per leg. Same reference already used for
+# inactivity_manager.py's DEFAULT_ROUND_TRIP_COST_PCT ("OKX taker 0.05% x2 +
+# funding") — not re-derived independently, reused from that already-verified
+# constant so the two don't silently drift apart.
+TAKER_FEE_PCT = 0.0005
+# Round-trip = open + close, duration-independent (unlike funding below).
+ROUND_TRIP_FEE_PCT = TAKER_FEE_PCT * 2  # 0.0010 (0.10%)
+# OKX perpetual funding: charged every 8 hours. On H1 candles (this engine's only
+# timeframe, see run_calibration_job/_fetch_calibration_candles) that is every 8
+# candles. 0.01% is a conservative flat estimate (real funding rates float and can
+# be negative — a fixed positive cost is the conservative assumption for a filter
+# being asked to prove it survives costs, not a precise funding-rate model).
+FUNDING_RATE_PCT_PER_INTERVAL = 0.0001
+FUNDING_INTERVAL_CANDLES = 8
+
+
+def _round_trip_cost_pct(candles_held: int) -> Dict[str, float]:
+    """fee_pct is flat (duration-independent); funding_pct scales with how many
+    8-candle funding intervals the position was held across (ceil — a position held
+    for 1 candle into a new interval still pays that interval in full, matching how
+    OKX actually charges funding at the interval boundary regardless of how briefly
+    a position was open during it)."""
+    held = max(int(candles_held), 0)
+    funding_intervals = -(-held // FUNDING_INTERVAL_CANDLES)  # ceil division, stdlib-free
+    return {
+        "fee_pct": ROUND_TRIP_FEE_PCT,
+        "funding_pct": funding_intervals * FUNDING_RATE_PCT_PER_INTERVAL,
+    }
 MIN_FULL_CLOSES_HALF = 30  # below this, a half-window config's stats are too noisy to trust
 # Audit P7 "same file" follow-on (2026-09-08): raised 12 -> 30. 12 was the only
 # sample-size floor gating a TRAIN-half candidate; the TEST-half "generalizes" check
@@ -132,20 +170,33 @@ def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     persisted before that change is not bit-for-bit comparable to a post-change run
     for any window that included a >=2% stop-loss (full-BASE-only runs, i.e. ones
     that never triggered SCOUT_MODE, are unaffected — `notional_weight` was already
-    1.0 there)."""
+    1.0 there).
+
+    Audit P2 (2026-09-08): win/loss classification, R:R and total_pnl are now all
+    computed on NET pnl (`pnl_pct - fee_pct - funding_pct`), not gross — see the
+    module-level fee/funding constants above. `fee_pct`/`funding_pct` default to 0.0
+    via `.setdefault` when absent, so this is a NO-OP (net == gross) for any trade
+    dict that doesn't set them — every existing synthetic/hand-built test trade
+    (the `_trades()` helper in tests/test_backtest_engine.py, and anything built by
+    hand elsewhere) is completely unaffected; only real trades produced by
+    `run_backtest()`'s own three trade-construction sites (which now DO set both
+    fields) actually change behavior here."""
     if not trades:
         return dict(win_rate=0.0, rr=float("nan"), total_pnl=0.0, full_closes=0)
     for t in trades:
         t.setdefault("weight", 1.0)
-    wins = [t for t in trades if t["pnl_pct"] > 0]
-    losses = [t for t in trades if t["pnl_pct"] <= 0]
+        t.setdefault("fee_pct", 0.0)
+        t.setdefault("funding_pct", 0.0)
+    net = lambda t: t["pnl_pct"] - t["fee_pct"] - t["funding_pct"]
+    wins = [t for t in trades if net(t) > 0]
+    losses = [t for t in trades if net(t) <= 0]
     win_rate = len(wins) / len(trades) * 100
     w_win = sum(t["weight"] for t in wins) or 1.0
     w_loss = sum(t["weight"] for t in losses) or 1.0
-    avg_win = sum(t["pnl_pct"] * t["weight"] for t in wins) / w_win if wins else 0.0
-    avg_loss = abs(sum(t["pnl_pct"] * t["weight"] for t in losses) / w_loss) if losses else 0.0
+    avg_win = sum(net(t) * t["weight"] for t in wins) / w_win if wins else 0.0
+    avg_loss = abs(sum(net(t) * t["weight"] for t in losses) / w_loss) if losses else 0.0
     rr = (avg_win / avg_loss) if avg_loss > 0 else float("nan")
-    total_pnl = sum(t["pnl_pct"] * t["weight"] for t in trades)
+    total_pnl = sum(net(t) * t["weight"] for t in trades)
     full_closes = len([t for t in trades if not t.get("partial")])
     return dict(win_rate=win_rate, rr=rr, total_pnl=total_pnl, full_closes=full_closes)
 
@@ -262,6 +313,7 @@ def run_backtest(
             "side": side, "entry_price": entry, "exit_price": exit_price,
             "pnl_pct": pnl_pct, "exit_reason": reason, "exit_idx": idx, "weight": weight,
             "addon_applied": bool(position.get("addon_done", False)),  # test/diagnostic observability only
+            **_round_trip_cost_pct(idx - position["entry_idx"]),
         })
         im.stop_tracking(symbol)
         position = None
@@ -313,6 +365,7 @@ def run_backtest(
                                 "side": side, "entry_price": entry, "exit_price": tma_mid,
                                 "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP", "exit_idx": i,
                                 "partial": True, "weight": position["notional_weight"] * reduced_frac,
+                                **_round_trip_cost_pct(i - position["entry_idx"]),
                             })
                             record_partial("MIDLINE_PARTIAL_TP")
                             position["contracts"] = contracts - reduce_amt
@@ -343,6 +396,7 @@ def run_backtest(
                         "side": side, "entry_price": entry, "exit_price": curr_c.close,
                         "pnl_pct": half_pnl, "exit_reason": "STALE_SPLIT_50", "exit_idx": i,
                         "partial": True, "weight": position["notional_weight"] * reduced_frac,
+                        **_round_trip_cost_pct(i - position["entry_idx"]),
                     })
                     record_partial("STALE_SPLIT_50")
                     position["contracts"] = contracts - reduce_amt
