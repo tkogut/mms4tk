@@ -87,7 +87,11 @@ MIN_FULL_CLOSES_HALF = 30  # below this, a half-window config's stats are too no
 # so an operator's .env change to the live values is picked up here too.
 BASE_ALLOCATION = 0.70
 ADDON_ALLOCATION = 0.30
-ADDON_SL_PCT = 0.0125  # tighter COMPOSITE stop-loss for the whole position once an addon exists
+ADDON_SL_PCT = 0.0125  # V0 (current production): tighter COMPOSITE stop-loss for the whole position once an addon exists
+# Audit P1 (2026-09-08): V1 candidate — composite SL widened to 2.0% of the averaged
+# (avgPx) entry, reading the spec's "max 3% na całość" as ~2% on the blended
+# position. See run_backtest's `addon_sl_variant` param for V0/V1/V2 semantics.
+ADDON_SL_PCT_V1 = 0.02
 
 # Real base-entry contract size per symbol at the CURRENT allocation, from
 # `OKXExecutor.calculate_order_amount()` against the live-resolved XPERP contract
@@ -212,6 +216,7 @@ def run_backtest(
     midline_tp_enabled: bool = False,
     midline_tp_fraction: float = 0.50,
     sl_cooldown_candles: int = 3,
+    addon_sl_variant: str = "V0",
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -260,7 +265,23 @@ def run_backtest(
     a tighter COMPOSITE stop-loss for the whole position (`ADDON_SL_PCT`) and an
     explicit weighted-average entry-price approximation of OKX's own `avgPx` merge
     (production has no in-code equivalent — it relies on the exchange).
+
+    Audit P1 (2026-09-08): `addon_sl_variant` selects how the SL is recomputed once
+    an addon fills, mirroring the analysis harness the audit asked for (same 6
+    windows as Midline TP: BTC/ETH x H1/H2/full). Current production behavior IS a
+    variant here (V0), not a separate code path — this is deliberate, so V0 stays
+    provably identical to what production does today rather than drifting from it.
+      - "V0" (current production): composite `ADDON_SL_PCT` (1.25%) from the
+        averaged (avgPx) entry.
+      - "V1": composite `ADDON_SL_PCT_V1` (2.0%) from the averaged entry — same
+        mechanism as V0, wider threshold.
+      - "V2": the base leg's SL stays pegged to the ORIGINAL base entry price
+        (`base_entry_price`, never touched by the addon average) at `BASE_SL_PCT`
+        (2%) — the addon itself gets no separate SL. Closest to the spec's stated
+        intent ("SL 2% bazy służy dalej jako bufor").
     """
+    if addon_sl_variant not in ("V0", "V1", "V2"):
+        raise ValueError(f"addon_sl_variant must be one of V0/V1/V2, got {addon_sl_variant!r}")
     sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=None)
     engine = MMS4SignalEngine()
     im = MMS4InactivityManager()
@@ -337,7 +358,12 @@ def run_backtest(
             side = position["side"]
             entry = position["entry_price"]
             sl_pct = position.get("sl_pct_override", BASE_SL_PCT)
-            sl_price = entry * (1 - sl_pct) if side == "long" else entry * (1 + sl_pct)
+            # V2 (addon_sl_variant): SL stays pegged to the ORIGINAL base entry
+            # price, never the addon-averaged one — see run_backtest's docstring.
+            # V0/V1 (and any position that never took an addon) use the normal
+            # averaged `entry_price`, unchanged from before P1.
+            sl_basis_price = position["base_entry_price"] if position.get("sl_price_basis") == "base_entry" else entry
+            sl_price = sl_basis_price * (1 - sl_pct) if side == "long" else sl_basis_price * (1 + sl_pct)
             sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
             if sl_hit:
                 close_position(sl_price, "STOP_LOSS", i)
@@ -418,7 +444,7 @@ def run_backtest(
             cooldown_active = sl_cooldown_until_ts > 0 and float(curr_c.timestamp) < sl_cooldown_until_ts
             if signal.signal_type in ("BASE_LONG", "BASE_SHORT") and not cooldown_active:
                 side = "long" if signal.signal_type == "BASE_LONG" else "short"
-                position = {"side": side, "entry_price": curr_c.close, "entry_idx": i,
+                position = {"side": side, "entry_price": curr_c.close, "base_entry_price": curr_c.close, "entry_idx": i,
                             **_size_new_entry(symbol, sm)}
                 atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
                 im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),
@@ -447,11 +473,19 @@ def run_backtest(
                 position["notional_weight"] = position["notional_weight"] * (new_contracts / position["contracts"])
                 position["contracts"] = new_contracts
                 position["addon_done"] = True
-                # Tighter COMPOSITE stop-loss for the WHOLE position once an addon
-                # exists — matches daemon.py's addon_sl_pct override; the addon
+                # Audit P1 (2026-09-08): addon_sl_variant selects how the SL is
+                # recomputed for the WHOLE position once an addon exists — see
+                # run_backtest's docstring for V0/V1/V2 semantics. The addon
                 # signal's own hardcoded 1% SL (analytics.py) is deliberately
-                # ignored, since production overrides it at execution time too.
-                position["sl_pct_override"] = ADDON_SL_PCT
+                # ignored in all three variants, since production overrides it at
+                # execution time too.
+                if addon_sl_variant == "V2":
+                    position["sl_pct_override"] = BASE_SL_PCT
+                    position["sl_price_basis"] = "base_entry"
+                elif addon_sl_variant == "V1":
+                    position["sl_pct_override"] = ADDON_SL_PCT_V1
+                else:  # V0 — current production behavior
+                    position["sl_pct_override"] = ADDON_SL_PCT
                 # Inactivity tracker is NOT re-tracked at the new averaged entry —
                 # a documented, lower-distortion approximation (re-tracking would
                 # reset accumulated stagnation/impulse progress that production's
@@ -465,7 +499,7 @@ def run_backtest(
                     (new_side == "long" and slope_now < -slope_threshold)
                 )
                 if not flip_blocked:
-                    position = {"side": new_side, "entry_price": curr_c.close, "entry_idx": i,
+                    position = {"side": new_side, "entry_price": curr_c.close, "base_entry_price": curr_c.close, "entry_idx": i,
                                 **_size_new_entry(symbol, sm)}
                     atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
                     im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),

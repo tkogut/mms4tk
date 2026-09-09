@@ -422,6 +422,65 @@ def test_addon_uses_tighter_composite_sl(monkeypatch):
     assert stop_losses[0]["exit_price"] == pytest.approx(98.75, abs=0.01)
 
 
+# ── Addon SL variants (audit P1, 2026-09-08) ──
+# Base LONG @ 100.0 (4 contracts), addon fires at 110.0 (not the same price as the
+# base — needed to make avgPx (103.0, worked out below) diverge from
+# base_entry_price (100.0), the only way to actually discriminate V2 from V0/V1:
+#   addon_contracts = 4.0 * (0.3/0.7) ≈ 1.714286
+#   avgPx = (4.0*100.0 + 1.714286*110.0) / (4.0+1.714286) = 103.0 exactly
+# A deep dip (low=90.0) guarantees a trigger under ALL three variants' thresholds,
+# so exit_price alone discriminates which formula actually fired.
+
+def _addon_sl_variant_scenario(monkeypatch, variant):
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=110.5, low=99.5,
+                                  close=110.0, volume=1.0)  # addon fires here, at 110.0
+    candles[warmup + 2] = Candle(timestamp=warmup + 2, open=110.0, high=110.5, low=90.0,
+                                  close=110.0, volume=1.0)  # deep dip: triggers under any variant
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",
+        warmup + 1: "HIGH_RISK_ADD_LONG",
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, addon_sl_variant=variant)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1
+    assert stop_losses[0]["addon_applied"] is True
+    return stop_losses[0]
+
+
+def test_addon_sl_variant_v0_is_composite_from_avgpx(monkeypatch):
+    """V0 (current production, also the default): composite 1.25% from the
+    averaged (avgPx=103.0) entry -> 103.0 * 0.9875 = 101.7125."""
+    sl = _addon_sl_variant_scenario(monkeypatch, "V0")
+    assert sl["exit_price"] == pytest.approx(101.7125, abs=0.01)
+
+
+def test_addon_sl_variant_v1_is_wider_composite_from_avgpx(monkeypatch):
+    """V1: composite 2.0% from the same averaged (avgPx=103.0) entry ->
+    103.0 * 0.98 = 100.94 — same mechanism as V0, wider threshold."""
+    sl = _addon_sl_variant_scenario(monkeypatch, "V1")
+    assert sl["exit_price"] == pytest.approx(100.94, abs=0.01)
+
+
+def test_addon_sl_variant_v2_stays_pegged_to_original_base_entry(monkeypatch):
+    """V2: SL pegged to the ORIGINAL base entry (100.0), never the addon-averaged
+    103.0 -> 100.0 * 0.98 = 98.0. Proves the addon fill did NOT move the SL basis
+    at all, unlike V0/V1."""
+    sl = _addon_sl_variant_scenario(monkeypatch, "V2")
+    assert sl["exit_price"] == pytest.approx(98.0, abs=0.01)
+
+
+def test_run_backtest_rejects_unknown_addon_sl_variant():
+    params = IndicatorParams()
+    candles = _flat_candles(50)
+    with pytest.raises(ValueError, match="addon_sl_variant"):
+        be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                         trend_filter_enabled=False, addon_sl_variant="V3")
+
+
 # ── Post-SL Cooldown (audit P7 "same file" follow-on, 2026-09-08) ──
 # Mirrors daemon.py's PLAN-008 Phase 2 mechanism (_sl_cooldown_until): after a
 # genuine STOP_LOSS close, new BASE_LONG/BASE_SHORT entries are blocked for
