@@ -1,11 +1,11 @@
 # 📋 TASK BACKLOG: Etap 0 — P9 (Higiena) + P7 (Naprawa parametrów silnika rekalibracji)
 
-**Status:** P9 (TICKET-P9.1 do P9.7) ZAIMPLEMENTOWANE i przetestowane — 294/294 testów
-PASS. P7 (TICKET-P7.1) celowo NIERUSZANE, poza zatwierdzonym zakresem tej tury
-("Ticketów 1 do 7" = P9). Decyzje architektoniczne dla P9.2/P9.3 zatwierdzone przez
-usera (patrz commity `21ec44b`). P9.6 miało konflikt ze świadomym testem
-(`test_risk_profile_leverage_modulation`) — rozstrzygnięty przez usera: usunięto martwy
-kod, zaktualizowano test.
+**Status:** P9 (TICKET-P9.1 do P9.7) ORAZ P7 (TICKET-P7.1 + 3 "same file" follow-ony)
+ZAIMPLEMENTOWANE i przetestowane — 301/301 testów PASS. Decyzje architektoniczne dla
+P9.2/P9.3 zatwierdzone przez usera (patrz commity `21ec44b`). P9.6 miało konflikt ze
+świadomym testem (`test_risk_profile_leverage_modulation`) — rozstrzygnięty przez
+usera: usunięto martwy kod, zaktualizowano test. P7 wykonane "po kolei" (jak
+zlecono) — core fix, potem 3 follow-ony, każdy osobnym commitem/krokiem weryfikacji.
 **Źródło:** `docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md`, sekcje P7, P9, §5
 **Standard:** AGENTS-OS v6.5 Swarm / MMS4 Strict Compliance
 **Git Worktree:** `tmp/worktrees/feature/p9-hygiene-p7-recalibration-params`
@@ -66,18 +66,20 @@ implementacji.** Nikt nie zaczyna kodować, dopóki nie padnie wyraźna zgoda.
 
 ### 🔹 FAZA 0b: P7 — Naprawić parametry silnika rekalibracji 🟠 (SZYBKA WYGRANA, WYSOKI PRIORYTET)
 
-#### ⏸ NOT STARTED (poza zakresem tej tury) TICKET-P7.1: `train_test_validate` ma czytać VR z `system_settings`, nie z hardcoded defaultów
+#### ✅ DONE (b895439) TICKET-P7.1: `train_test_validate` ma czytać VR z `system_settings`, nie z hardcoded defaultów
 - **Plik:** `src/mms4tk/backtest_engine.py:457` (defaulty), `:549` (`run_calibration_job`, wchodzi w default bez `params`)
 - **Dowód:** audyt §1.5 / P7(a) — hardcoded `adaptive_vr_high=1.0, adaptive_vr_low=0.75` to progi już zresetowane na produkcji w tej sesji audytowej. Silnik rekalibracji dziś symuluje strategię, która **już nie istnieje**.
 - **Mechanizm (P7(b)):** nie podnosi PnL bezpośrednio — przywraca wiarygodność jedynego mechanizmu chroniącego strategię przed overfittingiem. Bez tego każdy przyszły werdykt PLAN-010 jest bezwartościowy.
 - **Wzorzec implementacyjny (P7(c)):** czytać `engine_mode`/`adaptive_vr_*`/`time_lock_*` z `system_settings` przez `LoggerDB.get_all_settings()` — dokładnie tak jak `daemon._get_indicator_params` (`daemon.py:678-690`, gotowy wzorzec do skopiowania/reużycia).
 - **Test wymagany:** dwa uruchomienia z jawnie różnymi progami VR muszą dać różne `full_closes` — to jedyny dowód, że parametr faktycznie dotarł do silnika. Dodatkowo assert: `train_test_validate` wywołany bez `params` **nie może** cicho spaść na literały.
+- **Zaimplementowane:** `train_test_validate()`'s default fallback czyta teraz `IndicatorParams()`'e env-var defaulty (nie hardcoded literały); nowy helper `_live_indicator_params(db)` w `backtest_engine.py` buduje params z `system_settings` (mirror `daemon._get_indicator_params`); `run_calibration_job()` jawnie przekazuje je do `train_test_validate(..., params=params)`.
 
-**Przy tej samej okazji, ten sam plik (P7 "same file" follow-ons — do decyzji czy wchodzą w ten ticket czy osobny):**
-- Dodać **gate na liczbę transakcji** (nie świec) przed werdyktem `VALIDATED` — dziś jedyne zabezpieczenie to próg 48 świec (`:541`). Rekomendacja audytu: min. 30 `full_closes` per połowa okresu (H1/H2).
-- Zredukować siatkę parametrów do zatwierdzonych **4×4** (zgodnie z `TICKET-3` w starym `task.md`/PLAN-010) zamiast dzisiejszych **64 komórek** — 4× nadmiarowa ekspozycja na multiple testing, albo dodać wymóg płaskowyżu parametrów.
-- Dodać model **Post-SL Cooldown (3 świece)** — audyt §2.1.
-- **Szacowany wysiłek całości P7 wg audytu: ~3h.**
+**"Same file" follow-ons — zrobione po kolei, każdy osobnym commitem:**
+- ✅ DONE (`913b34d`) Gate na liczbę transakcji przed `VALIDATED`: `MIN_FULL_CLOSES_HALF` 12→30, zastosowany też do TEST-half `generalizes` (wcześniej gate istniał tylko po TRAIN-side).
+- ✅ DONE (`d67363f`) Siatka zredukowana 64→16 komórek (zatwierdzone 4×4: `lookback∈[3,5,8,13]`, `threshold∈[0.0010,0.0015,0.0020,0.0030]`).
+- ✅ DONE (`b9b1e31`) Post-SL Cooldown (3 świece) zamodelowany w `run_backtest()` — mirror `daemon.py`'s `_sl_cooldown_until` (PLAN-008 Ph2), nowy param `sl_cooldown_candles=3` default.
+
+7 nowych testów (3 wymagane przez audyt + txn-gate + grid-size guard + 2 cooldown). Pełny test suite: **301/301 PASS**.
 
 ---
 
