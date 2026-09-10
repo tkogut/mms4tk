@@ -321,11 +321,20 @@ architektonicznie zbędny, gdy addon w ogóle przestaje mieć własny SL.
   pomija tę kolumnę, z wyjątkiem samo-leczenia wiersza sprzed migracji, gdzie
   była 0.0). `reconcile_positions` liczy próg WYŁĄCZNIE z `base_entry_price` i
   `base_sl_pct` — bezwarunkowo, bez świadomości dokładki w ogóle. Self-Healing
-  Guard robi dokładnie to samo (ta sama kotwica, ten sam %, zawsze). HIGH_RISK_ADD
-  (`daemon.py`) woła `execute_order(..., stop_loss_pct=0.0, ...)` — istniejący
-  algo SL na giełdzie ma `closeFraction="1"` (chroni CAŁĄ pozycję, niezależnie od
-  jej bieżącego rozmiaru), więc pozostawienie go nietkniętym już chroni dokładkę,
-  bez wystawiania nowego zlecenia z inną kotwicą.
+  Guard i re-attach po Midline Partial TP robią dokładnie to samo (ta sama kotwica,
+  ten sam %, zawsze). HIGH_RISK_ADD (`daemon.py`) woła `execute_order(...,
+  stop_loss_pct=0.0, ...)` — istniejący algo SL na giełdzie ma `closeFraction="1"`
+  (chroni CAŁĄ pozycję, niezależnie od jej bieżącego rozmiaru), więc pozostawienie
+  go nietkniętym już chroni dokładkę, bez wystawiania nowego zlecenia z inną kotwicą.
+  To założenie NIE jest nową, niezweryfikowaną hipotezą — audyt (§1.1,
+  `docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md`) już wcześniej ustalił kodem,
+  że `closeFraction="1"` obejmuje 100% pozycji, stąd oryginalny problem ("po
+  dokładce cała pozycja stoi na wąskim stopie"). Odstępstwo od litery audytu: audyt
+  sugerował dla V2 `closeFraction` proporcjonalny do samego legu bazy (SL zamyka
+  tylko kontrakty bazy, dokładka zostaje bez SL) — ta implementacja zostawia
+  `"1"`, więc trigger zamyka RÓWNIEŻ dokładkę. Bardziej ochronne, nie mniej
+  (mieści się w spec-owym limicie strat), ale to inna semantyka niż dosłowny
+  audytowy opis V2 — nazwane tu wprost, nie jako "zgodne z audytem".
 - **Efekt na Błąd A:** **strukturalnie wyeliminowany.** `base_entry_price` to
   realna, już zrealizowana cena, a `base_sl_pct` to zawsze dodatni dystans w stronę
   niekorzystną z definicji — nie ma już żadnej geometrii, w której trigger mógłby
@@ -334,21 +343,47 @@ architektonicznie zbędny, gdy addon w ogóle przestaje mieć własny SL.
   `exit_price` to nadal `signal.price`, close ostatniej świecy), ale tolerancja
   wraca do szerokości `base_sl_pct` (2%), nie wąskiego `addon_sl_pct` (~1.25%) —
   ten sam poziom niedokładności, jaki zespół uznawał za akceptowalny przed całą
-  tą pracą nad P3.
-- **Efekt na `state_manager.py:344` (SCOUT_MODE/Hermes H4) — naprawione JAKO SKUTEK
-  UBOCZNY, zero zmian w `state_manager.py`:** `sl_percent` przekazywany do
-  `record_trade`/`on_stop_loss_hit` jest teraz liczony z `base_entry_price` (nie z
-  avgPx) i wynosi ~`base_sl_pct` (2%) przy KAŻDYM realnym stopie, z dokładką czy
-  bez — więc próg `>=0.02` przechodzi teraz poprawnie dla pozycji z dokładką też.
-  `pnl_percent`/`pnl_usd` (księgowość, `closed_trades`) zostają liczone od avgPx,
-  bez zmian — to inna, świadomie odseparowana liczba.
-- **Znany, udokumentowany, świadomie nierozwiązany kompromis:** ręczny endpoint
-  `/api/v1/trade/high_risk_add` (`api.py`) NADAL przyjmuje własny `stop_loss_pct`
-  od wywołującego i attachuje niezależny SL — nie zmieniony w tej sesji (inne
-  narzędzie, inny cel niż automatyczna piramida sygnałowa; zmiana jego kontraktu
-  nie była dyskutowana). Jeśli ten endpoint kiedykolwiek faktycznie się użyje na
-  pozycji z automatyczną dokładką, wraca dokładnie ten sam problem determinizmu,
-  który V2 miało rozwiązać — do rozważenia osobno, nie teraz.
+  tą pracą nad P3. **Nie jest prawdą, że `sl_percent` wynosi ~2% przy KAŻDYM
+  realnym stopie** (przekłamanie znalezione i usunięte stąd przez recenzję rundy
+  3) — w paśmie tolerancji `[0.75·base_sl_pct, base_sl_pct)` `is_stop_loss=True`
+  wychodzi poprawnie, ale `sl_percent` może wyjść np. 1.5%, czyli poniżej progu
+  `>=2%` w `state_manager.py:344` — bramka SCOUT_MODE/H4 wtedy nie odpala, mimo
+  poprawnie zaklasyfikowanego stop-outu. To węższe okno niż przed V2 (bo tolerancja
+  jest teraz zawsze pełne `base_sl_pct`, nie wąskie `addon_sl_pct`), ale nie zero.
+- **Efekt na `state_manager.py:344` (SCOUT_MODE/Hermes H4) — naprawiony JAKO SKUTEK
+  UBOCZNY dla trafień blisko/w trigger, zero zmian w `state_manager.py`:**
+  `sl_percent` przekazywany do `record_trade`/`on_stop_loss_hit` jest teraz liczony
+  z `base_entry_price` (nie z avgPx), więc próg `>=0.02` przechodzi teraz poprawnie
+  dla pozycji z dokładką przy trafieniu blisko triggera (zweryfikowane LONG i
+  SHORT) — zastrzeżenie o paśmie tolerancji wyżej. `pnl_percent`/`pnl_usd`
+  (księgowość, `closed_trades`) zostają liczone od avgPx, bez zmian — to inna,
+  świadomie odseparowana liczba (zweryfikowane, brak przecieku).
+- **🔴 BŁĄD ZNALEZIONY I NAPRAWIONY W TEJ SAMEJ SESJI (recenzja rundy 3, blocker):**
+  re-attach SL po **Midline Partial TP** (`daemon.py`, ok. linii 1196) nadal
+  kotwiczył się w żywym avgPx (`active_entry_price`), NIE w `base_entry_price` —
+  cicho odtwarzając dokładnie ten sam problem determinizmu/klasyfikacji, który V2
+  miało usunąć, dla KAŻDEJ pozycji z dokładką, która przejdzie przez Midline TP.
+  Naprawione: re-attach też liczy kotwicę przez `_base_entry_price(...)`. Dziś
+  latentne (`midline_partial_tp_enabled` domyślnie `False`), ale był to realny bug,
+  nie hipotetyczny — dodany test regresyjny
+  (`test_midline_tp_reattaches_sl_at_base_entry_price_not_avgpx`,
+  `test_midline_inactivity_tp.py`).
+- **Luka migracyjna (nieudokumentowana wcześniej, teraz jawnie zapisana):**
+  samo-leczenie wiersza z `base_entry_price=0.0` (stary wiersz sprzed migracji)
+  seeduje z BIEŻĄCEGO avgPx, nie z prawdziwej historycznej ceny bazy. Dla pozycji
+  z już otwartą dokładką w momencie wdrożenia tej zmiany, `base_entry_price`
+  dostanie wartość avgPx-po-uśrednieniu (nieco ciaśniejszy SL / klasyfikacja od
+  niewłaściwej ceny) do czasu zamknięcia tej konkretnej pozycji. Łagodna,
+  jednorazowa degradacja przy deployu, nie błąd trwały.
+- **Znany, udokumentowany, świadomie nierozwiązany kompromis — szerszy niż
+  pierwotnie zapisano:** ręczny endpoint `/api/v1/trade/high_risk_add` (`api.py`)
+  NADAL przyjmuje własny `stop_loss_pct` (domyślnie 1%) i attachuje niezależny SL,
+  kasując bazowy. To nie tylko "wraca problem determinizmu" — **klasyfikacja
+  stop-outu w `reconcile_positions` przestaje działać dla tej ścieżki w ogóle**
+  (nie czyta już `position_addons.sl_trigger_price`, a nowa cena z tego ręcznego
+  attachu nigdzie nie trafia do `base_entry_price`). Nie zmienione w tej sesji
+  (inne narzędzie, inny cel; zmiana jego kontraktu nie była dyskutowana) — do
+  rozważenia osobno.
 - **Stary mechanizm (`position_addons.sl_trigger_price`, `_addon_sl_trigger_price`,
   `_update_addon_sl_trigger_price`, `OKXExecutor._compute_sl_trigger_price`) —
   zostawiony w kodzie** (schemat + metody), ale **już nieużywany** przez główną
@@ -357,26 +392,31 @@ architektonicznie zbędny, gdy addon w ogóle przestaje mieć własny SL.
   nie attachuje SL). Świadomie nieusunięty w tej sesji — bezpieczniejsze niż
   ryzykowna operacja usuwania pod presją czasu; do sprzątnięcia jako osobny,
   niski-ryzyko follow-up.
-- **12 przepisanych/nowych testów** w `test_reconciliation_pnl.py` (klasyfikacja
-  po `base_entry_price` niezależnie od avgPx/dokładki + weryfikacja `sl_percent`≈2%;
-  pozycja z dokładką daleko od triggera → nie stop-out; `base_entry_price` przeżywa
-  uśrednienie dokładki; samo-leczenie wiersza sprzed migracji z 0.0; fallback na
-  poziomie daemona gdy snapshot i tak nie ma `base_entry_price`) + 1 nowy w
-  `test_okx_sl_algo_instid.py` (Self-Healing Guard używa `base_entry_price`, NIE
-  żywego avgPx, na pozycji z dokładką) + fix istniejącego
-  `test_daemon_70_30_capital_split_calculation` (oczekuje teraz
-  `stop_loss_pct=0.0` dla dokładki). Pełny suite: **328/328 PASS.**
+- **Testy** w `test_reconciliation_pnl.py`: 6 nietkniętych + 2 przepisane (SHORT
+  canonical + far-from-trigger, teraz na `base_entry_price`) + 1 ze zmienionym
+  tylko docstringiem (nieaktualny opis po V2) + 4 nowe (LONG canonical variant,
+  `base_entry_price` przeżywa uśrednienie, samo-leczenie z 0.0, fallback na
+  poziomie daemona) = 13 testów w pliku. Plus 1 nowy w `test_okx_sl_algo_instid.py`
+  (Self-Healing Guard używa `base_entry_price`, NIE żywego avgPx) + 1 nowy w
+  `test_midline_inactivity_tp.py` (regresja na blocker powyżej) + fix istniejącego
+  `test_daemon_70_30_capital_split_calculation` (`stop_loss_pct=0.0`). Pełny suite:
+  **330/330 PASS.**
 
 ### ✅ DONE — Higiena conftestu (produkcyjny risk z pkt 5, faktycznie naprawiony)
 
 `tests/conftest.py` wymusza teraz **bezwarunkowo**, zanim jakikolwiek moduł
 `mms4tk.*` zostanie zaimportowany: (a) `MMS4_DB_PATH` na izolowany katalog tymczasowy
-per sesja testowa, (b) całą zawartość `okx_executor.MAINTENANCE_LOCK_PATHS`
-nadpisaną na jeden plik w tym samym katalogu tymczasowym. Uruchomienie `pytest`
-przez `docker exec antigravity_core` nie powinno już dotykać
-`/app/.agents/swarm/logs.db` ani `/app/.agents/swarm/MAINTENANCE_LOCK` —
-zweryfikowane: 328/328 PASS z tą zmianą. Reguła w `.agents/MEMORY.md` zaktualizowana
-(status: naprawione, zalecenie zostaje jako defense-in-depth).
+per sesja testowa (sprzątany `atexit`), (b) całą zawartość
+`okx_executor.MAINTENANCE_LOCK_PATHS` nadpisaną na jeden plik w tym samym katalogu
+tymczasowym. Recenzja rundy 3 znalazła, że `set_maintenance_lock(True)` miał
+OSOBNĄ, zahardkodowaną ścieżkę (`/app/.agents/swarm/MAINTENANCE_LOCK`), więc
+nadpisanie listy jej nie obejmowało — naprawione (`okx_executor.py`, `enable`
+też czyta `MAINTENANCE_LOCK_PATHS[0]`). Dziś żaden test nie woła
+`set_maintenance_lock(True)`, więc to była luka utajona, nie aktywna, ale
+komentarz w `conftest.py`/`MEMORY.md` przed tą poprawką za mocno twierdził "every
+path". Uruchomienie `pytest` przez `docker exec antigravity_core` nie powinno już
+dotykać `/app/.agents/swarm/logs.db` ani `/app/.agents/swarm/MAINTENANCE_LOCK` (w
+żadnym kierunku, enable czy disable) — zweryfikowane: 330/330 PASS z tą zmianą.
 
 ### 🔜 Wciąż otwarte (nie zaadresowane w tej sesji)
 
@@ -387,6 +427,12 @@ zweryfikowane: 328/328 PASS z tą zmianą. Reguła w `.agents/MEMORY.md` zaktual
 - **P6.2** — nie zaczęte.
 - Sprzątnięcie martwego kodu z rund 1-2 P3 (`sl_trigger_price` i pokrewne) —
   niskie ryzyko, nie pilne, patrz wyżej.
+- `/api/v1/trade/high_risk_add` poza spójnością V2 (klasyfikacja i determinizm) —
+  patrz wyżej.
+- Brakujące testy (niski priorytet, zidentyfikowane przez recenzję rundy 3, nie
+  dodane w tej sesji): Self-Healing Guard w hedge-mode (long+short jednocześnie),
+  pozycja w pełni zamknięta i otwarta od nowa na poziomie `execute_symbol_cycle`
+  (zweryfikowane ręcznie przez recenzenta, nie jako test w suite).
 - Endpoint `/api/v1/trade/high_risk_add` nadal poza spójnością V2 — patrz wyżej.
 
 ---
