@@ -153,10 +153,12 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 - Wynik zablokowany testem regresyjnym `test_p1_addon_sl_gate_analysis` (`@pytest.mark.slow`, przemianowany z `..._v0_stays_...` — nazwa też była nieuprawniona).
 - **5 nowych testów** (nie 9, jak błędnie podano wcześniej — poprawiono). Pełny suite: **312/312 PASS**.
 
-**Kolejność dalej wg audytu §5 (dla orientacji, nie zlecone jeszcze):** Etap 3 = P4 krok 0 (pomiar ATR%/SL per symbol) + P6.1 (naprawa buga persystencji) → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 (logowanie `volatility_zone`) → Etap 6 = P8 (analiza sesyjna).
-**Kolejność dalej wg audytu §5:** Etap 2 = P1 (SL dokładki, V0/V1/V2 — osobny PR,
-patrz historia gita/PR #28: wynik "V0 zostaje", bramka 5/6 nieprzeszła) → Etap 3 =
-P4 krok 0 + P6.1 → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
+**Stan wg audytu §5, po zmergowaniu P1/P4-krok-0/P6.1 (ten dokument, poniżej):**
+Etap 0 (P9+P7), Etap 1 (P2), Etap 2 (P1 — wynik "V0 zostaje", eskalacja do
+właściciela strategii, patrz PR #28), Etap 3 (P4 krok 0 + P6.1) — **wszystkie
+zamknięte**. Dalej: Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0
+(logowanie `volatility_zone`) → Etap 6 = P8 (analiza sesyjna). Żaden z Etapu 4+ nie
+został jeszcze zlecony.
 
 ---
 
@@ -174,20 +176,18 @@ P4 krok 0 + P6.1 → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 �
 - **Dwie tury niezależnej recenzji (Opus, drugi agent):**
   - **1. tura** znalazła krytyczne zanieczyszczenie żywej `.agents/swarm/logs.db` (docker-mounted do demona) przez nowe testy bez cleanupu. Naprawione (`658d55a`): nowa `LoggerDB.delete_setting()`, `conftest.py::_isolate_system_settings` rozszerzony o pełny snapshot/restore całej tabeli `system_settings`, jawny try/finally w testach.
   - **2. tura** (weryfikacja naprawy) potwierdziła empirycznie, że naprawa działa dla kluczy per-symbol, ale znalazła: (a) komentarz przesadnie twierdził "ANY key" — 5 kluczy globalnych (`engine_mode`/`adaptive_vr_*`/`time_lock_*`) jest zawsze wymuszanych na kanoniczne wartości niezależnie od snapshotu, **zachowanie sprzed tego PR-a** (commit `3a9c688`), niezmienione tutaj, tylko doprecyzowany opis; (b) endpoint `/symbols/update` pisze też do `symbol_configurations`/`symbols.json`, czego mój cleanup nie przywracał — naprawione (`84b5de7`), test teraz przechwytuje pełny config i przywraca przez `save_symbols_config()`.
-  - **Nie w zakresie tego PR-a:** pełna izolacja testów od żywej bazy (np. `MMS4_DB_PATH` na katalog tmp przed importem `mms4tk`) — osobny, większy temat, wart własnego ticketu.
-
-**P4 krok 0** (pomiar ATR%/SL per symbol, druga część Etapu 3) — nie zaczęte.
+  - **3. tura** (weryfikacja obu poprzednich) znalazła jeszcze jeden realny defekt: cleanup w teście sprawdzał `if before_full_config:` (truthiness) zamiast `is not None` — dla symbolu nieskonfigurowanego wcześniej (pusty dict, falsy) restore był pomijany całkowicie, a endpoint tworzy symbole bezwarunkowo → test mógł **trwale pozostawić aktywny symbol handlowy** w konfiguracji. Naprawione (`1f73481`): sentinel na `is not None`, gałąź "nie istniał wcześniej" usuwa symbol przez `logger_db.delete_symbol_config()`. Zweryfikowane empirycznie — odtworzono dokładny scenariusz, symbol poprawnie wraca do stanu `None` po teście.
+  - **Nie w zakresie tego PR-a (osobne tickety):** pełna izolacja testów od żywej bazy (np. `MMS4_DB_PATH` na katalog tmp przed importem `mms4tk`); wyciek `strategy_profile.scout_override=True` do współdzielonej bazy przez INNE (niepowiązane z tym PR-em) testy — realne ryzyko dla demona przy restarcie, znalezione przy okazji.
 
 ---
 
 ## ✅ Następny krok
 
-P9, P7, P2, P1, P6.1 i P4-krok-0 zaimplementowane. PR-y #28/#29/(ten) do
-sprawdzenia/merge. Decyzja o P4 wariancie #2 (per-symbol SL grid) — czeka na
-osobne polecenie, bo to głębsza zmiana doktryny.
-P9, P7, P2 i P1 zaimplementowane, przetestowane, PR-y otwarte/zmergowane. P1
-zakończyło się wynikiem "V0 zostaje" (gate nie przeszedł) — to prawidłowe,
-kompletne zamknięcie ticketu, nie odłożenie. Etap 3 (P4 krok 0 + P6.1) czeka na
-osobne polecenie.
-P9, P7, P2, P1 i P6.1 zaimplementowane. PR-y do sprawdzenia/merge. P4 krok 0
-(druga część Etapu 3) czeka na osobne polecenie.
+**Wszystkie 6 ticketów Etapów 0-3 (P9, P7, P2, P1, P4-krok-0, P6.1) zaimplementowane,
+przetestowane, po trzech turach niezależnej recenzji (Opus) i zmergowane do `main`**
+(PR #24/#26/#27/#30/#28/#29). Otwarte tematy zapisane jako osobne, nieblokujące
+tickety do rozważenia później (patrz wyżej). Etap 4+ (P3/P4-wariant#2/P4.2/P5/P6.2/P8)
+— nic nie zostało jeszcze zlecone, czeka na osobne polecenie. Ten dokument wymaga
+też jednorazowego porządkowania (kolejność sekcji nie odpowiada kolejności etapów —
+Etap 1 → Etap 3cz.2 → Etap 2 → Etap 3cz.1 — bo tak scaliły się branch'e; treść jest
+poprawna, tylko kolejność wizualna nielogiczna).
