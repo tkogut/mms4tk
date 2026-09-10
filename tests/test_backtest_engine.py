@@ -101,6 +101,31 @@ def test_run_backtest_trades_carry_fee_and_funding_fields():
         assert t["funding_pct"] >= 0.0
 
 
+# ── A1 (2026-09-10): ROUND_TRIP_FEE_PCT calibrated on production fee_usd ──
+
+def test_round_trip_fee_pct_is_the_production_calibrated_value_not_an_assumption():
+    """Audit P2(c) point 3 required this constant to be DERIVED from production
+    `closed_trades.fee_usd`, not assumed. Measured 2026-09-10 over 52 trades from
+    2026-08-30 (v0.41.0, first release with real fee_usd) to 2026-09-10:
+
+        SUM(fee_usd) / SUM(entry_price * amount * contract_size) = 0.00100029
+        (BTC 0.00099968 over 29 trades, ETH 0.00100103 over 23 trades)
+
+    The measurement confirmed the previous assumption to within 0.03% relative,
+    but the constant must no longer be `TAKER_FEE_PCT * 2` — that expression is an
+    assumption about the OKX fee schedule, and re-deriving it instead of
+    re-measuring is exactly what the audit called out. If OKX fee tiers change,
+    re-run the calibration against fresh production data and update this test with
+    the new measurement; do not restore the arithmetic-from-TAKER_FEE_PCT form."""
+    assert be.ROUND_TRIP_FEE_PCT == pytest.approx(0.0010003, abs=1e-9)
+    # Within 0.1% relative of the measured blended production rate.
+    assert be.ROUND_TRIP_FEE_PCT == pytest.approx(0.00100029, rel=1e-3)
+    # Per-symbol rates bracket it: a per-symbol constant was rejected because the
+    # BTC/ETH spread is only 0.13% of the blended rate.
+    assert 0.00099968 <= be.ROUND_TRIP_FEE_PCT <= 0.00100103 or \
+        abs(be.ROUND_TRIP_FEE_PCT - 0.00100029) < 1e-6
+
+
 # ── train_test_validate: decision logic, isolated from the real simulation ──
 
 def test_train_test_validate_no_candidate(monkeypatch):
