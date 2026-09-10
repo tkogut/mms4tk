@@ -88,11 +88,14 @@ def test_daemon_70_30_capital_split_calculation(tmp_path):
 
     asyncio.run(daemon.execute_cycle())
     expected_addon_amount = round(3.0 / 50000.0, 6) # 0.00006 BTC
+    # P3 V2: the addon leg gets no independent SL (stop_loss_pct=0.0) — it stays
+    # protected by the existing base SL (closeFraction="1" covers the whole
+    # position), anchored to base_entry_price and never replaced.
     executor.execute_order.assert_called_once_with(
         symbol="BTC/USDC",
         side="BUY",
         amount=expected_addon_amount,
-        stop_loss_pct=0.0125,
+        stop_loss_pct=0.0,
         leverage=1.0,
         price=50000.0
     )

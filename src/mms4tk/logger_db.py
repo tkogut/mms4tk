@@ -154,6 +154,16 @@ class LoggerDB:
                     PRIMARY KEY (symbol, side)
                 )
             """)
+            # P3 V2 (2026-09-10): the ORIGINAL base entry price, pinned for the whole
+            # life of a position and never moved by addon averaging — see
+            # save_position_snapshot's docstring for why this replaces the addon
+            # composite-SL mechanism as the SSOT for position SL.
+            cursor.execute("PRAGMA table_info(position_snapshots)")
+            snap_columns = {row[1] for row in cursor.fetchall()}
+            if "base_entry_price" not in snap_columns:
+                cursor.execute(
+                    "ALTER TABLE position_snapshots ADD COLUMN base_entry_price REAL NOT NULL DEFAULT 0.0"
+                )
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tp_midline_ledger (
                     symbol TEXT NOT NULL,
@@ -1064,20 +1074,38 @@ class LoggerDB:
         entry_price: float,
         last_price: float
     ) -> None:
-        """Persist the last seen exchange position so a disappearance can be reconciled after a restart."""
+        """
+        Persist the last seen exchange position so a disappearance can be reconciled
+        after a restart.
+
+        `base_entry_price` (P3 V2): pinned to whatever `entry_price` was on this
+        row's FIRST insert for a (symbol, side) — i.e. avgPx at the moment nothing
+        had been averaged into the position yet, which is exactly the true base
+        entry. Every subsequent call (the position is still open) hits the
+        ON CONFLICT branch, which deliberately does NOT overwrite it, so it survives
+        unchanged even once an addon fill moves `entry_price` (avgPx). This is the
+        SSOT the SL is actually anchored to under V2 — see `daemon.reconcile_positions`
+        and the Self-Healing SL Guard. The CASE WHEN heals a pre-migration row (old
+        DBs briefly read 0.0 for this column after the ALTER TABLE) by seeding it
+        from the next snapshot write, without ever clobbering a value already set.
+        """
         timestamp = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO position_snapshots (symbol, side, contracts, entry_price, last_price, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO position_snapshots (symbol, side, contracts, entry_price, last_price, base_entry_price, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, side) DO UPDATE SET
                     contracts = excluded.contracts,
                     entry_price = excluded.entry_price,
                     last_price = excluded.last_price,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    base_entry_price = CASE
+                        WHEN position_snapshots.base_entry_price > 0 THEN position_snapshots.base_entry_price
+                        ELSE excluded.entry_price
+                    END
                 """,
-                (symbol, side.lower(), float(contracts), float(entry_price), float(last_price), timestamp)
+                (symbol, side.lower(), float(contracts), float(entry_price), float(last_price), float(entry_price), timestamp)
             )
             conn.commit()
 
