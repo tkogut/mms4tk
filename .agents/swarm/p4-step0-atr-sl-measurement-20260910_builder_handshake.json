@@ -1,0 +1,11 @@
+{
+  "conversation_id": "p4-step0-atr-sl-measurement-20260910",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "tests/test_atr_sl_measurement.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-10T08:28:57Z",
+  "notes": "Audyt docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md, P4 krok 0 (pomiar, nie zmiana, Etap 3 czesc 2). Policzono naprawde na 90-dniowych fixture'ach (te same co reszta audytu), produkcyjnym TMAIndicator/IndicatorParams defaults (tma_length=20, atr_period=14, atr_method=sma z env): BTC/USDC ATR/price median=0.498% (mean=0.556%) -> SL_distance/ATR median=4.017 (mean=4.888). ETH/USDC ATR/price median=0.672% (mean=0.735%) -> SL/ATR median=2.975 (mean=3.567). Stop ETH jest ~26-27% ciasniejszy w jednostkach ATR niz BTC (i medianowo, i sredniooo) - kierunek zgodny z hipoteza audytu, ale mniejsza skala niz ilustracyjne ~40% z samego dokumentu audytu (te liczby byly jawnie oznaczone jako 'ilustracyjne, nie ustalenie'). Zgodnie z wlasnym warunkiem stopu audytu ('jesli roznica okaze sie mala, hipoteza upada i tu konczymy') - roznica NIE jest mala (26-27% >> ~15% przyjeta jako konserwatywny prog 'nie-maly'), wiec hipoteza NIE upada tutaj. To NIE oznacza automatycznego przejscia do wariantu #2 (per-symbol base_sl_pct grid 2-way OOS) ani #3 (SL=k*ATR, zmiana doktryny KB 1.4) - to osobna, wieksza decyzja poza zakresem kroku 0. Zero zmian w kodzie produkcyjnym - to czysty pomiar. 2 nowe testy lockujace ten pomiar (z konserwatywnym progiem 15% zamiast dokladnej wartosci, zeby nie flakowac na drobnych zmianach fixture/wskaznika) + test sanity sprawdzajacy ze uzyto produkcyjnych defaultow, nie bespoke kalkulacji. Pelny test suite: 309/309 PASS (369s)."
+}
