@@ -36,7 +36,22 @@ def test_symbols_update_persists_inactivity_fields_to_system_settings():
     of this cleanup restored only the 3 inactivity keys, leaving an operator's real
     allocation_usd/base_ratio/timeframe silently reset to those defaults in the
     live-mounted db/file if they ever differed. Today harmless only by coincidence
-    (the live table already holds those exact defaults for ETH/USDC)."""
+    (the live table already holds those exact defaults for ETH/USDC). NOTE: the
+    restored symbols.json entry is the 5-field shape load_symbols_config() itself
+    normalizes to (is_active/allocation_usd/base_ratio/add_ratio/timeframe) — it
+    does NOT restore any stale_*/impulse_* keys that may have been sitting in that
+    file, since load_symbols_config() never reads those keys back out of JSON
+    either (SQLite's fixed schema wins whenever it has rows). That's a dead write
+    being restored to a different dead write, not a config loss.
+
+    THIRD independent review (2026-09-10) caught a real defect here: `before_full_
+    config` was truthiness-checked (`if before_full_config:`), so a symbol that did
+    NOT exist in configured_symbols_store before this test (empty dict, falsy) skipped
+    restore entirely — this endpoint creates symbols unconditionally
+    (add_or_update_trading_symbol), so running this test against an unconfigured
+    symbol would PERMANENTLY leave it configured (active, default allocation) in the
+    live-mounted store. Fixed: sentinel on `is not None`, and the "didn't exist
+    before" branch now removes it via delete_symbol_config(), not just skips."""
     symbol = "ETH/USDC"
     keys = [
         f"stale_candles_threshold:{symbol}",
@@ -44,7 +59,7 @@ def test_symbols_update_persists_inactivity_fields_to_system_settings():
         f"impulse_negation_enabled:{symbol}",
     ]
     before_settings = {k: logger_db.get_setting(k) for k in keys}
-    before_full_config = dict(configured_symbols_store.get(symbol, {}))
+    before_full_config = configured_symbols_store.get(symbol)  # None if never configured
     try:
         res = client.post(
             "/api/v1/symbols/update",
@@ -68,10 +83,17 @@ def test_symbols_update_persists_inactivity_fields_to_system_settings():
             else:
                 logger_db.set_setting(k, before_settings[k], updated_by="test_cleanup")
         # Restore symbol_configurations (SQLite) + symbols.json to their pre-test
-        # values too — the endpoint writes both via save_symbols_config() (which
-        # itself writes to both places), not just system_settings.
-        if before_full_config:
-            configured_symbols_store[symbol] = before_full_config
+        # state too — the endpoint writes both via save_symbols_config() (which
+        # itself writes to both places), not just system_settings. Distinguish
+        # "existed before, restore it" from "did NOT exist before, remove it
+        # entirely" — see docstring for why the truthiness check this replaces was
+        # a real bug.
+        if before_full_config is not None:
+            configured_symbols_store[symbol] = dict(before_full_config)
+            save_symbols_config(configured_symbols_store)
+        else:
+            configured_symbols_store.pop(symbol, None)
+            logger_db.delete_symbol_config(symbol)
             save_symbols_config(configured_symbols_store)
 
 
