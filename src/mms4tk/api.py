@@ -1331,7 +1331,18 @@ def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
 
     Also carries `high_vol_base_filter_enabled` (same per-symbol-qualified pattern,
     default OFF, added 2026-09-08) — kept in this helper rather than a new one since
-    it's the exact same read/fallback shape, not a separate filter family."""
+    it's the exact same read/fallback shape, not a separate filter family.
+
+    Audit P6.1 (2026-09-08): also carries the 3 Inactivity Manager fields
+    (`stale_candles_threshold`/`stale_atr_threshold`/`impulse_negation_enabled`).
+    These were previously written ONLY to `configured_symbols_store`/`symbols.json`,
+    never to `system_settings` — but `load_symbols_config()` prefers the SQLite
+    `symbol_configurations` table whenever it has any rows (it always does once a
+    symbol exists), and that table's schema has no columns for these 3 fields. So on
+    every restart `configured_symbols_store` was rebuilt WITHOUT them, silently
+    resetting to hardcoded defaults (12 / 0.5 / True) — the UI lied to the operator
+    about what was actually configured after any redeploy or crash-restart. Same bug
+    class, same fix, as the trend-filter fields above."""
     db_settings = logger_db.get_all_settings()
 
     def _qualified_bool(key: str, fallback: bool) -> bool:
@@ -1357,6 +1368,9 @@ def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
         "tma_slope_lookback": _qualified_int("tma_slope_lookback", 5),
         "tma_slope_threshold": _qualified_float("tma_slope_threshold", 0.002),
         "high_vol_base_filter_enabled": _qualified_bool("high_vol_base_filter_enabled", False),
+        "stale_candles_threshold": _qualified_int("stale_candles_threshold", 12),
+        "stale_atr_threshold": _qualified_float("stale_atr_threshold", 0.5),
+        "impulse_negation_enabled": _qualified_bool("impulse_negation_enabled", True),
     }
 
 
@@ -1388,9 +1402,15 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "base_ratio": config.get("base_ratio", 70),
             "add_ratio": config.get("add_ratio", 30),
             "timeframe": config.get("timeframe", "15m"),
-            "stale_candles_threshold": config.get("stale_candles_threshold", 12),
-            "stale_atr_threshold": config.get("stale_atr_threshold", 0.5),
-            "impulse_negation_enabled": config.get("impulse_negation_enabled", True),
+            # Audit P6.1 (2026-09-08): read from system_settings (via
+            # _trend_filter_fields) like the trend-filter fields below, not
+            # configured_symbols_store directly — that in-memory store is silently
+            # rebuilt without these 3 keys on every restart (see the helper's
+            # docstring), so reading it directly here would show the operator a
+            # value that has already reset behind their back.
+            "stale_candles_threshold": trend_filter["stale_candles_threshold"],
+            "stale_atr_threshold": trend_filter["stale_atr_threshold"],
+            "impulse_negation_enabled": trend_filter["impulse_negation_enabled"],
             "tma_trend_filter_enabled": trend_filter["tma_trend_filter_enabled"],
             "tma_slope_lookback": trend_filter["tma_slope_lookback"],
             "tma_slope_threshold": trend_filter["tma_slope_threshold"],
@@ -1458,11 +1478,19 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
                 f"tma_slope_lookback:{formatted_sym}": int(req.tma_slope_lookback),
                 f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
                 f"high_vol_base_filter_enabled:{formatted_sym}": bool(req.high_vol_base_filter_enabled),
+                # Audit P6.1 (2026-09-08): same bug, same fix — these 3 Inactivity
+                # Manager fields were previously written only to
+                # configured_symbols_store/symbols.json, silently resetting to
+                # hardcoded defaults on every restart (see _trend_filter_fields'
+                # docstring above).
+                f"stale_candles_threshold:{formatted_sym}": int(req.stale_candles_threshold),
+                f"stale_atr_threshold:{formatted_sym}": float(req.stale_atr_threshold),
+                f"impulse_negation_enabled:{formatted_sym}": bool(req.impulse_negation_enabled),
             },
             updated_by="api_dashboard",
         )
     except Exception as e:
-        logger.warning(f"Failed to persist trend-filter settings for {formatted_sym}: {e}")
+        logger.warning(f"Failed to persist trend-filter/inactivity settings for {formatted_sym}: {e}")
 
     state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")
     

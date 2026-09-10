@@ -168,6 +168,29 @@ def _isolate_system_settings():
         os.environ[k] = v
     syms_snapshot = {k: dict(v) if isinstance(v, dict) else v for k, v in configured_symbols_store.items()}
     set_maintenance_lock(False)
+    # Audit P6.1 (2026-09-08): full-table snapshot, in ADDITION to the 5 fixed keys
+    # below — a safety net for system_settings keys this fixture has no fixed list
+    # for, including per-symbol-qualified ones (e.g.
+    # "stale_candles_threshold:BTC/USDC"). Without this, a test writing such a key
+    # pollutes the real DB (which docker-compose mounts into the live daemon) for
+    # every test/process that opens this same db file afterward — found by
+    # independent review while this same ticket's own new tests did exactly that.
+    #
+    # NOT covered by this snapshot/restore, by design, pre-dating this fixture's
+    # extension (commit 3a9c688): the 5 GLOBAL keys below
+    # (engine_mode/adaptive_vr_high/adaptive_vr_low/time_lock_start/time_lock_end)
+    # are unconditionally re-forced to these canonical values both before AND after
+    # every test, regardless of what the snapshot contained — so a test that
+    # legitimately changes one of these 5 (e.g. to exercise CLASSIC mode) does NOT
+    # leak it forward, but conversely the snapshot/restore logic below can never
+    # protect a value an operator set for these 5 specific keys either; the DB row
+    # for each is always whatever this fixture last wrote. A second independent
+    # review (2026-09-10) confirmed this is pre-existing behavior this ticket did
+    # not introduce, but flagged it as a real, currently-live effect on the shared
+    # repo-root logs.db (docker-mounted) — fixing it fully (e.g. via MMS4_DB_PATH
+    # pointed at a per-test-run tmp directory before mms4tk is imported) is a
+    # separate, larger piece of work, not in scope here.
+    settings_snapshot = dict(api_logger_db.get_all_settings()) if api_logger_db else {}
     if api_logger_db:
         api_logger_db.set_settings_bulk({
             "engine_mode": "CLASSIC",
@@ -187,6 +210,16 @@ def _isolate_system_settings():
     configured_symbols_store.clear()
     configured_symbols_store.update({k: dict(v) if isinstance(v, dict) else v for k, v in syms_snapshot.items()})
     if api_logger_db:
+        # General restore first: undo anything this test wrote, known or not.
+        after_settings = api_logger_db.get_all_settings()
+        for key in after_settings.keys() - settings_snapshot.keys():
+            api_logger_db.delete_setting(key)
+        for key, val in settings_snapshot.items():
+            if after_settings.get(key) != val:
+                api_logger_db.set_setting(key, val, updated_by="test_isolation_cleanup")
+        # Then re-force the 5 fixed keys to canonical defaults regardless of what the
+        # snapshot happened to contain — guarantees the NEXT test starts from the same
+        # known state this fixture has always guaranteed for these specific keys.
         api_logger_db.set_settings_bulk({
             "engine_mode": "CLASSIC",
             "adaptive_vr_high": "1.6",
