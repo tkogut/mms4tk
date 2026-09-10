@@ -183,34 +183,92 @@ został jeszcze zlecony.
 
 ## 🔹 Etap 4: P3 — Przywrócić rozróżnianie stop-outu z dokładką w rekoncyliacji 🟠
 
-### ✅ DONE (027f9af) — warunek z P1 spełniony (V0 zostaje), więc P3 miało sens
+### ⚠️ Pierwsza wersja (027f9af) była wadliwa — niezależna recenzja (Opus, drugi
+agent) znalazła realny bug + 3 przekłamania w tym dokumencie. Poprawiona poniżej.
 
-- **Plik:** `src/mms4tk/daemon.py` (`reconcile_positions`), test: `tests/test_reconciliation_pnl.py`
-- **Dowód:** audyt §1.2 / §P3 — `sl_threshold = base_sl_pct * 0.75` (1.5%) był
-  liczony bez świadomości dokładki, mimo że ledger `position_addons` jest
-  odczytywany 40 linii wyżej w tej samej funkcji (Self-Healing SL Guard). Composite
-  SL dokładki (`addon_sl_pct` = 1.25%) jest WĘŻSZY niż base (2%) — więc realny
-  stop-out na pozycji z dokładką (strata ~1.2-1.5%) nigdy nie osiągał starego progu
-  1.5% i był błędnie klasyfikowany jako "closed without SL trigger" zamiast
-  `STOP_LOSS`. Dotyczy ~70% pozycji (te z dokładką, per audyt).
-- **Naprawa:** `reconcile_positions` sprawdza teraz `_addon_count(symbol, side,
-  entry_price)` (ledger `position_addons`, kluczowany wyłącznie na `(symbol,
-  side)` — patrz komentarz w `logger_db.get_addon_count`) i liczy próg z
-  `addon_sl_pct` zamiast `base_sl_pct`, gdy pozycja ma zarejestrowaną dokładkę.
-- **Efekt:** poprawnie zaklasyfikowany `is_stop_loss=True` odblokowuje (a) 3-świecowy
-  Post-SL Cooldown (`daemon.py`, gate na samym `is_stop_loss`, bez własnego progu
-  %) i (b) poprawny zapis `closed_trades`/PnL jako stop-out. **Próg 2% w
-  `state_manager.on_stop_loss_hit` (wejście w SCOUT_MODE + webhook H4) świadomie
-  NIE został zmieniony** — harness (`backtest_engine.py:323-326`) już dokumentuje
-  i modeluje to jako zamierzone: composite SL dokładki jest z definicji węższy niż
-  2%, więc pozycja z samą dokładką nigdy nie wchodzi w SCOUT_MODE przez ten
-  mechanizm — to zachowanie już zweryfikowane w P1 (`test_p1_addon_sl_gate_analysis`),
-  nie jest to część błędu, który P3 naprawia.
-- **2 nowe testy** (`test_reconciliation_classifies_addon_stop_out_at_composite_threshold`,
-  `test_reconciliation_without_addon_still_uses_base_threshold`) — ta sama strata
-  1.2%, z dokładką → `is_stop_loss=True`, bez dokładki → `is_stop_loss=False`
-  (regression guard na stare zachowanie bazowe). Pełny suite (bez `slow`):
-  **320/320 PASS**.
+**Pierwsza wersja liczyła próg jako `% od avgPx` (`addon_sl_pct` zamiast
+`base_sl_pct`)** — ale audyt §1.1 sam pokazuje, że composite SL dokładki jest
+zakotwiczony w **cenie wypełnienia samej dokładki** (`okx_executor.attach_stop_loss`
+/ `execute_order`), nie w avgPx. Recenzent uruchomił kanoniczny przykład z audytu
+(SHORT base@100, dokładka@99, avgPx=99.70, SL=100.24, realna strata **0.54%**) na
+tamtym kodzie — próg 0.9375% (`addon_sl_pct*0.75`) go nadal przepuszczał jako
+"closed without SL trigger". Na fixture'ach BTC/ETH z repo pierwsza wersja
+poprawiała klasyfikację tylko do ~85%/64% dokładek — zostawało 15-36% nadal źle
+sklasyfikowanych, w tym przypadki, gdzie zmierzona strata względem avgPx jest
+**ujemna** (SL trafia po zyskownej stronie avgPx — żaden próg % od avgPx nigdy by
+tego nie złapał).
+
+### ✅ DONE (poprawione) — real trigger price jako SSOT, nie % od avgPx
+
+- **Pliki:** `src/mms4tk/logger_db.py` (nowa kolumna `position_addons.sl_trigger_price`
+  + `record_addon`/`get_addon_sl_trigger_price`/`set_addon_sl_trigger_price`),
+  `src/mms4tk/okx_executor.py` (`_compute_sl_trigger_price` — jedna formuła
+  współdzielona przez `attach_stop_loss` i `execute_order`; `execute_order` zwraca
+  teraz `sl_trigger_price` w wyniku), `src/mms4tk/daemon.py` (`reconcile_positions`,
+  Self-Healing SL Guard, HIGH_RISK_ADD branch), `src/mms4tk/api.py`
+  (`/api/v1/trade/high_risk_add`). Testy: `tests/test_reconciliation_pnl.py`,
+  `tests/test_okx_sl_algo_instid.py`.
+- **Naprawa:** przy egzekucji dokładki (`daemon.py` automatyczny High Risk Add i
+  `api.py` ręczny endpoint) persystujemy w ledgerze `position_addons` **absolutną
+  cenę**, w której faktycznie zawisł algo SL (`sl_trigger_price` z wyniku
+  `execute_order`), zamiast próbować odtworzyć ją z procentu liczonego od avgPx.
+  `reconcile_positions` porówuje `exit_price` bezpośrednio z tą realną ceną —
+  tolerancja to 0.75 rzeczywistego dystansu avgPx→trigger (ten sam współczynnik co
+  w gałęzi bazowej, ale liczony w cenie, nie w %), co poprawnie klasyfikuje też
+  przypadek "SL po zyskownej stronie avgPx" (dystans/próg wtedy się kurczy lub
+  staje ujemny, więc nawet mały/zerowy ruch adwersalny już go przekracza). Gdy
+  cena triggera nie jest znana (dokładka bez adresu ceny, albo brak dokładki w
+  ogóle) — fallback do starego `base_sl_pct*0.75` liczonego od avgPx, bez zmian.
+- **Self-Healing SL Guard** (`daemon.py` ok. linii 998) re-attachuje SL zakotwiczony
+  w avgPx (innym punkcie odniesienia niż oryginalna dokładka) — jeśli kiedykolwiek
+  się uruchomi na pozycji z dokładką, teraz **synchronizuje** ledger
+  (`_update_addon_sl_trigger_price`, tylko cena, licznik dokładek nietknięty), żeby
+  nie zostawić w nim stałej, nieaktualnej ceny.
+- **Efekt (uczciwie, nie 4/4):** poprawnie zaklasyfikowany `is_stop_loss=True`
+  odblokowuje **3-świecowy Post-SL Cooldown** (`daemon.py`, gate na samym
+  `is_stop_loss`, bez własnego progu %) — **to jest dostarczone**. **Próg 2% w
+  `state_manager.on_stop_loss_hit` (wejście w SCOUT_MODE + webhook Hermes H4)
+  pozostaje niedotknięty i nadal blokuje oba te efekty dla pozycji z samą
+  dokładką** (composite SL ~1.25% od avgPx nigdy nie osiąga 2%) — audytowe zdanie
+  "odblokowuje też trigger H4 dla Hermesa" **nie jest tym PR-em spełnione**. To
+  osobna decyzja dot. strategii (czy próg wejścia w SCOUT_MODE powinien być inny
+  dla pozycji z dokładką), rozmyślnie **wydzielona jako osobny ticket** — patrz
+  niżej, "P3.1".
+- **Znane, nienaprawione tu drobiazgi** (znalezione przy recenzji, poza zakresem):
+  `logger_db.get_addon_count`/`get_addon_sl_trigger_price` dopasowują `symbol`
+  dosłownie, nie przez `normalize_symbol()` używane do matchowania pozycji w tej
+  samej funkcji — zmiana formatu symbolu w configu cicho zresetowałaby próg do
+  base. Przedawnione (pre-existing), niezwiązane z tym PR-em.
+- **8 nowych testów** w `tests/test_reconciliation_pnl.py` (kanoniczny SHORT
+  0.54% z audytu §1.1 na realnej cenie triggera; ta sama pozycja daleko od
+  triggera → nie stop-out; dokładka bez znanej ceny triggera → fallback na próg
+  bazowy; brak dokładki, strata 2.1% → stop-out; awaria odczytu ceny triggera →
+  fail-open na fallback, bez crasha; sync ceny triggera przez Self-Healing Guard,
+  bez ruszania licznika; sync jest no-opem bez istniejącej dokładki) + 1 w
+  `tests/test_okx_sl_algo_instid.py` (`execute_order` zwraca poprawny
+  `sl_trigger_price` dla LONG i SHORT). Pełny suite (bez `slow`): **326/326 PASS**.
+- **Dokumentacja tego wpisu** (poprzednia wersja) zawierała 3 przekłamania
+  znalezione przez recenzenta, poprawione tutaj: (a) błędna lokalizacja ledgera
+  względem `reconcile_positions` (to inna funkcja, ~430 linii niżej, nie "40 linii
+  wyżej w tej samej funkcji" — audyt sam był tu niechlujny, `task.md` to wzmocnił),
+  (b) zmyślony zakres straty "1.2-1.5%" (realnie 0.54% wg audytu, zmierzony
+  rozkład -0.45%…1.26%), (c) fałszywe twierdzenie że `closed_trades` zapisuje
+  status stop-out — `logger_db.upsert_closed_trade` nie ma takiej kolumny,
+  `is_stop_loss` trafia wyłącznie do `state_manager._trade_history` (in-memory) i
+  do zwracanego eventu.
+
+### 🔜 P3.1 (nowy, nieblokujący ticket) — SCOUT_MODE/Hermes H4 dla pozycji z samą dokładką
+
+Audyt §1.2 obiecuje, że przywrócenie poprawnej klasyfikacji stop-outu z dokładką
+"odblokowuje też trigger H4 dla Hermesa" i redukcję ekspozycji (SCOUT_MODE) — P3
+tego nie robi, bo próg wejścia w SCOUT_MODE (`state_manager.py:345`,
+`sl_percent >= 0.02`) jest z definicji wyższy niż composite SL dokładki (~1.25%
+od avgPx). Do decyzji: (a) zostawić jak jest (composite SL jest z definicji
+łagodniejszy, więc brak SCOUT_MODE po nim może być zamierzony) — wtedy zdanie z
+audytu było zbyt optymistyczne i warto to skorygować w samym audycie/PLAN-010; (b)
+dodać osobny, niższy próg wejścia w SCOUT_MODE dla pozycji z dokładką — zmiana
+zachowania strategii, wymaga przebadania na `backtest_engine.py` (analogicznie do
+P1), nie robić przy okazji P3.
 
 ---
 
@@ -219,10 +277,11 @@ został jeszcze zlecony.
 **Wszystkie 6 ticketów Etapów 0-3 (P9, P7, P2, P1, P4-krok-0, P6.1) zaimplementowane,
 przetestowane, po trzech turach niezależnej recenzji (Opus) i zmergowane do `main`**
 (PR #24/#26/#27/#30/#28/#29). P3 (Etap 4) zaimplementowane w tej sesji, worktree
-`feature/p3-ssot-position-sl`, jeszcze przed PR-em. Otwarte tematy zapisane jako
-osobne, nieblokujące tickety do rozważenia później (patrz wyżej). Reszta Etapu 4+
-(P4-wariant#2/P4.2/P5/P6.2/P8) — nic nie zostało jeszcze zlecone, czeka na osobne
-polecenie. Ten dokument wymaga też jednorazowego porządkowania (kolejność sekcji
-nie odpowiada kolejności etapów — Etap 1 → Etap 3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4
-— bo tak scaliły się branch'e; treść jest poprawna, tylko kolejność wizualna
-nielogiczna).
+`feature/p3-ssot-position-sl`, jeszcze przed PR-em — pierwsza wersja (027f9af) była
+wadliwa, poprawiona po jednej turze niezależnej recenzji (Opus), patrz wyżej. Otwarty
+follow-up: **P3.1** (SCOUT_MODE/Hermes H4 dla pozycji z samą dokładką — nieblokujący,
+wymaga decyzji strategicznej). Reszta Etapu 4+ (P4-wariant#2/P4.2/P5/P6.2/P8) — nic
+nie zostało jeszcze zlecone, czeka na osobne polecenie. Ten dokument wymaga też
+jednorazowego porządkowania (kolejność sekcji nie odpowiada kolejności etapów —
+Etap 1 → Etap 3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4 — bo tak scaliły się branch'e;
+treść jest poprawna, tylko kolejność wizualna nielogiczna).
