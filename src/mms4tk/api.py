@@ -556,7 +556,7 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
     # Execute high risk add order via OKXExecutor. Failure must never be reported as
     # executed: True/status: success (audit P9.7c / P9.3).
     try:
-        await executor.execute_order(
+        order_info = await executor.execute_order(
             symbol=target_symbol,
             side=req.side,
             amount=req.size,
@@ -572,7 +572,13 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "details": {"symbol": target_symbol, "side": req.side, "size": req.size}
         }
 
-    daemon._record_addon(target_symbol, pos_side, match_entry)
+    # P3: persist the real composite SL trigger price execute_order reported (anchored
+    # to this add's own fill price, not to match_entry/avgPx) so reconciliation can
+    # classify a later stop-out correctly instead of guessing a % from avgPx.
+    addon_sl_trigger_price = 0.0
+    if isinstance(order_info, dict):
+        addon_sl_trigger_price = float(order_info.get("sl_trigger_price") or 0.0)
+    daemon._record_addon(target_symbol, pos_side, match_entry, addon_sl_trigger_price)
 
     return {
         "status": "success",

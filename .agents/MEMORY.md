@@ -9,6 +9,23 @@
   - SSH command template: `SSH_AUTH_SOCK=/tmp/ssh-rtdSFzKKo9XW/agent.2049427 ssh -o StrictHostKeyChecking=no root@srv1490214.hstgr.cloud "docker exec antigravity_core ..."`
 - **Test suite**: `MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest tests/ -v` (243/243 PASS).
 
+> ✅ **FIXED (2026-09-10, P3 conftest hygiene)** — `tests/conftest.py` now forces
+> `MMS4_DB_PATH` and every `okx_executor.MAINTENANCE_LOCK_PATHS` entry to an
+> isolated per-session temp directory, unconditionally, before any `mms4tk.*`
+> module is imported. Running this suite via `docker exec antigravity_core
+> pytest ...` on the production container is no longer expected to touch
+> `/app/.agents/swarm/logs.db` or `/app/.agents/swarm/MAINTENANCE_LOCK` — verified:
+> 328/328 tests still pass with this fix in place. Kept as a documented rule
+> anyway (defense in depth, and because older worktrees/branches predating this
+> fix still exist): still prefer running the suite against a local checkout / CI.
+>
+> Original finding (confirmed live risk, since fixed): `_isolate_system_settings`
+> (autouse) talked to `mms4tk.api.logger_db` — the SAME shared instance the
+> running daemon uses inside that container — unconditionally forcing 5 global
+> settings keys and calling `set_maintenance_lock(False)` in both setup and
+> teardown, which would have silently overwritten live production config and
+> released a maintenance lock an operator deliberately engaged for a live deploy.
+
 ---
 
 ## 🤖 2. SWARM GOVERNANCE & SAFETY RULES
