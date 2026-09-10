@@ -364,52 +364,13 @@ class MMS4Daemon:
             logger.warning(f"Addon ledger read failed for {symbol}/{side}: {e}")
             return 0
 
-    def _record_addon(
-        self,
-        symbol: str,
-        side: str,
-        entry_price: float,
-        sl_trigger_price: float = 0.0,
-    ) -> int:
-        """
-        `sl_trigger_price`: the absolute price OKXExecutor.execute_order reported back
-        via its `sl_trigger_price` key (P3) — the real composite SL algo level, anchored
-        to the addon's fill price, not to `entry_price`/avgPx. Pass 0.0 (default) when
-        it's unknown; reconciliation then falls back to a % heuristic instead of trusting
-        a fabricated price level.
-        """
+    def _record_addon(self, symbol: str, side: str, entry_price: float) -> int:
         try:
             self._addons_known_clear.discard((symbol, side.lower()))
-            return self.logger_db.record_addon(
-                symbol, side, self._position_key(entry_price), sl_trigger_price
-            )
+            return self.logger_db.record_addon(symbol, side, self._position_key(entry_price))
         except Exception as e:
             logger.warning(f"Addon ledger write failed for {symbol}/{side}: {e}")
             return 1
-
-    def _addon_sl_trigger_price(self, symbol: str, side: str) -> float:
-        """Absolute SL trigger price persisted for this position's addon, or 0.0
-        if there is none on record (no addon, or the price wasn't captured)."""
-        try:
-            return float(self.logger_db.get_addon_sl_trigger_price(symbol, side))
-        except Exception as e:
-            logger.warning(f"Addon SL trigger price read failed for {symbol}/{side}: {e}")
-            return 0.0
-
-    def _update_addon_sl_trigger_price(self, symbol: str, side: str, sl_trigger_price: float) -> None:
-        """Keep the ledger's trigger price in sync when the Self-Healing SL Guard
-        re-attaches an addon-carrying position's SL at a different anchor (avgPx)
-        than the original addon fill. No-op if there is no addon row to update.
-
-        Superseded by P3 V2 (base_entry_price, see reconcile_positions) for new
-        positions — the addon leg no longer gets its own SL to begin with, so this
-        has nothing to sync in practice. Left in place (schema + method) only for
-        rows written before V2 shipped; not actively called by the V2 code paths.
-        """
-        try:
-            self.logger_db.set_addon_sl_trigger_price(symbol, side, sl_trigger_price)
-        except Exception as e:
-            logger.warning(f"Addon SL trigger price update failed for {symbol}/{side}: {e}")
 
     def _base_entry_price(self, symbol: str, side: str, fallback: float) -> float:
         """
