@@ -135,8 +135,34 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 
 ---
 
+## 🔹 Etap 2: P1 — Odseparować SL dokładki od SL bazy 🔴 PRIORYTET NAJWYŻSZY
+
+### ⚠️ HARNESS DONE, WNIOSEK SKORYGOWANY po niezależnej recenzji (76e79d3, 4dd327e, f0a9e9f, `f8c9867`)
+- **Plik:** `src/mms4tk/backtest_engine.py`
+- **Dowód:** audyt §1.1+§1.2 — `closeFraction="1"` + kasowanie poprzednich algo + `entry_price = cena dokładki` = de facto stop BE ~0.5% na całej pozycji przy ~70% pozycji. Narusza "Żelazną Regułę" ze spec.
+- **Zaimplementowane (harness, `76e79d3`):** `run_backtest(addon_sl_variant="V0"|"V1"|"V2")`.
+  - **V0** (domyślny, = obecna produkcja, niezmieniony): kompozyt 1.25% od uśrednionej (avgPx) ceny wejścia.
+  - **V1**: kompozyt 2.0% od avgPx — ten sam mechanizm, szerszy próg.
+  - **V2**: SL bazy zostaje przypięty do ORYGINALNEJ ceny wejścia bazy (nowe pole `position["base_entry_price"]`, nigdy nieaktualizowane przez uśrednienie dokładki), dokładka bez własnego SL — najbliższe intencji spec.
+- **Pierwsza analiza (2026-09-09) była wadliwa** — niezależna recenzja (2. agent, Opus) znalazła, że użyła `adaptive_vr_high=1.0/adaptive_vr_low=0.75` — dokładnie te literały, które P7 nazywa "nieaktualnymi" (produkcja ma 1.6/0.8). Pod starymi progami BTC_H1 i ETH_H2 miały odpowiednio 5 i 6 dokładek (nie zero — poprzednia wersja tego zdania też była nieścisła, poprawione po 3. turze recenzji), ale **zero dokładek zamkniętych na STOP_LOSS** — czyli mechanizm SL, który P1 bada, nigdy się tam nie uaktywnił, mimo że okna liczyły się do bramki 5/6.
+- **Analiza poprawiona (`f8c9867`), produkcyjne VR 1.6/0.8, policzona naprawdę:**
+  - **Ścisła bramka** (R:R **i** total_pnl netto oba muszą bić V0): V1 = **3/6**, V2 = **3/6**. Bramka wymaga ≥5/6 — **żaden wariant jej formalnie nie przechodzi**.
+  - **Ale samo total_pnl netto** (bez wymogu R:R): V1 = **5/6** (remis tylko w ETH_H2 — to okno MA 16 dokładek, nie brak dokładek; mechanizm SL po prostu nigdy nie zróżnicował tam wyniku żadnej transakcji) — realny, spójny kierunkowo sygnał, który ścisła bramka odrzuca przez zmiękczenie R:R w 2 oknach (BTC_H1: 1.3235→1.1818, realnie ~10,7%, nie "kilka %"; ETH_H1: 1.3121→1.2919, ~1,5%).
+  - **Dodatkowo, wciąż nienaprawione:** V0-w-harnessie liczy SL dokładki od avgPx (1.25%), a produkcja liczy go od **ceny dokładki** (`daemon.py` `attach_stop_loss`) — w przykładzie z audytu §1.1 to ~0.54% realnego ryzyka, nie 1.25%. Ten harness nigdy nie zamodelował patologii z §1.1 — null result jej NIE falsyfikuje.
+- **Decyzja skorygowana:** to **NIE jest** czyste "V0 empirycznie wygrał, hipoteza upadła". Formalna bramka nie przechodzi (3/6 < 5/6), więc **kod produkcyjny zostaje nietknięty na razie** — ale to jest **eskalacja do właściciela strategii**, nie zamknięty temat: sygnał PnL jest realny i spójny (5/6, nigdy gorzej), a baseline V0 sam w sobie nie modeluje mechanizmu, który P1 miał zbadać.
+- Wynik zablokowany testem regresyjnym `test_p1_addon_sl_gate_analysis` (`@pytest.mark.slow`, przemianowany z `..._v0_stays_...` — nazwa też była nieuprawniona).
+- **5 nowych testów** (nie 9, jak błędnie podano wcześniej — poprawiono). Pełny suite: **312/312 PASS**.
+
+**Kolejność dalej wg audytu §5 (dla orientacji, nie zlecone jeszcze):** Etap 3 = P4 krok 0 (pomiar ATR%/SL per symbol) + P6.1 (naprawa buga persystencji) → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 (logowanie `volatility_zone`) → Etap 6 = P8 (analiza sesyjna).
+
+---
+
 ## ✅ Następny krok
 
 P9, P7, P2, P1, P6.1 i P4-krok-0 zaimplementowane. PR-y #28/#29/(ten) do
 sprawdzenia/merge. Decyzja o P4 wariancie #2 (per-symbol SL grid) — czeka na
 osobne polecenie, bo to głębsza zmiana doktryny.
+P9, P7, P2 i P1 zaimplementowane, przetestowane, PR-y otwarte/zmergowane. P1
+zakończyło się wynikiem "V0 zostaje" (gate nie przeszedł) — to prawidłowe,
+kompletne zamknięcie ticketu, nie odłożenie. Etap 3 (P4 krok 0 + P6.1) czeka na
+osobne polecenie.
