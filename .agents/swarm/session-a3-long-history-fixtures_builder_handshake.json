@@ -1,0 +1,17 @@
+{
+  "conversation_id": "session-a3-long-history-fixtures",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "scripts/fetch_ohlcv_fixture.py",
+    "scripts/fixture_power_analysis.py",
+    "tests/fixtures/ohlcv_BTC_USDC_1h_max.csv",
+    "tests/fixtures/ohlcv_ETH_USDC_1h_max.csv",
+    "tests/fixtures/ohlcv_BTC_USDT_1h_swap_24m.csv",
+    "tests/fixtures/ohlcv_ETH_USDT_1h_swap_24m.csv",
+    "task.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-10T22:29:17Z",
+  "notes": "Session A3 long-history fixtures. 9216 candles (384d) per USDC spot symbol - OKX has no deeper history (BTC-USDC/ETH-USDC listed 2025-08-21), plus 17520 candles (730d) per USDT swap symbol as a documented 24-month price proxy (1h-return corr 0.961/0.965 vs the production series). Zero gaps >6h, every step exactly 1h, no dupes; the old 90d window is a strict subset (2159/2160 candles byte-identical). pytest -m 'not slow': 329 passed, 4 deselected (unchanged baseline). Power analysis over 6 independent 121d windows: P8 unblocked per window (worst session cell 51-83 vs 30 needed); P5 unblocked only pooled over 24m (HIGH volatility zone 112/115 pooled, but 9-29 per window vs 19 needed). No src/ changes."
+}
