@@ -307,40 +307,40 @@ def test_reconciliation_v2_daemon_fallback_when_snapshot_missing_base_entry_pric
     assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is True
 
 
-def test_update_addon_sl_trigger_price_syncs_ledger_without_touching_count(temp_db: LoggerDB):
+def test_reconciliation_v2_closed_and_reopened_position_resets_base_entry_price(temp_db: LoggerDB):
     """
-    Direct unit test of logger_db's set_addon_sl_trigger_price/get_addon_sl_trigger_price
-    plus daemon._update_addon_sl_trigger_price, independent of any caller.
-
-    P3 V2 (2026-09-10, independent review round 3): this mechanism (the addon
-    composite-trigger ledger from P3 rounds 1-2) is superseded — the Self-Healing
-    SL Guard no longer calls _update_addon_sl_trigger_price, and reconcile_positions
-    no longer reads this value at all (both now use base_entry_price
-    unconditionally, see reconcile_positions/the Self-Healing Guard). The method
-    itself still works correctly (verified here) and is left in place for schema/
-    backward-compat safety on rows written before V2, but nothing in the live
-    code path calls it anymore.
+    A position fully closed (snapshot deleted, as reconcile_positions itself does
+    on a disappearance) and then opened again from scratch must get a FRESH
+    base_entry_price from its new base entry — not somehow inherit the old one.
+    (Independent review, round 3: identified as a gap in test coverage, verified
+    manually there; added here as an actual regression test.)
     """
-    daemon, _ = _make_daemon(temp_db)
+    daemon, state_mgr = _make_daemon(temp_db)
 
-    temp_db.record_addon("BTC/USDC", "long", sl_trigger_price=95.0)
-    assert temp_db.get_addon_count("BTC/USDC", "long") == 1
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="long", contracts=10.0, entry_price=100.0, last_price=100.0,
+    )
+    # Reconcile a disappearance — deletes the snapshot, same as a real stop-out.
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=97.9,  # 2.1% loss
+    )
+    assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is True
+    assert temp_db.get_position_snapshots("BTC/USDC") == []
 
-    daemon._update_addon_sl_trigger_price("BTC/USDC", "long", 96.5)
+    # New position opened at a completely different price.
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="long", contracts=5.0, entry_price=200.0, last_price=200.0,
+    )
+    snap = next(s for s in temp_db.get_position_snapshots("BTC/USDC") if s["side"] == "long")
+    assert snap["base_entry_price"] == pytest.approx(200.0)
 
-    assert temp_db.get_addon_sl_trigger_price("BTC/USDC", "long") == pytest.approx(96.5)
-    assert temp_db.get_addon_count("BTC/USDC", "long") == 1  # unchanged
-
-
-def test_update_addon_sl_trigger_price_is_noop_without_an_addon(temp_db: LoggerDB):
-    """No addon row exists yet — syncing a trigger price must not fabricate one
-    (that would make a position look like it has an addon when it doesn't)."""
-    daemon, _ = _make_daemon(temp_db)
-
-    daemon._update_addon_sl_trigger_price("BTC/USDC", "long", 96.5)
-
-    assert temp_db.get_addon_count("BTC/USDC", "long") == 0
-    assert temp_db.get_addon_sl_trigger_price("BTC/USDC", "long") == 0.0
+    # A stop-out on the NEW position must classify against the NEW base, not 100.0.
+    state_mgr.record_trade.reset_mock()
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=195.8,  # 2.1% loss from 200
+    )
+    assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is True
+    assert state_mgr.record_trade.call_args[1]["sl_percent"] == pytest.approx(0.021, abs=1e-4)
 
 
 def test_take_profit_pnl_with_contract_size(temp_db: LoggerDB):
