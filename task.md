@@ -281,40 +281,113 @@ w `test_okx_sl_algo_instid.py`** **+1 na Błąd A** (test degenerowanej geometri
 korekta self-healing `has_addon`-proxy to zmiana kodu bez nowego testu) = suite
 **320 → 327** (zweryfikowane: `327 passed, 4 deselected`), nie "326/326" ani "8 nowych".
 
-### 🔜 Otwarte decyzje przed dalszą pracą nad P3 (user, 2026-09-10, GATE — nic dalej bez tego)
+### GATE (2026-09-10) — sprawdzone i domknięte
 
-1. **V0 zostaje** (P1) — ale status to "nierozstrzygnięte, przyrząd niesprawny", nie
-   ostateczna decyzja. Harnessu nie rozbudowywać dalej.
-2. **Zaimplementować V2 w produkcji, bez bramki** — nie jako optymalizację hipotezy,
-   tylko **bugfix determinizmu**: dziś ta sama pozycja może dostać dwie różne ceny SL
-   zależnie od tego, która ścieżka kodu odpali ostatnia (`okx_executor.attach_stop_loss`
-   przy egzekucji dokładki vs `daemon.py` Self-Healing Guard, inny anchor —
-   dokładnie ten sam problem co Błąd A/B powyżej). V2 = SL bazy przypięty na stałe
-   do ORYGINALNEJ ceny wejścia bazy (`base_entry_price`, nigdy nieaktualizowany
-   uśrednieniem), dokładka bez własnego SL. Prawdopodobnie czyni Błąd B nieaktualnym
-   (jeden stały, zawsze znany trigger, zero geometrii zależnej od dokładki). **Nie
-   zaimplementowane jeszcze** — czeka na pkt 4.
-3. `state_manager.py:344` (próg 2% SCOUT/H4) ma wejść do TEGO SAMEGO workstreamu P3,
-   nie do osobnego ticketu — wycofanie decyzji z sekcji wyżej.
-4. **GATE:** zanim cokolwiek z 2-3 zostanie zaimplementowane — user sam sprawdza
-   przez dashboard/API (NIE ja, NIE SSH, NIE poświadczenia w tej rozmowie): `GET
-   /api/v1/settings`, `GET /api/v1/symbols`, `closed_trades` z VPS. Zamyka jednym
-   działaniem: realną skalę P1, realny `loss_pct` przy stopach z dokładką, i
-   kalibrację prowizji z P2 (nigdy niezrobioną).
-5. **Znaleziony realny risk operacyjny (zapisany też w `.agents/MEMORY.md`):** nie
-   uruchamiać `pytest` przez `docker exec antigravity_core` na produkcyjnym
-   kontenerze — `tests/conftest.py::_isolate_system_settings` nadpisuje żywe
-   `system_settings` (bez możliwości przywrócenia 5 kluczy globalnych) i zwalnia
-   `MAINTENANCE_LOCK` w teardownie. Naprawa conftestu wchodzi jako tania higiena
-   pod P3 (patrz kolejność Etapu 4 niżej), reguła obowiązuje od zaraz.
+Przed V2 user sam sprawdził (dashboard UI, bez SSH/poświadczeń) `Settings`,
+`Symbols`, i 100 ostatnich transakcji z `Analytics`. Wynik:
+- **Ustawienia produkcyjne potwierdzone:** `engine_mode=ADAPTIVE`, VR 1.6/0.8,
+  base SL 2.00%, addon SL 1.25% — zgodne z założeniami całej pracy nad P3 do tej
+  pory, żadnej niespodzianki.
+- **ETH/SOL/ICP: decyzja już podjęta, nie do dyskusji** — tylko BTC i ETH są
+  aktywne; SOL/ICP/XRP są WSTRZYMANE. Punkt "decyzja czy handlować ETH/SOL/ICP"
+  z kolejności Etapu 4 (niżej) jest przez to nieaktualny — nie ma czego decydować.
+- **Realne dane transakcji (ja, z hosta VPS, po jawnej zgodzie usera):** wyeksportowałem
+  `closed_trades` od `2026-08-30` (v0.41.0 — pierwsza wersja z realnym `fee_usd`;
+  wcześniejsze wiersze mają go domyślnie 0.0, user sam ostrzegł że najstarsze
+  pozycje są "błędne") przez `sqlite3 -readonly` na KOPII pliku (bind-mount hosta
+  `/docker/mms4tk/.agents/swarm/logs.db`, kopia w `/tmp` usunięta zaraz po odczycie
+  — zero ryzyka dla żywego procesu). 49 transakcji, tylko 2 z niekorzystnym ruchem
+  ≥1% (ETH SHORT +1.35% amt=61, BTC SHORT +2.02% amt=14) — obie na `amount` większym
+  niż typowy dla swojego symbolu w tym oknie (spójne z, ale niedowodzące, hipotezy
+  o dokładce). Próbka zbyt cienka, żeby cokolwiek rozstrzygnąć statystycznie o
+  rozkładzie strat — ale to i tak nie było uzasadnieniem dla V2 (patrz niżej).
 
-**Kolejność Etapu 4** (ustalona z userem): weryfikacja VPS (zrobiona — patrz commit
-naprawy symlinków skilli + potwierdzone połączenie SSH) → P3 jako SSOT "skonfigurowany
-SL pozycji" (obejmuje state_manager.py:344) + V2 + higiena conftest → tanie pytanie
-A/B `engine_mode` CLASSIC-vs-ADAPTIVE (nigdy nie testowane, efekt 5.8× na BTC_full wg
-usera) i decyzja czy w ogóle handlować ETH/SOL/ICP → P4 wariant #2 (poprawiony: BTC
-przypięty na 2.0%, siatka tylko na ETH) → P6.2. **Nic z tego (poza już zrobionym VPS)
-nie zaczyna się przed pkt 4 (GATE) powyżej.**
+### ✅ DONE — P3 V2: SL bazy jako jedyny, stały SSOT (2026-09-10)
+
+**User (po GATE) potwierdził: kontynuować rekomendacje.** Zaimplementowane w tej
+samej sesji, **zastępuje** (nie tylko uzupełnia) mechanizm z rund 1-2 powyżej
+(persystowana cena triggera dokładki, Błąd A/B) — ten mechanizm okazał się
+architektonicznie zbędny, gdy addon w ogóle przestaje mieć własny SL.
+
+- **Uzasadnienie usera (nie optymalizacja hipotezy, bugfix determinizmu):** ta
+  sama pozycja mogła dostać dwie różne ceny SL zależnie od tego, która ścieżka
+  kodu odpaliła ostatnia — `execute_order` przy egzekucji dokładki (kotwica: cena
+  wypełnienia dokładki) vs Self-Healing Guard (kotwica: żywe avgPx). V2 usuwa to
+  strukturalnie: **dokładka nigdy nie dostaje własnego SL.**
+- **Mechanizm:** `position_snapshots` ma nową kolumnę `base_entry_price` —
+  ustawianą RAZ, przy pierwszym zapisie snapshotu dla (symbol, side) (czyli avgPx
+  zanim cokolwiek zostało uśrednione — dokładnie prawdziwa cena bazy), i NIGDY
+  nieaktualizowaną przy kolejnych zapisach (`ON CONFLICT DO UPDATE` świadomie
+  pomija tę kolumnę, z wyjątkiem samo-leczenia wiersza sprzed migracji, gdzie
+  była 0.0). `reconcile_positions` liczy próg WYŁĄCZNIE z `base_entry_price` i
+  `base_sl_pct` — bezwarunkowo, bez świadomości dokładki w ogóle. Self-Healing
+  Guard robi dokładnie to samo (ta sama kotwica, ten sam %, zawsze). HIGH_RISK_ADD
+  (`daemon.py`) woła `execute_order(..., stop_loss_pct=0.0, ...)` — istniejący
+  algo SL na giełdzie ma `closeFraction="1"` (chroni CAŁĄ pozycję, niezależnie od
+  jej bieżącego rozmiaru), więc pozostawienie go nietkniętym już chroni dokładkę,
+  bez wystawiania nowego zlecenia z inną kotwicą.
+- **Efekt na Błąd A:** **strukturalnie wyeliminowany.** `base_entry_price` to
+  realna, już zrealizowana cena, a `base_sl_pct` to zawsze dodatni dystans w stronę
+  niekorzystną z definicji — nie ma już żadnej geometrii, w której trigger mógłby
+  wylądować "po zyskownej stronie" czegokolwiek.
+- **Efekt na Błąd B:** zredukowany do poziomu sprzed P3 (nie wyeliminowany —
+  `exit_price` to nadal `signal.price`, close ostatniej świecy), ale tolerancja
+  wraca do szerokości `base_sl_pct` (2%), nie wąskiego `addon_sl_pct` (~1.25%) —
+  ten sam poziom niedokładności, jaki zespół uznawał za akceptowalny przed całą
+  tą pracą nad P3.
+- **Efekt na `state_manager.py:344` (SCOUT_MODE/Hermes H4) — naprawione JAKO SKUTEK
+  UBOCZNY, zero zmian w `state_manager.py`:** `sl_percent` przekazywany do
+  `record_trade`/`on_stop_loss_hit` jest teraz liczony z `base_entry_price` (nie z
+  avgPx) i wynosi ~`base_sl_pct` (2%) przy KAŻDYM realnym stopie, z dokładką czy
+  bez — więc próg `>=0.02` przechodzi teraz poprawnie dla pozycji z dokładką też.
+  `pnl_percent`/`pnl_usd` (księgowość, `closed_trades`) zostają liczone od avgPx,
+  bez zmian — to inna, świadomie odseparowana liczba.
+- **Znany, udokumentowany, świadomie nierozwiązany kompromis:** ręczny endpoint
+  `/api/v1/trade/high_risk_add` (`api.py`) NADAL przyjmuje własny `stop_loss_pct`
+  od wywołującego i attachuje niezależny SL — nie zmieniony w tej sesji (inne
+  narzędzie, inny cel niż automatyczna piramida sygnałowa; zmiana jego kontraktu
+  nie była dyskutowana). Jeśli ten endpoint kiedykolwiek faktycznie się użyje na
+  pozycji z automatyczną dokładką, wraca dokładnie ten sam problem determinizmu,
+  który V2 miało rozwiązać — do rozważenia osobno, nie teraz.
+- **Stary mechanizm (`position_addons.sl_trigger_price`, `_addon_sl_trigger_price`,
+  `_update_addon_sl_trigger_price`, `OKXExecutor._compute_sl_trigger_price`) —
+  zostawiony w kodzie** (schemat + metody), ale **już nieużywany** przez główną
+  logikę (`reconcile_positions`/Self-Healing Guard go nie czytają;
+  `execute_order` dla dokładki nie zapisuje już `sl_trigger_price`, bo w ogóle
+  nie attachuje SL). Świadomie nieusunięty w tej sesji — bezpieczniejsze niż
+  ryzykowna operacja usuwania pod presją czasu; do sprzątnięcia jako osobny,
+  niski-ryzyko follow-up.
+- **12 przepisanych/nowych testów** w `test_reconciliation_pnl.py` (klasyfikacja
+  po `base_entry_price` niezależnie od avgPx/dokładki + weryfikacja `sl_percent`≈2%;
+  pozycja z dokładką daleko od triggera → nie stop-out; `base_entry_price` przeżywa
+  uśrednienie dokładki; samo-leczenie wiersza sprzed migracji z 0.0; fallback na
+  poziomie daemona gdy snapshot i tak nie ma `base_entry_price`) + 1 nowy w
+  `test_okx_sl_algo_instid.py` (Self-Healing Guard używa `base_entry_price`, NIE
+  żywego avgPx, na pozycji z dokładką) + fix istniejącego
+  `test_daemon_70_30_capital_split_calculation` (oczekuje teraz
+  `stop_loss_pct=0.0` dla dokładki). Pełny suite: **328/328 PASS.**
+
+### ✅ DONE — Higiena conftestu (produkcyjny risk z pkt 5, faktycznie naprawiony)
+
+`tests/conftest.py` wymusza teraz **bezwarunkowo**, zanim jakikolwiek moduł
+`mms4tk.*` zostanie zaimportowany: (a) `MMS4_DB_PATH` na izolowany katalog tymczasowy
+per sesja testowa, (b) całą zawartość `okx_executor.MAINTENANCE_LOCK_PATHS`
+nadpisaną na jeden plik w tym samym katalogu tymczasowym. Uruchomienie `pytest`
+przez `docker exec antigravity_core` nie powinno już dotykać
+`/app/.agents/swarm/logs.db` ani `/app/.agents/swarm/MAINTENANCE_LOCK` —
+zweryfikowane: 328/328 PASS z tą zmianą. Reguła w `.agents/MEMORY.md` zaktualizowana
+(status: naprawione, zalecenie zostaje jako defense-in-depth).
+
+### 🔜 Wciąż otwarte (nie zaadresowane w tej sesji)
+
+- **A/B `engine_mode` CLASSIC-vs-ADAPTIVE** (nigdy nie testowane, efekt 5.8× na
+  BTC_full wg usera) — nie zbadane. Produkcja potwierdzona jako `ADAPTIVE`.
+- **P4 wariant #2** (poprawiony: BTC przypięty na 2.0%, siatka tylko na ETH) —
+  nie zaczęte.
+- **P6.2** — nie zaczęte.
+- Sprzątnięcie martwego kodu z rund 1-2 P3 (`sl_trigger_price` i pokrewne) —
+  niskie ryzyko, nie pilne, patrz wyżej.
+- Endpoint `/api/v1/trade/high_risk_add` nadal poza spójnością V2 — patrz wyżej.
 
 ---
 
@@ -323,11 +396,18 @@ nie zaczyna się przed pkt 4 (GATE) powyżej.**
 **Wszystkie 6 ticketów Etapów 0-3 (P9, P7, P2, P1, P4-krok-0, P6.1) zaimplementowane,
 przetestowane, po trzech turach niezależnej recenzji (Opus) i zmergowane do `main`**
 (PR #24/#26/#27/#30/#28/#29). P3 (Etap 4) zaimplementowane w tej sesji, worktree
-`feature/p3-ssot-position-sl`, jeszcze przed PR-em — pierwsza wersja (027f9af) była
-wadliwa, poprawiona po jednej turze niezależnej recenzji (Opus), patrz wyżej. Otwarty
-follow-up: **P3.1** (SCOUT_MODE/Hermes H4 dla pozycji z samą dokładką — nieblokujący,
-wymaga decyzji strategicznej). Reszta Etapu 4+ (P4-wariant#2/P4.2/P5/P6.2/P8) — nic
-nie zostało jeszcze zlecone, czeka na osobne polecenie. Ten dokument wymaga też
-jednorazowego porządkowania (kolejność sekcji nie odpowiada kolejności etapów —
-Etap 1 → Etap 3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4 — bo tak scaliły się branch'e;
-treść jest poprawna, tylko kolejność wizualna nielogiczna).
+`feature/p3-ssot-position-sl`, jeszcze przed PR-em — 2 rundy niezależnej recenzji
+(Opus) na pierwszym mechanizmie (composite trigger price + tolerancja), po czym
+**zastąpione architektonicznie przez V2** (SL bazy jako jedyny, stały SSOT —
+`base_entry_price`) na jawne polecenie usera, GATE przez dashboard-check
+przeprowadzony i domknięty. `state_manager.py:344` naprawione jako efekt uboczny
+V2, bez osobnej zmiany w `state_manager.py` — **ticket "P3.1" jest tym samym
+nieaktualny/domknięty**, nie osobny follow-up. Higiena `conftest.py` (produkcyjny
+risk uruchomienia pytest na VPS) też naprawiona w tej samej sesji. **V2 jeszcze
+NIE przeszło niezależnej recenzji** — to duża zmiana architektoniczna
+(egzekucja zleceń, self-healing, klasyfikacja stop-outu), zalecana kolejna runda
+przed PR-em. Otwarte, nie zaczęte: A/B `engine_mode` CLASSIC-vs-ADAPTIVE, P4
+wariant #2, P6.2 (patrz sekcja wyżej). Ten dokument wymaga też jednorazowego
+porządkowania (kolejność sekcji nie odpowiada kolejności etapów — Etap 1 → Etap
+3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4 — bo tak scaliły się branch'e; treść jest
+poprawna, tylko kolejność wizualna nielogiczna).
