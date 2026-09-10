@@ -60,8 +60,14 @@ def is_maintenance_locked() -> bool:
 def set_maintenance_lock(enable: bool, reason: str = "Developer Maintenance") -> bool:
     """
     Enable or disable Maintenance Mode by writing or deleting the lock file.
+
+    The `enable` branch writes to MAINTENANCE_LOCK_PATHS[0] — the same list
+    `is_maintenance_locked()`/the `disable` branch below check/clear — instead of
+    a separately hardcoded path. Previously this branch recomputed its own path,
+    so a test harness that redirects MAINTENANCE_LOCK_PATHS (see tests/conftest.py)
+    would still hit the real production path here (round-3 independent review).
     """
-    lock_path = "/app/.agents/swarm/MAINTENANCE_LOCK" if os.path.exists("/app/.agents/swarm") else "/tmp/MMS4_MAINTENANCE_LOCK"
+    lock_path = MAINTENANCE_LOCK_PATHS[0]
     try:
         if enable:
             os.makedirs(os.path.dirname(lock_path), exist_ok=True)
@@ -749,18 +755,50 @@ class OKXExecutor:
 
                 if current_price and current_price > 0:
                     pos_side = "short" if side_lower in ["sell", "short"] else "long"
-                    await self.attach_stop_loss(
+                    sl_attach_result = await self.attach_stop_loss(
                         symbol=target_symbol,
                         side=side_lower,
                         entry_price=current_price,
                         stop_loss_pct=stop_loss_pct,
                         pos_side=pos_side
                     )
+                    # P3 (independent review, round 2): attach_stop_loss swallows its
+                    # own exceptions and returns {"error": ...} instead of raising —
+                    # only report sl_trigger_price when the algo order actually went
+                    # through, so the ledger never records a trigger price for an SL
+                    # that was never placed.
+                    if not (isinstance(sl_attach_result, dict) and sl_attach_result.get("error")):
+                        # Expose the absolute price the SL algo was actually anchored
+                        # to (the addon's own fill/reference price, not avgPx) so
+                        # callers that persist an addon ledger (daemon.py, api.py) can
+                        # record the real trigger level for reconciliation instead of
+                        # guessing a % from the position's average entry.
+                        order["sl_trigger_price"] = self._compute_sl_trigger_price(
+                            pos_side, current_price, stop_loss_pct
+                        )
+                    else:
+                        logger.warning(
+                            f"SL attach failed for {target_symbol}, not recording a "
+                            f"trigger price: {sl_attach_result.get('error')}"
+                        )
 
             return order
         except Exception as e:
             logger.error(f"Error executing order on OKX for {target_symbol}: {type(e).__name__}: {str(e)}")
             raise
+
+    @staticmethod
+    def _compute_sl_trigger_price(pos_side: str, ref_price: float, stop_loss_pct: float) -> float:
+        """
+        The single formula for where a conditional SL algo's trigger sits, relative to
+        `ref_price` (whatever price the caller anchors it to — the addon fill price for
+        a High Risk Add, avgPx for a base SL re-attach). Shared by `attach_stop_loss`
+        (which actually places the order) and `execute_order` (which needs to report
+        the same price back to callers without duplicating the direction logic).
+        """
+        if pos_side == "short":
+            return ref_price * (1.0 + stop_loss_pct)
+        return ref_price * (1.0 - stop_loss_pct)
 
     async def attach_stop_loss(
         self,
@@ -786,10 +824,7 @@ class OKXExecutor:
         pos_s = pos_side or ("short" if side.lower() in ["sell", "short"] else "long")
         order_s = "buy" if pos_s == "short" else "sell"
 
-        if pos_s == "short":
-            sl_price = entry_price * (1.0 + stop_loss_pct)
-        else:
-            sl_price = entry_price * (1.0 - stop_loss_pct)
+        sl_price = self._compute_sl_trigger_price(pos_s, entry_price, stop_loss_pct)
 
         try:
             sl_px_str = self.exchange.price_to_precision(target_symbol, sl_price)
