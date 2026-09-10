@@ -715,6 +715,63 @@ class MMS4Daemon:
             midline_tp_fraction=_sym_float("midline_tp_fraction", defaults.midline_tp_fraction),
         )
 
+    def _get_inactivity_overrides(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """Build the per-symbol Inactivity Manager config override dict from live
+        SQLite system_settings, falling back to `configured_symbols_store`, then to
+        `MMS4InactivityManager`'s own hardcoded defaults.
+
+        Audit P6.1 (2026-09-08): previously this read ONLY
+        `configured_symbols_store`, which silently loses these 3 keys on every
+        restart — `load_symbols_config()` prefers the SQLite
+        `symbol_configurations` table whenever it has any rows (it always does once
+        a symbol exists), and that table's fixed schema has no columns for these
+        fields. So the UI's own setting reset to hardcoded defaults (12 / 0.5 /
+        True) behind the operator's back after any redeploy or crash-restart.
+        Mirrors `_get_indicator_params`'s exact fallback chain (system_settings
+        first, per-symbol-qualified, then `configured_symbols_store`).
+
+        Returns only the keys actually overridden somewhere — an empty dict means
+        "use `MMS4InactivityManager`'s own defaults", matching the previous
+        behavior of not calling `set_symbol_config()` at all when nothing was
+        configured.
+        """
+        sym_cfg: Dict[str, Any] = {}
+        if symbol:
+            try:
+                from mms4tk.api import configured_symbols_store
+                raw_cfg = configured_symbols_store.get(symbol, {})
+                if isinstance(raw_cfg, dict):
+                    sym_cfg = raw_cfg
+            except Exception as e:
+                logger.warning(f"_get_inactivity_overrides: failed to read per-symbol config for {symbol}: {e}")
+
+        db_settings: Dict[str, str] = {}
+        try:
+            if self.logger_db:
+                db_settings = self.logger_db.get_all_settings()
+        except Exception as e:
+            logger.warning(f"_get_inactivity_overrides: failed to read system_settings, using config-store defaults: {e}")
+
+        def _raw(key: str):
+            raw = db_settings.get(f"{key}:{symbol}") if symbol else None
+            if raw is None:
+                raw = sym_cfg.get(key)
+            return raw
+
+        overrides: Dict[str, Any] = {}
+        raw = _raw("stale_candles_threshold")
+        if raw is not None:
+            overrides["stale_candles_threshold"] = int(float(raw))
+        raw = _raw("stale_atr_threshold")
+        if raw is not None:
+            overrides["stale_atr_threshold"] = float(raw)
+        raw = _raw("impulse_negation_enabled")
+        if raw is not None:
+            overrides["impulse_negation_enabled"] = (
+                str(raw).strip().lower() in ("true", "1", "yes", "on") if isinstance(raw, str) else bool(raw)
+            )
+        return overrides
+
     async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
         """
         Executes a single market evaluation cycle for a specific trading symbol.
@@ -963,20 +1020,13 @@ class MMS4Daemon:
                     if len(last_valid_tma) > 0:
                         tma_mid = float(last_valid_tma.iloc[-1])
 
-            # Load per-symbol inactivity config from symbols store
+            # Load per-symbol inactivity config — see _get_inactivity_overrides
+            # (audit P6.1, 2026-09-08) for why this must read system_settings, not
+            # just configured_symbols_store.
             try:
-                from mms4tk.api import configured_symbols_store
-                sym_inact_cfg = configured_symbols_store.get(target_symbol, {})
-                if isinstance(sym_inact_cfg, dict):
-                    inact_overrides = {}
-                    if "stale_candles_threshold" in sym_inact_cfg:
-                        inact_overrides["stale_candles_threshold"] = int(sym_inact_cfg["stale_candles_threshold"])
-                    if "stale_atr_threshold" in sym_inact_cfg:
-                        inact_overrides["stale_atr_threshold"] = float(sym_inact_cfg["stale_atr_threshold"])
-                    if "impulse_negation_enabled" in sym_inact_cfg:
-                        inact_overrides["impulse_negation_enabled"] = bool(sym_inact_cfg["impulse_negation_enabled"])
-                    if inact_overrides:
-                        self.inactivity_manager.set_symbol_config(target_symbol, inact_overrides)
+                inact_overrides = self._get_inactivity_overrides(target_symbol)
+                if inact_overrides:
+                    self.inactivity_manager.set_symbol_config(target_symbol, inact_overrides)
             except Exception:
                 pass
 
