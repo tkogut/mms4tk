@@ -471,6 +471,118 @@ P4 wariant #2, P6.2 wciąż nie zaczęte — patrz niżej):
 
 ---
 
+## 🔹 Sesja A1+A2 (2026-09-10) — dwa braki wskazane przez niezależnego doradcę
+
+Worktree/branch: `chore/session-a1-a2-fee-calibration-epoch-kpi`. Oba punkty to
+**domknięcia rzeczy już zleconych przez audyt, ale nigdy nie wykonanych** — nie nowe
+hipotezy. Pełny suite: **340/340 PASS** (`-m "not slow"`), plus 2 testy `slow`
+z regresji P2 uruchomione osobno.
+
+### ✅ DONE (A1) — Kalibracja `ROUND_TRIP_FEE_PCT` na realnych danych produkcyjnych
+
+Domyka **P2(c) punkt 3** z audytu, cytat: *"Kalibracja `round_trip_cost_pct` na
+realnych danych: `logger_db.get_closed_trades()` ma `fee_usd` per transakcja — nie
+zgadywać, wyprowadzić z produkcji."* Do tej pory `ROUND_TRIP_FEE_PCT` było
+**założeniem** (`TAKER_FEE_PCT * 2`, samo reużyte z
+`inactivity_manager.DEFAULT_ROUND_TRIP_COST_PCT`), nie pomiarem.
+
+- **Plik:** `src/mms4tk/backtest_engine.py` (stała + pełne uzasadnienie w komentarzu),
+  `tests/test_backtest_engine.py` (nowy test lockujący wartość).
+- **Wzór:** `SUM(fee_usd) / SUM(notional)`, gdzie
+  `notional = entry_price * amount * contract_size`
+  (`contract_size` wg `daemon._get_contract_size`: BTC `1e-4`, ETH `1e-3`).
+  `fee_usd` w `closed_trades` to prowizja za CAŁY round-trip (open+close już
+  rozliczone razem), więc jest bezpośrednio porównywalna z tą stałą — bez ×2 i bez ÷2.
+- **Dane:** produkcyjne `closed_trades`, okno **2026-08-30 .. 2026-09-10** (od
+  v0.41.0 — pierwsza wersja z realnym `fee_usd`; starsze wiersze mają domyślne 0.0
+  i są celowo pominięte), **n = 52** (BTC 29, ETH 23).
+- **Pomiar:**
+
+  | zakres | n | Σ fee_usd | Σ notional | stawka round-trip |
+  |---|---|---|---|---|
+  | BTC | 29 | $1.942895 | $1943.5098 | **0.00099968** |
+  | ETH | 23 | $1.585347 | $1583.7099 | **0.00100103** |
+  | **BTC+ETH** | **52** | **$3.528242** | **$3527.2197** | **0.00100029** |
+
+- **Decyzja:** stawka **łączna** (BTC+ETH). Rozrzut per-symbol to `1.35e-6`
+  bezwzględnie, czyli **0.13% stawki łącznej** — o rzędy wielkości poniżej poziomu,
+  na którym stała per-symbol mogłaby odwrócić jakikolwiek werdykt backtestu, i
+  głęboko w szumie próbki 52 transakcji. Nowa wartość: **`ROUND_TRIP_FEE_PCT =
+  0.0010003`**.
+- **Wynik pomiaru w kategoriach jakości przyrządu:** pomiar **POTWIERDZIŁ**
+  wcześniejsze założenie z dokładnością do **0.03% względnie** (0.00100029 vs
+  0.0010). Stała jest jednak zapisana jako liczba zmierzona, nie jako
+  `TAKER_FEE_PCT * 2` — żeby była **śledzalna do danych produkcyjnych**, a nie do
+  założenia innej stałej. Przy zmianie progów prowizyjnych OKX trzeba ją
+  **przemierzyć**, nie przeliczyć.
+- **Regresja P2 przepuszczona ponownie pod skalibrowaną stawką** (bramka decyzyjna
+  z audytu, `-m slow`): `test_p2_midline_tp_still_loses_all_6_windows_net_of_fees`
+  i `test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees` — **oba PASS**.
+  **Żaden werdykt się nie odwrócił:** Midline TP nadal przegrywa **6/6**, high-vol
+  base filter nadal bije baseline w **dokładnie tych samych 2/4 oknach**
+  (`BTC_H2`, `ETH_H2`). Przyrząd pozostaje spójny; oba filtry NIE wracają do
+  kolejki kandydatów.
+- 1 nowy test (`test_round_trip_fee_pct_is_the_production_calibrated_value_not_an_assumption`)
+  — lockuje wartość i jawnie zakazuje przywrócenia formy arytmetycznej z
+  `TAKER_FEE_PCT`. Skrypt kalibracyjny liczony w scratchpadzie sesji, **celowo nie
+  dodany do repo** (jednorazowy pomiar na danych, których w repo nie ma).
+
+### ✅ DONE (A2) — KPI liczone od epoki (`data_collection_epoch_start`)
+
+Problem: `LoggerDB.get_kpi_summary()` liczyło `realized_net_pnl_usd`,
+`total_fees_usd`, `max_drawdown`, `average_rr` i `net_win_rate_pct` z **całej
+historii bez filtrowania**, mimo że pole `data_collection_epoch_start` (per-symbol,
+`system_settings`, klucz `data_collection_epoch_start:<SYMBOL>`) istnieje w
+schemacie od PLAN-010 i było eksponowane **wyłącznie** w
+`/api/v1/symbols/{symbol}/recalibration-status`. Skutkiem tego headline'owe KPI na
+dashboardzie były zanieczyszczone transakcjami sprzed napraw P2/P3/PLAN-011.
+
+- **`src/mms4tk/logger_db.py`:**
+  - nowy, opcjonalny parametr **`get_kpi_summary(initial_equity=0.0, since=None)`**
+    (ISO8601) — filtruje `closed_trades` po `timestamp >= since` **przed**
+    agregacją, więc epoka obejmuje wszystko w dół: win rate, profit factor, fee,
+    R:R i krzywą equity dla drawdownu.
+  - nowy helper modułowy `_timestamp_at_or_after()` — porównanie **datetime**, nie
+    leksykalne: wiersze `closed_trades` mają mikrosekundy i jawny offset, a epoka
+    ustawiana przez operatora jest zwykle minutowa i może mieć gołe `Z`. Naiwny
+    timestamp czytany jako UTC; przy nieparsowalnej wartości fallback na
+    porównanie leksykalne (konwencja z `count_clean_closed_trades`), żeby zepsuty
+    wiersz degradował do starego zachowania zamiast wywalać odczyt KPI.
+  - **Pełna wsteczna kompatybilność:** `since=None` (default) = cała historia,
+    wynik identyczny co do dicta z zachowaniem sprzed A2; `initial_equity` nadal
+    działa pozycyjnie (`since` dołożone NA KOŃCU sygnatury).
+  - **Świadoma konsekwencja, udokumentowana w docstringu:** przy `since` krzywa
+    equity **startuje od nowa** na granicy epoki, więc `max_drawdown` to najgorszy
+    peak-to-trough **wewnątrz** epoki, nie wycinek krzywej all-time. Kotwiczenie
+    bieżącego reżimu w szczycie equity sprzed reżimu byłoby odpowiedzią na inne
+    pytanie niż zadane.
+- **`src/mms4tk/api.py`:** rozszerzony **istniejący** `/api/v1/stats`
+  (i alias `/api/v1/stats/pnl`) — **bez nowego endpointu i bez ruszania żadnego
+  dotychczasowego pola**. Wszystkie pola top-level zostają **all-time**, więc żaden
+  istniejący konsument nie zmienia liczby. Dołożony blok `since_epoch`
+  (nowy model `EpochKpiBlock` w `PnLResponse` — konieczny, bo `response_model`
+  odfiltrowałby surowy dict) z: `epoch_start`, `per_symbol_epochs` oraz kompletem
+  KPI liczonych od epoki.
+  - Dwa nowe helpery: `_active_symbol_epochs()` (epoki tylko **aktywnych** symboli
+    — SOL/ICP/XRP są WSTRZYMANE, patrz GATE 2026-09-10, i epoka symbolu
+    wstrzymanego nie może cofnąć okna raportowania w prehistorię) oraz
+    `_earliest_epoch()` (**najwcześniejsza**, nie najpóźniejsza — symbol, któremu
+    epoki nigdy nie przesunięto, nadal handluje całą swoją historią, więc cięcie po
+    najpóźniejszej ukryłoby jego transakcje; wartość nieparsowalna sortuje się na
+    koniec i nigdy nie wygrywa `min()`).
+  - Gdy **żaden** aktywny symbol nie ma ustawionej epoki: blok jest obecny z
+    `epoch_start: null` i lustrzanym odbiciem liczb all-time — stabilny kształt
+    odpowiedzi bije pole, które pojawia się i znika pod dashboardem.
+- **10 nowych testów** w nowym pliku `tests/test_epoch_kpi.py`: 5 bezpośrednio na
+  `LoggerDB.get_kpi_summary(since=...)` (filtrowanie wszystkich agregatów, restart
+  krzywej drawdownu, inkluzywność granicy `>=`, mieszane formaty timestampów,
+  pusty wynik po epoce), 1 regresja wstecznej kompatybilności (brak parametru ≡
+  `since=None`, plus `initial_equity` pozycyjnie) i 4 end-to-end przez `TestClient`
+  (blok obecny obok all-time, fallback bez epoki, alias `/stats/pnl` niesie ten sam
+  blok, odporność `_earliest_epoch` na śmieci).
+
+---
+
 ## ✅ Następny krok
 
 **Wszystkie 6 ticketów Etapów 0-3 (P9, P7, P2, P1, P4-krok-0, P6.1) zaimplementowane,
