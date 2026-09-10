@@ -60,8 +60,14 @@ def is_maintenance_locked() -> bool:
 def set_maintenance_lock(enable: bool, reason: str = "Developer Maintenance") -> bool:
     """
     Enable or disable Maintenance Mode by writing or deleting the lock file.
+
+    The `enable` branch writes to MAINTENANCE_LOCK_PATHS[0] — the same list
+    `is_maintenance_locked()`/the `disable` branch below check/clear — instead of
+    a separately hardcoded path. Previously this branch recomputed its own path,
+    so a test harness that redirects MAINTENANCE_LOCK_PATHS (see tests/conftest.py)
+    would still hit the real production path here (round-3 independent review).
     """
-    lock_path = "/app/.agents/swarm/MAINTENANCE_LOCK" if os.path.exists("/app/.agents/swarm") else "/tmp/MMS4_MAINTENANCE_LOCK"
+    lock_path = MAINTENANCE_LOCK_PATHS[0]
     try:
         if enable:
             os.makedirs(os.path.dirname(lock_path), exist_ok=True)
