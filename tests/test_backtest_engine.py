@@ -608,18 +608,54 @@ def test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees():
 
 
 @pytest.mark.slow
-def test_p1_addon_sl_gate_v0_stays_neither_variant_clears_5_of_6():
+def test_p1_addon_sl_gate_analysis():
     """Audit P1 (2026-09-08): required gate for implementing V1 or V2 in production
     — V1 OR V2 must beat V0 on BOTH R:R and total_pnl (NET) in >= 5/6 windows
-    (BTC/ETH x H1/H2/full). Computed 2026-09-09, real fixture data:
-        V1 beats V0 in 3/6 windows (BTC_H2, ETH_H1, ETH_full)
-        V2 beats V0 in 2/6 windows (ETH_H1, ETH_full)
-    Neither clears the gate — per the audit's own explicit fallback ("poniżej —
-    zostaje V0 i dokumentujemy dryf jako świadomy"), V0 (current production
-    composite 1.25% SL from avgPx) stays. This test locks in that finding: if it
-    ever fails, a real change to run_backtest's addon/SL/signal logic moved one of
-    the variants past the gate — that is grounds to REVISIT the P1 production
-    decision, not to "fix" this test back to passing."""
+    (BTC/ETH x H1/H2/full).
+
+    CORRECTED 2026-09-10 after independent review (2nd agent) found the first
+    version of this test used adaptive_vr_high=1.0/adaptive_vr_low=0.75 — the exact
+    literals audit P7 (§1.5) calls "stale, already reset in production" (production
+    runs 1.6/0.8). Under those stale thresholds 2 of the 6 "windows" had ZERO addon
+    fills at all (BTC_H1, ETH_H2 — V0/V1/V2 were bit-for-bit identical), so they
+    carried no information yet still counted toward the 5/6 denominator.
+
+    Recomputed under PRODUCTION thresholds (adaptive_vr_high=1.6, adaptive_vr_low=0.8,
+    confirmed live in system_settings) — real numbers, 2026-09-10:
+        strict gate (BOTH R:R and total_pnl beat V0): V1 = 3/6, V2 = 3/6
+        total_pnl ALONE (no R:R requirement):         V1 = 5/6 (never worse than V0,
+                                                        tied in ETH_H2 which has zero
+                                                        addon fills under either VR
+                                                        setting), V2 = 4/6
+
+    Neither variant clears the strict 5/6 gate, so per the audit's own fallback
+    ("poniżej — zostaje V0...") V0 stays in production for now. But this is NOT a
+    clean rejection of the hypothesis: V1's total_pnl is consistently at least as
+    good as V0's, never worse, in every window that has any addon activity at all —
+    it fails the STRICT gate only because R:R softens by a few percent in 2 of the
+    6 windows (BTC_H1: 1.32->1.18, ETH_H1: 1.31->1.29). A future reader should NOT
+    read "V0 wins" as "V1/V2 are worse" — read it as "the combined R:R+PnL gate is a
+    high bar that a directionally-positive PnL signal doesn't clear alone".
+
+    Separately, and NOT fixed by this correction: V0 in this harness models the
+    composite SL as 1.25% of the AVERAGED (avgPx) entry — but production's actual
+    mechanism (daemon.py ~1574, okx_executor's attach_stop_loss with
+    price=signal.price) computes the addon leg's SL off the ADDON FILL PRICE, not
+    avgPx. For the audit §1.1 example (base@100 short, addon@99), that is ~0.54%
+    real risk from avgPx, not the harness's 1.25% — i.e. V0-in-this-harness is
+    already ~2.3x more conservative than production's real V0. A null/weak result
+    against this softened baseline does NOT falsify the §1.1 diagnosis, because the
+    pathological case §1.1 describes was never actually modeled here. This is a
+    known, documented limitation of this analysis, not something this test can
+    self-correct — closing it requires modeling per-fill-price SL in the harness,
+    a separate, larger piece of work.
+
+    This test locks in the STRICT gate numbers (3/6, 3/6) as a regression guard: if
+    either ever clears 5/6, a real change to run_backtest's addon/SL/signal logic
+    moved a variant past the gate — that IS grounds to revisit the P1 production
+    decision. It does NOT lock in "V0 is confirmed correct" — that conclusion was
+    withdrawn along with the stale-VR-params bug this docstring documents.
+    """
     windows = []
     for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
                                   ("ETH", "ohlcv_ETH_USDC_1h.csv", "ETH/USDC")]:
@@ -629,23 +665,48 @@ def test_p1_addon_sl_gate_v0_stays_neither_variant_clears_5_of_6():
         windows.append((f"{label}_H2", symbol, candles[mid:]))
         windows.append((f"{label}_full", symbol, candles))
 
-    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
-    v1_wins = 0
-    v2_wins = 0
+    # Production thresholds — NOT the stale 1.0/0.75 the first version of this test
+    # used (see docstring). Confirm against live system_settings before trusting
+    # this literal again if VR calibration ever changes.
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.6, adaptive_vr_low=0.8)
+    v1_strict_wins = 0
+    v2_strict_wins = 0
+    v1_pnl_wins = 0
+    v2_pnl_wins = 0
+    any_addon_activity = 0
     for label, symbol, candles in windows:
-        v0 = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
-                                        trend_filter_enabled=False, addon_sl_variant="V0"))
-        v1 = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
-                                        trend_filter_enabled=False, addon_sl_variant="V1"))
-        v2 = be._stats(be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
-                                        trend_filter_enabled=False, addon_sl_variant="V2"))
-        if v1["rr"] > v0["rr"] and v1["total_pnl"] > v0["total_pnl"]:
-            v1_wins += 1
-        if v2["rr"] > v0["rr"] and v2["total_pnl"] > v0["total_pnl"]:
-            v2_wins += 1
+        v0_trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                     trend_filter_enabled=False, addon_sl_variant="V0")
+        v1_trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                     trend_filter_enabled=False, addon_sl_variant="V1")
+        v2_trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                     trend_filter_enabled=False, addon_sl_variant="V2")
+        v0, v1, v2 = be._stats(v0_trades), be._stats(v1_trades), be._stats(v2_trades)
 
-    assert v1_wins < 5, f"V1 now clears the P1 gate ({v1_wins}/6) — production decision needs revisiting"
-    assert v2_wins < 5, f"V2 now clears the P1 gate ({v2_wins}/6) — production decision needs revisiting"
+        if any(t.get("addon_applied") for t in v0_trades):
+            any_addon_activity += 1
+        if v1["rr"] > v0["rr"] and v1["total_pnl"] > v0["total_pnl"]:
+            v1_strict_wins += 1
+        if v2["rr"] > v0["rr"] and v2["total_pnl"] > v0["total_pnl"]:
+            v2_strict_wins += 1
+        if v1["total_pnl"] > v0["total_pnl"]:
+            v1_pnl_wins += 1
+        if v2["total_pnl"] > v0["total_pnl"]:
+            v2_pnl_wins += 1
+
+    # Sanity: at least SOME windows must actually have addon fills, or this whole
+    # analysis is measuring nothing (the stale-VR-params bug hid this before).
+    assert any_addon_activity >= 4, (
+        f"only {any_addon_activity}/6 windows had any addon activity — the analysis "
+        "may be running under a VR configuration that starves HIGH_RISK_ADD signals"
+    )
+
+    assert v1_strict_wins < 5, f"V1 now clears the strict P1 gate ({v1_strict_wins}/6) — revisit the production decision"
+    assert v2_strict_wins < 5, f"V2 now clears the strict P1 gate ({v2_strict_wins}/6) — revisit the production decision"
+    # Locks in the softer PnL-only signal too, so it stays visible rather than
+    # silently regressing without anyone noticing — this is documentation, not a
+    # deployment gate.
+    assert v1_pnl_wins == 5, f"V1's total_pnl-only signal changed ({v1_pnl_wins}/6, was 5/6) — re-read this test's docstring"
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
