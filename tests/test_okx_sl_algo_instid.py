@@ -195,6 +195,79 @@ def test_daemon_self_healing_sl_uses_native_inst_id(tmp_path: Path):
     asyncio.run(_run())
 
 
+def test_daemon_self_healing_sl_uses_base_entry_price_not_avgpx_on_addon_position(tmp_path: Path):
+    """
+    P3 V2: the whole point of pinning base_entry_price is that the Self-Healing
+    SL Guard must reproduce the SAME trigger price the original base-open attach
+    used, even for a position that has since had an addon fill move its avgPx —
+    not a DIFFERENT price derived from the live (post-addon) avgPx. This is the
+    determinism bug V2 fixes: previously this guard used avgPx + an addon-aware
+    %, which could differ from whatever attach_stop_loss originally computed.
+    """
+    async def _run():
+        db_file = tmp_path / "test_daemon_sl_v2.db"
+        db = LoggerDB(db_path=str(db_file))
+        # base opened at 2000 (first snapshot); a later addon fill moved avgPx to
+        # 1950 — base_entry_price must stay pinned at 2000.
+        db.save_position_snapshot(
+            symbol="ETH/USD:USD-310404", side="long", contracts=1.0,
+            entry_price=2000.0, last_price=2000.0,
+        )
+        db.save_position_snapshot(
+            symbol="ETH/USD:USD-310404", side="long", contracts=1.4,
+            entry_price=1950.0, last_price=1950.0,
+        )
+        db.record_addon("ETH/USD:USD-310404", "long")
+
+        executor = OKXExecutor()
+        executor.has_credentials = True
+
+        mock_exchange = MagicMock()
+        mock_exchange.markets = {"ETH/USD:USD-310404": {"id": "ETH-USD_UM_XPERP-310404"}}
+        mock_exchange.market = lambda sym: mock_exchange.markets.get(sym, {})
+        mock_exchange.price_to_precision = MagicMock(side_effect=lambda sym, px: f"{px:.2f}")
+        mock_exchange.private_get_trade_orders_algo_pending = AsyncMock(return_value={"data": []})
+        mock_exchange.private_post_trade_cancel_algos = AsyncMock(return_value={"code": "0"})
+        mock_exchange.private_post_trade_order_algo = AsyncMock(return_value={"code": "0", "data": [{"algoId": "healed_sl_2"}]})
+        executor.exchange = mock_exchange
+
+        mock_pos = {
+            "symbol": "ETH/USD:USD-310404",
+            "info": {"instId": "ETH-USD_UM_XPERP-310404"},
+            "posSide": "long",
+            "side": "long",
+            "contracts": 1.4,
+            "notionalUsd": 200.0,
+            "entryPrice": 1950.0,  # live avgPx, post-addon — must NOT be used as the anchor
+            "markPrice": 1960.0,
+            "unrealizedPnl": 1.0,
+        }
+        executor.fetch_positions = AsyncMock(return_value=[mock_pos])
+        executor.fetch_candles = AsyncMock(return_value=[
+            Candle(timestamp=1000, open=1950, high=1960, low=1940, close=1955, volume=10),
+        ])
+
+        from mms4tk.api import configured_symbols_store
+        configured_symbols_store["ETH/USD:USD-310404"] = {"allocation_usd": 100.0, "is_active": True, "base_ratio": 70, "add_ratio": 30}
+
+        state_mgr = MMS4StateManager()
+        daemon = MMS4Daemon(
+            state_manager=state_mgr, executor=executor, logger_db=db,
+            interval_seconds=1.0, symbol="ETH/USD:USD-310404",
+        )
+
+        await daemon.execute_symbol_cycle("ETH/USD:USD-310404")
+
+        mock_exchange.private_post_trade_order_algo.assert_awaited()
+        call_args = mock_exchange.private_post_trade_order_algo.call_args[0][0]
+        # 2000 * (1 - 0.02) = 1960.00 — base_entry_price * base_sl_pct, NOT
+        # 1950 * (1 - 0.0125) = 1925.6875 (what the pre-V2 addon-aware path would
+        # have computed from the live avgPx).
+        assert call_args["slTriggerPx"] == "1960.00"
+
+    asyncio.run(_run())
+
+
 @pytest.mark.allow_real_okx_network
 def test_execute_order_reports_real_sl_trigger_price():
     """

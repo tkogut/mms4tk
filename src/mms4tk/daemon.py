@@ -399,11 +399,36 @@ class MMS4Daemon:
     def _update_addon_sl_trigger_price(self, symbol: str, side: str, sl_trigger_price: float) -> None:
         """Keep the ledger's trigger price in sync when the Self-Healing SL Guard
         re-attaches an addon-carrying position's SL at a different anchor (avgPx)
-        than the original addon fill. No-op if there is no addon row to update."""
+        than the original addon fill. No-op if there is no addon row to update.
+
+        Superseded by P3 V2 (base_entry_price, see reconcile_positions) for new
+        positions — the addon leg no longer gets its own SL to begin with, so this
+        has nothing to sync in practice. Left in place (schema + method) only for
+        rows written before V2 shipped; not actively called by the V2 code paths.
+        """
         try:
             self.logger_db.set_addon_sl_trigger_price(symbol, side, sl_trigger_price)
         except Exception as e:
             logger.warning(f"Addon SL trigger price update failed for {symbol}/{side}: {e}")
+
+    def _base_entry_price(self, symbol: str, side: str, fallback: float) -> float:
+        """
+        The position's pinned original base entry price (P3 V2 SSOT for SL), or
+        `fallback` (today's avgPx) if no snapshot row exists yet for this cycle.
+
+        reconcile_positions refreshes this snapshot for every still-open position
+        before the Self-Healing SL Guard runs each cycle, so the normal case always
+        finds a real value here; the fallback only covers a position appearing for
+        the first time this exact cycle.
+        """
+        try:
+            for snap in self.logger_db.get_position_snapshots(symbol):
+                if str(snap.get("side", "")).lower() == side.lower():
+                    value = float(snap.get("base_entry_price") or 0.0)
+                    return value if value > 0 else fallback
+        except Exception as e:
+            logger.warning(f"base_entry_price lookup failed for {symbol}/{side}: {e}")
+        return fallback
 
     def _clear_addons(self, symbol: str, side: Optional[str] = None) -> None:
         """
@@ -542,74 +567,39 @@ class MMS4Daemon:
             else:
                 pnl_pct = (entry_price - exit_price) / entry_price
 
-            loss_pct = -pnl_pct  # positive when the position lost money
+            loss_pct = -pnl_pct  # positive when the position lost money (vs avgPx — accounting only)
 
-            # P3: a % threshold measured from avgPx cannot classify an addon-carrying
-            # position's stop-out correctly. The composite SL algo OKX holds is
-            # anchored to the ADDON's own fill price (okx_executor.attach_stop_loss /
-            # execute_order's sl_trigger_price), not to avgPx — so the true trigger can
-            # sit at a very different distance from avgPx than addon_sl_pct implies,
-            # and for some fills even on the profitable side of avgPx (loss_pct
-            # negative at the exact moment the exchange's own SL fires). No
-            # percentage-of-avgPx threshold can detect that case; only the real
-            # trigger price can. `_addon_sl_trigger_price` returns that persisted
-            # absolute price (0.0 if this position has no addon, or the price wasn't
-            # captured — then we fall back to the pre-P3 percentage heuristic).
-            addon_sl_trigger_price = self._addon_sl_trigger_price(target_symbol, side)
-            signed_distance = 0.0
-            if addon_sl_trigger_price > 0:
-                if side == "long":
-                    signed_distance = entry_price - addon_sl_trigger_price
-                    adverse_move = entry_price - exit_price
-                else:
-                    signed_distance = addon_sl_trigger_price - entry_price
-                    adverse_move = exit_price - entry_price
-            if addon_sl_trigger_price > 0 and signed_distance > 0:
-                # Tolerance is a fraction (0.75, same convention as the base-only
-                # branch below) of the REAL distance from avgPx to the actual trigger
-                # — not a % of the trigger's absolute price level. The composite SL
-                # can sit very close to avgPx (the audit's own example: ~0.54% away),
-                # so a fixed %-of-price tolerance would swallow ordinary favorable
-                # closes into "stop-out" (verified: a 1%-of-price band is wider than
-                # the entire entry-to-trigger distance in that example).
-                #
-                # KNOWN LIMITATION (independent review, round 2, unresolved): this
-                # branch's `exit_price` is signal.price — the last CLOSED candle's
-                # close, not the real fill price. When the true trigger distance is
-                # this small, a stale-by-up-to-one-candle exit_price can undershoot
-                # the 0.75 bar even for a genuine stop-out (measured on repo fixtures:
-                # single-digit-to-low-20s % recall under realistic candle-close
-                # timing). Reconciliation is a fast/optimistic heuristic by design
-                # (see this method's docstring) and trade_sync.py does NOT
-                # independently re-classify is_stop_loss, so there is currently no
-                # slower, more accurate backstop for this flag specifically. Do not
-                # read the numbers in task.md's P3 section as "solved" — this gap is
-                # open and needs either a real-fill-price source for exit_price here,
-                # or an explicit decision to accept the reduced recall.
-                is_stop_out = adverse_move >= signed_distance * 0.75
-            elif addon_sl_trigger_price > 0:
-                # Degenerate geometry: the composite SL trigger sits AT or on the
-                # profitable side of avgPx (signed_distance <= 0) — this happens
-                # because HIGH_RISK_ADD pyramids further INTO an already-favorable
-                # move (analytics.py), so the addon's own tight SL can end up closer
-                # to entry, or past it, than avgPx itself. A one-sided distance-based
-                # comparison is not well-defined here (a naive extension inverts the
-                # classification — confirmed by independent review, round 2): do not
-                # attempt it. Fall back to the base-only heuristic, which has no such
-                # failure mode, and log so this rare shape is visible operationally.
-                logger.warning(
-                    f"Addon SL trigger for {target_symbol}/{side} is not on the adverse "
-                    f"side of avgPx (entry={entry_price}, trigger={addon_sl_trigger_price}) "
-                    f"— falling back to the base-only % heuristic for this reconciliation."
-                )
-                sl_threshold = self.base_sl_pct * 0.75
-                is_stop_out = loss_pct >= sl_threshold
+            # P3 V2 (2026-09-10, supersedes the addon-composite-trigger mechanism
+            # below in git history): the SL is anchored to base_entry_price — pinned
+            # for the life of the position at its first snapshot, never moved by
+            # addon averaging — not to avgPx. This is a determinism fix, not an
+            # addon-aware heuristic: previously the SAME position could get two
+            # different SL prices depending on which code path attached last
+            # (execute_order's addon attach vs the Self-Healing Guard, different
+            # anchors). V2 removes the addon leg's own SL entirely (see the
+            # HIGH_RISK_ADD branch and the Self-Healing Guard below/elsewhere in
+            # this file) — there is only ever ONE trigger, always base_sl_pct away
+            # from base_entry_price, regardless of addons. This also structurally
+            # eliminates the round-2-review "inverted classification on degenerate
+            # geometry" bug the previous mechanism had — the trigger is by
+            # construction always on the adverse side of its own anchor — and
+            # widens the tolerance band back to base_sl_pct's (2%, not addon_sl_pct's
+            # ~1.25%), matching the pre-P3 heuristic's tolerance to candle-close
+            # staleness.
+            base_entry_price = float(snap.get("base_entry_price") or 0.0) or entry_price
+            sl_distance = base_entry_price * self.base_sl_pct
+            if side == "long":
+                adverse_move = base_entry_price - exit_price
             else:
-                # No addon (or no trigger price captured for it) — base-only
-                # percentage heuristic, measured from avgPx. Tolerance: the stop
-                # fills at market, so allow a little slippage either way.
-                sl_threshold = self.base_sl_pct * 0.75
-                is_stop_out = loss_pct >= sl_threshold
+                adverse_move = exit_price - base_entry_price
+            # Tolerance: the stop fills at market, so allow a little slippage either way.
+            is_stop_out = adverse_move >= sl_distance * 0.75
+            # Reported separately from pnl_pct/loss_pct (which stay avgPx-based, for
+            # correct P&L accounting): this is what state_manager.on_stop_loss_hit's
+            # >=2% SCOUT_MODE/Hermes-H4 gate sees, and it is now always ~base_sl_pct
+            # whenever a genuine stop fires — addon or not — so that gate no longer
+            # silently never fires for addon-carrying positions (state_manager.py:344).
+            sl_percent = max(adverse_move / base_entry_price, 0.0) if base_entry_price > 0 else 0.0
 
             contracts = float(snap["contracts"] or 0.0)
             ct_size = self._get_contract_size(target_symbol)
@@ -634,7 +624,7 @@ class MMS4Daemon:
                     pnl_percent=pnl_pct,
                     is_stop_loss=is_stop_out,
                     is_take_profit=False,
-                    sl_percent=max(loss_pct, 0.0),
+                    sl_percent=sl_percent,
                 )
                 self.logger_db.upsert_closed_trade(
                     trade_id=trade_id_str,
@@ -1032,8 +1022,15 @@ class MMS4Daemon:
                 if entry_px > 0 and p_side in ["long", "short"]:
                     try:
                         target_inst = p.get("info", {}).get("instId") or target_symbol
-                        has_addon = self._addon_count(target_symbol, p_side, entry_px) > 0
-                        sl_pct = self.addon_sl_pct if has_addon else self.base_sl_pct
+                        # P3 V2: always anchor to the pinned base_entry_price with
+                        # base_sl_pct, regardless of whether this position has an
+                        # addon — the addon leg never gets its own SL (see the
+                        # HIGH_RISK_ADD branch), so re-attaching here must reproduce
+                        # the SAME price every time, not a different one depending on
+                        # which code path last computed it (that mismatch was the
+                        # original determinism bug V2 fixes).
+                        base_entry_px = self._base_entry_price(target_symbol, p_side, fallback=entry_px)
+                        sl_pct = self.base_sl_pct
                         raw_inst_id = self.executor.to_native_inst_id(target_inst) if hasattr(self.executor, "to_native_inst_id") else target_inst
                         pending_algos = await self.executor.exchange.private_get_trade_orders_algo_pending({
                             "instId": raw_inst_id,
@@ -1048,22 +1045,10 @@ class MMS4Daemon:
                             await self.executor.attach_stop_loss(
                                 symbol=target_inst,
                                 side=p_side,
-                                entry_price=entry_px,
+                                entry_price=base_entry_px,
                                 stop_loss_pct=sl_pct,
                                 pos_side=p_side
                             )
-                            if has_addon:
-                                # P3: this re-attach is anchored to avgPx (entry_px),
-                                # not the original addon fill price — keep the ledger's
-                                # trigger price in sync with what OKX now actually
-                                # holds, so reconciliation classifies against the real
-                                # current trigger, not a stale one from the original
-                                # (possibly since-replaced) addon attach.
-                                self._update_addon_sl_trigger_price(
-                                    target_symbol,
-                                    p_side,
-                                    type(self.executor)._compute_sl_trigger_price(p_side, entry_px, sl_pct),
-                                )
                     except Exception as sl_heal_err:
                         logger.debug(f"SL self-healing check for {target_symbol}/{p_side}: {sl_heal_err}")
 
@@ -1727,23 +1712,29 @@ class MMS4Daemon:
                     else:
                         order_side = "SELL" if "SHORT" in signal.signal_type else "BUY"
                         try:
+                            # P3 V2: the addon leg gets NO independent SL. OKX's
+                            # existing algo order for this position uses
+                            # closeFraction="1" (the whole position, whatever its
+                            # current size), so leaving the original base-anchored SL
+                            # untouched already protects the addon's contracts too —
+                            # attaching a second one here would just cancel and
+                            # replace it with a DIFFERENT anchor (the addon's own fill
+                            # price), which is exactly the non-determinism V2 removes.
                             order_info = await self.executor.execute_order(
                                 symbol=target_symbol,
                                 side=order_side,
                                 amount=addon_order_amount,
-                                stop_loss_pct=self.addon_sl_pct,
+                                stop_loss_pct=0.0,
                                 leverage=sym_leverage,
                                 price=signal.price
                             )
-                            addon_sl_trigger_price = 0.0
-                            if isinstance(order_info, dict):
-                                addon_sl_trigger_price = float(order_info.get("sl_trigger_price") or 0.0)
-                            self._record_addon(target_symbol, target_pos_side, match_entry, addon_sl_trigger_price)
+                            self._record_addon(target_symbol, target_pos_side, match_entry)
                             outcome = f"EXECUTED_{signal.signal_type}"
                             details = (
                                 f"Executed High Risk Add order for {target_symbol} "
                                 f"(${self.addon_trade_usd:.2f} USD margin, ${notional_addon_usd:.2f} USD notional) "
-                                f"with composite SL={self.addon_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                                f"— protected by the existing base SL (base_sl_pct={self.base_sl_pct*100:.2f}% "
+                                f"from base_entry_price, unchanged, leverage x{sym_leverage})"
                             )
                         except BelowMinimumNotional as e:
                             outcome = f"SKIPPED_{signal.signal_type}"
@@ -1780,8 +1771,10 @@ class MMS4Daemon:
                     f"- Strona: `{order_side}`\n"
                     f"- Cena wejścia: `${signal.price:,.2f}`\n"
                     f"- Dźwignia: `{sym_leverage}x`\n"
-                    f"- Stop-Loss: "
-                    f"`{(self.base_sl_pct if 'BASE' in signal.signal_type else self.addon_sl_pct)*100:.2f}%`\n"
+                    # P3 V2: the addon leg never gets its own SL — the position stays
+                    # protected by the base SL (base_entry_price, unchanged) either way.
+                    f"- Stop-Loss: `{self.base_sl_pct*100:.2f}%`"
+                    f"{' (od ceny bazy, bez zmian)' if 'BASE' not in signal.signal_type else ''}\n"
                     f"- Stan strategii: `{sym_state.value}`"
                 )
                 wh_client.emit_event(HermesWebhookEvent(
