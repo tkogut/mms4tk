@@ -9,6 +9,23 @@
   - SSH command template: `SSH_AUTH_SOCK=/tmp/ssh-rtdSFzKKo9XW/agent.2049427 ssh -o StrictHostKeyChecking=no root@srv1490214.hstgr.cloud "docker exec antigravity_core ..."`
 - **Test suite**: `MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest tests/ -v` (243/243 PASS).
 
+> 🔴 **NEVER combine the two lines above**: do not run pytest via `docker exec
+> antigravity_core ...` on the production container. Confirmed live risk
+> (2026-09-10): `tests/conftest.py::_isolate_system_settings` (autouse) talks to
+> `mms4tk.api.logger_db` — the SAME shared instance the running daemon uses
+> inside that container, i.e. the real `/app/.agents/swarm/logs.db`, not an
+> isolated test DB. It unconditionally forces `engine_mode`/`adaptive_vr_high`/
+> `adaptive_vr_low`/`time_lock_start`/`time_lock_end` to fixed test defaults
+> before AND after every test — and, by the fixture's own docstring, its
+> restore logic can never actually undo this for these 5 keys, so a live
+> production config (e.g. `engine_mode=ADAPTIVE`) would be silently overwritten
+> for good. The same fixture also calls `set_maintenance_lock(False)`
+> unconditionally in both setup and teardown — releasing a maintenance lock an
+> operator deliberately engaged for a live deploy. Run the test suite only
+> against a local checkout / CI, never inside `antigravity_core`, until this
+> fixture is made to point at an isolated DB regardless of where it runs
+> (tracked as conftest hygiene under the P3 workstream — not yet fixed).
+
 ---
 
 ## 🤖 2. SWARM GOVERNANCE & SAFETY RULES
