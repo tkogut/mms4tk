@@ -616,26 +616,35 @@ def test_p1_addon_sl_gate_analysis():
     CORRECTED 2026-09-10 after independent review (2nd agent) found the first
     version of this test used adaptive_vr_high=1.0/adaptive_vr_low=0.75 — the exact
     literals audit P7 (§1.5) calls "stale, already reset in production" (production
-    runs 1.6/0.8). Under those stale thresholds 2 of the 6 "windows" had ZERO addon
-    fills at all (BTC_H1, ETH_H2 — V0/V1/V2 were bit-for-bit identical), so they
-    carried no information yet still counted toward the 5/6 denominator.
+    runs 1.6/0.8). Under those stale thresholds addon volume was much lower in
+    several windows (e.g. addon-affected STOP_LOSS trades were 0 in BTC_H1/ETH_H2),
+    understating how much the SL variant could possibly matter there.
 
     Recomputed under PRODUCTION thresholds (adaptive_vr_high=1.6, adaptive_vr_low=0.8,
-    confirmed live in system_settings) — real numbers, 2026-09-10:
+    confirmed live in system_settings) — real numbers, 2026-09-10, every one of the
+    6 windows now has real addon activity (12 to 56 addon fills each):
         strict gate (BOTH R:R and total_pnl beat V0): V1 = 3/6, V2 = 3/6
-        total_pnl ALONE (no R:R requirement):         V1 = 5/6 (never worse than V0,
-                                                        tied in ETH_H2 which has zero
-                                                        addon fills under either VR
-                                                        setting), V2 = 4/6
+        total_pnl ALONE (no R:R requirement):         V1 = 5/6 (never worse than V0),
+                                                        V2 = 4/6
 
     Neither variant clears the strict 5/6 gate, so per the audit's own fallback
     ("poniżej — zostaje V0...") V0 stays in production for now. But this is NOT a
-    clean rejection of the hypothesis: V1's total_pnl is consistently at least as
-    good as V0's, never worse, in every window that has any addon activity at all —
-    it fails the STRICT gate only because R:R softens by a few percent in 2 of the
-    6 windows (BTC_H1: 1.32->1.18, ETH_H1: 1.31->1.29). A future reader should NOT
-    read "V0 wins" as "V1/V2 are worse" — read it as "the combined R:R+PnL gate is a
-    high bar that a directionally-positive PnL signal doesn't clear alone".
+    clean rejection of the hypothesis: V1's total_pnl is at least as good as V0's in
+    every one of the 6 windows (strictly better in 5, tied in ETH_H2) — it fails the
+    STRICT gate only because R:R softens in 2 of the 6 windows (BTC_H1: 1.3235 ->
+    1.1818, a real ~10.7% drop, not "a few percent"; ETH_H1: 1.3121 -> 1.2919, ~1.5%).
+    A future reader should NOT read "V0 wins" as "V1/V2 are worse" — read it as "the
+    combined R:R+PnL gate is a high bar that a directionally-positive PnL signal
+    doesn't clear alone".
+
+    CORRECTED AGAIN 2026-09-10 (same review round, verification pass caught a second
+    error in THIS docstring): ETH_H2's tie is NOT because that window "has zero
+    addon fills" — it has 16, same order of magnitude as the other windows. The real
+    reason V0/V1/V2 are bit-for-bit identical there is that none of those 16
+    addon-affected positions' actual exits were sensitive to which composite SL
+    threshold was used in that window's specific price action — addon activity
+    existed, the compared mechanism just never ended up mattering. Do not conflate
+    "no addon activity" with "addon activity that happened not to matter" again.
 
     Separately, and NOT fixed by this correction: V0 in this harness models the
     composite SL as 1.25% of the AVERAGED (avgPx) entry — but production's actual
@@ -648,13 +657,18 @@ def test_p1_addon_sl_gate_analysis():
     pathological case §1.1 describes was never actually modeled here. This is a
     known, documented limitation of this analysis, not something this test can
     self-correct — closing it requires modeling per-fill-price SL in the harness,
-    a separate, larger piece of work.
+    a separate, larger piece of work. (Also note: the stale 1.0/0.75 VR literals this
+    docstring flags remain in several OTHER tests in this same file — fixing this one
+    test does not fix those; out of scope here, but do not read this test's fix as
+    having closed that class of problem file-wide.)
 
-    This test locks in the STRICT gate numbers (3/6, 3/6) as a regression guard: if
-    either ever clears 5/6, a real change to run_backtest's addon/SL/signal logic
-    moved a variant past the gate — that IS grounds to revisit the P1 production
-    decision. It does NOT lock in "V0 is confirmed correct" — that conclusion was
-    withdrawn along with the stale-VR-params bug this docstring documents.
+    This test locks in the EXACT gate numbers (3/6, 3/6, and the 5/6 pnl-only signal)
+    as a regression guard: if any of them changes, a real change to run_backtest's
+    addon/SL/signal logic moved the analysis's outcome — that IS grounds to revisit
+    the P1 production decision, not something to silently absorb by loosening the
+    assertion back to "still under 5". It does NOT lock in "V0 is confirmed
+    correct" — that conclusion was withdrawn along with the stale-VR-params bug this
+    docstring documents.
     """
     windows = []
     for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
@@ -694,19 +708,24 @@ def test_p1_addon_sl_gate_analysis():
         if v2["total_pnl"] > v0["total_pnl"]:
             v2_pnl_wins += 1
 
-    # Sanity: at least SOME windows must actually have addon fills, or this whole
-    # analysis is measuring nothing (the stale-VR-params bug hid this before).
-    assert any_addon_activity >= 4, (
+    # Sanity: under production VR every one of the 6 windows has real addon
+    # activity (measured 2026-09-10: 12-56 fills each) — if this drops, the analysis
+    # is silently measuring less than it claims to again (the stale-VR-params bug
+    # this test was corrected for hid exactly this).
+    assert any_addon_activity == 6, (
         f"only {any_addon_activity}/6 windows had any addon activity — the analysis "
         "may be running under a VR configuration that starves HIGH_RISK_ADD signals"
     )
 
-    assert v1_strict_wins < 5, f"V1 now clears the strict P1 gate ({v1_strict_wins}/6) — revisit the production decision"
-    assert v2_strict_wins < 5, f"V2 now clears the strict P1 gate ({v2_strict_wins}/6) — revisit the production decision"
+    # Exact lock-in, not "< 5" — a change from 3/6 to e.g. 4/6 would silently pass a
+    # "< 5" check while still being a real, worth-noticing shift in the analysis.
+    assert v1_strict_wins == 3, f"V1's strict-gate win count changed ({v1_strict_wins}/6, was 3/6) — re-read this test's docstring"
+    assert v2_strict_wins == 3, f"V2's strict-gate win count changed ({v2_strict_wins}/6, was 3/6) — re-read this test's docstring"
     # Locks in the softer PnL-only signal too, so it stays visible rather than
     # silently regressing without anyone noticing — this is documentation, not a
     # deployment gate.
     assert v1_pnl_wins == 5, f"V1's total_pnl-only signal changed ({v1_pnl_wins}/6, was 5/6) — re-read this test's docstring"
+    assert v2_pnl_wins == 4, f"V2's total_pnl-only signal changed ({v2_pnl_wins}/6, was 4/6) — re-read this test's docstring"
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
