@@ -130,19 +130,14 @@ class LoggerDB:
                     PRIMARY KEY (symbol, side)
                 )
             """)
-            # P3 (2026-09-10): the composite addon SL is anchored to the addon fill
-            # price (see okx_executor.attach_stop_loss), not to the position's average
-            # entry — a % threshold measured from avgPx cannot classify a reconciled
-            # close correctly (it can even land on the profitable side of avgPx). This
-            # column persists the actual absolute trigger price OKXExecutor computed
-            # when the SL algo was attached, so reconciliation can compare against it
-            # directly instead of guessing from a percentage.
-            cursor.execute("PRAGMA table_info(position_addons)")
-            addon_columns = {row[1] for row in cursor.fetchall()}
-            if "sl_trigger_price" not in addon_columns:
-                cursor.execute(
-                    "ALTER TABLE position_addons ADD COLUMN sl_trigger_price REAL NOT NULL DEFAULT 0.0"
-                )
+            # NOTE: an earlier iteration of P3 (rounds 1-2, superseded by V2 —
+            # base_entry_price in position_snapshots is the SSOT now) added a
+            # `sl_trigger_price` column here to persist a per-addon composite SL
+            # trigger price. Removed along with its read/write methods
+            # (2026-09-10 cleanup) since V2 no longer gives the addon leg an
+            # independent SL to persist. A database that already has this column
+            # (any DB that ran the P3 V2 deploy) keeps it — SQLite doesn't need a
+            # migration to ignore an extra column nothing reads anymore.
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_snapshots (
                     symbol TEXT NOT NULL,
@@ -977,76 +972,25 @@ class LoggerDB:
             ).fetchone()
         return int(row["addon_count"]) if row else 0
 
-    def record_addon(
-        self,
-        symbol: str,
-        side: str,
-        position_key: str = "",
-        sl_trigger_price: float = 0.0,
-    ) -> int:
-        """
-        Increment and persist the addon counter for a position. Returns the new count.
-
-        `sl_trigger_price`: the absolute price OKXExecutor computed for the composite
-        SL algo it attached for this add (see `get_addon_sl_trigger_price`). 0.0 means
-        unknown (e.g. the SL attach's reference price couldn't be resolved) — callers
-        must fall back to a percentage heuristic in that case, not treat 0.0 as a
-        price level.
-        """
+    def record_addon(self, symbol: str, side: str, position_key: str = "") -> int:
+        """Increment and persist the addon counter for a position. Returns the new count."""
         current = self.get_addon_count(symbol, side, position_key)
         new_count = current + 1
         timestamp = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO position_addons (symbol, side, addon_count, position_key, sl_trigger_price, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO position_addons (symbol, side, addon_count, position_key, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, side) DO UPDATE SET
                     addon_count = excluded.addon_count,
                     position_key = excluded.position_key,
-                    sl_trigger_price = excluded.sl_trigger_price,
                     updated_at = excluded.updated_at
                 """,
-                (symbol, side.lower(), new_count, position_key, float(sl_trigger_price or 0.0), timestamp)
+                (symbol, side.lower(), new_count, position_key, timestamp)
             )
             conn.commit()
         return new_count
-
-    def set_addon_sl_trigger_price(self, symbol: str, side: str, sl_trigger_price: float) -> None:
-        """
-        Update the persisted SL trigger price for an existing addon row, without
-        touching its count. Used when the Self-Healing SL Guard re-attaches an
-        addon-carrying position's composite SL — that re-attach anchors to a
-        different reference price (avgPx) than the original addon fill, so the
-        ledger's trigger price would otherwise go stale relative to what OKX
-        actually now holds. A no-op if no addon row exists for (symbol, side) —
-        this never creates one.
-        """
-        timestamp = datetime.now(timezone.utc).isoformat()
-        with self._get_connection() as conn:
-            conn.execute(
-                "UPDATE position_addons SET sl_trigger_price = ?, updated_at = ? "
-                "WHERE symbol = ? AND side = ?",
-                (float(sl_trigger_price or 0.0), timestamp, symbol, side.lower())
-            )
-            conn.commit()
-
-    def get_addon_sl_trigger_price(self, symbol: str, side: str) -> float:
-        """
-        Return the absolute price of the composite SL algo attached for this position's
-        addon, or 0.0 if there is no addon on record (or no price was captured for it).
-
-        This is the SSOT for classifying a reconciled close on an addon-carrying
-        position: the composite SL is anchored to the addon fill price (see
-        `okx_executor.attach_stop_loss`), not to the position's average entry, so a %
-        threshold measured from avgPx cannot reliably detect it (P3).
-        """
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT sl_trigger_price FROM position_addons WHERE symbol = ? AND side = ?",
-                (symbol, side.lower())
-            ).fetchone()
-        return float(row["sl_trigger_price"]) if row else 0.0
 
     def clear_addon_state(self, symbol: str, side: Optional[str] = None) -> None:
         """Drop the addon ledger for a symbol (both sides) or for one side only."""

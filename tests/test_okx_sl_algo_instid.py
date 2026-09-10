@@ -268,55 +268,68 @@ def test_daemon_self_healing_sl_uses_base_entry_price_not_avgpx_on_addon_positio
     asyncio.run(_run())
 
 
-@pytest.mark.allow_real_okx_network
-def test_execute_order_reports_real_sl_trigger_price():
+def test_daemon_self_healing_sl_hedge_mode_uses_independent_base_entry_price_per_side(tmp_path: Path):
     """
-    P3: execute_order must report back the absolute price it anchored the composite
-    SL algo to (via attach_stop_loss), so callers that persist an addon ledger
-    (daemon.py, api.py) can record the real trigger level instead of re-deriving it
-    from a % of avgPx (which the composite SL is NOT measured from — it's anchored
-    to this order's own fill/reference price).
-
-    Marked allow_real_okx_network to exercise the REAL execute_order (one of the 7
-    methods tests/conftest.py fakes by default) rather than its network-safety fake
-    — not because this test makes any live call: `self.exchange` below is fully
-    mocked, so nothing here touches the network.
+    Hedge mode: LONG and SHORT open simultaneously on the same symbol. Each side
+    has its own base_entry_price, and the Self-Healing SL Guard must re-attach
+    each one at ITS OWN anchor — never mixing them up (e.g. attaching the short's
+    base_entry_price to the long's re-attach). Independent review, round 3,
+    identified this as a coverage gap.
     """
     async def _run():
+        db_file = tmp_path / "test_daemon_sl_hedge.db"
+        db = LoggerDB(db_path=str(db_file))
+        db.save_position_snapshot(
+            symbol="ETH/USD:USD-310404", side="long", contracts=1.0, entry_price=2000.0, last_price=2000.0,
+        )
+        db.save_position_snapshot(
+            symbol="ETH/USD:USD-310404", side="short", contracts=1.0, entry_price=1800.0, last_price=1800.0,
+        )
+
         executor = OKXExecutor()
         executor.has_credentials = True
 
         mock_exchange = MagicMock()
-        mock_exchange.markets = {"ETH/USD:USD-310404": {"id": "ETH-USD_UM_XPERP-310404", "spot": False}}
+        mock_exchange.markets = {"ETH/USD:USD-310404": {"id": "ETH-USD_UM_XPERP-310404"}}
         mock_exchange.market = lambda sym: mock_exchange.markets.get(sym, {})
         mock_exchange.price_to_precision = MagicMock(side_effect=lambda sym, px: f"{px:.2f}")
-        mock_exchange.create_order = AsyncMock(return_value={"id": "order_1", "average": 99.0})
         mock_exchange.private_get_trade_orders_algo_pending = AsyncMock(return_value={"data": []})
         mock_exchange.private_post_trade_cancel_algos = AsyncMock(return_value={"code": "0"})
-        mock_exchange.private_post_trade_order_algo = AsyncMock(return_value={"code": "0", "data": [{"algoId": "algo_1"}]})
+        mock_exchange.private_post_trade_order_algo = AsyncMock(return_value={"code": "0", "data": [{"algoId": "healed_sl_hedge"}]})
         executor.exchange = mock_exchange
-        executor.set_leverage = AsyncMock(return_value={})
 
-        # SHORT addon: reference price 99.0, composite SL 1.25% -> 99.0 * 1.0125 = 100.2375
-        order = await executor.execute_order(
-            symbol="ETH/USD:USD-310404",
-            side="SELL",
-            amount=1.0,
-            stop_loss_pct=0.0125,
-            leverage=1.0,
-            price=99.0,
-        )
-        assert order["sl_trigger_price"] == pytest.approx(100.2375, abs=1e-6)
+        # Hedge mode: both sides open at once for the same symbol.
+        long_pos = {
+            "symbol": "ETH/USD:USD-310404", "info": {"instId": "ETH-USD_UM_XPERP-310404"},
+            "posSide": "long", "side": "long", "contracts": 1.0,
+            "notionalUsd": 200.0, "entryPrice": 2000.0, "markPrice": 2010.0, "unrealizedPnl": 1.0,
+        }
+        short_pos = {
+            "symbol": "ETH/USD:USD-310404", "info": {"instId": "ETH-USD_UM_XPERP-310404"},
+            "posSide": "short", "side": "short", "contracts": 1.0,
+            "notionalUsd": 180.0, "entryPrice": 1800.0, "markPrice": 1790.0, "unrealizedPnl": 1.0,
+        }
+        executor.fetch_positions = AsyncMock(return_value=[long_pos, short_pos])
+        executor.fetch_candles = AsyncMock(return_value=[
+            Candle(timestamp=1000, open=1900, high=1910, low=1890, close=1900, volume=10),
+        ])
 
-        # LONG: reference price 2000.0, base SL 2% -> 2000 * 0.98 = 1960.0
-        order_long = await executor.execute_order(
-            symbol="ETH/USD:USD-310404",
-            side="BUY",
-            amount=1.0,
-            stop_loss_pct=0.02,
-            leverage=1.0,
-            price=2000.0,
+        from mms4tk.api import configured_symbols_store
+        configured_symbols_store["ETH/USD:USD-310404"] = {"allocation_usd": 100.0, "is_active": True, "base_ratio": 70, "add_ratio": 30}
+
+        state_mgr = MMS4StateManager()
+        daemon = MMS4Daemon(
+            state_manager=state_mgr, executor=executor, logger_db=db,
+            interval_seconds=1.0, symbol="ETH/USD:USD-310404",
         )
-        assert order_long["sl_trigger_price"] == pytest.approx(1960.0, abs=1e-6)
+
+        await daemon.execute_symbol_cycle("ETH/USD:USD-310404")
+
+        assert mock_exchange.private_post_trade_order_algo.await_count == 2
+        calls_by_pos_side = {c.args[0]["posSide"]: c.args[0] for c in mock_exchange.private_post_trade_order_algo.await_args_list}
+        # LONG: 2000 * (1 - 0.02) = 1960.00
+        assert calls_by_pos_side["long"]["slTriggerPx"] == "1960.00"
+        # SHORT: 1800 * (1 + 0.02) = 1836.00 — must NOT be derived from the long's anchor
+        assert calls_by_pos_side["short"]["slTriggerPx"] == "1836.00"
 
     asyncio.run(_run())

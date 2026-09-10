@@ -152,7 +152,12 @@ class EmergencyKillallResponse(BaseModel):
 class HighRiskAddRequest(BaseModel):
     side: str = Field(default="LONG", description="Order side: LONG or SHORT")
     size: float = Field(default=1.0, description="Position size multiplier or contracts")
-    stop_loss_pct: float = Field(default=0.01, description="Tight stop loss percentage (e.g. 0.01 for 1%)")
+    # P3 V2 (2026-09-10): DEPRECATED, ignored. Every addon — manual (this endpoint)
+    # or automatic (daemon.py) — now gets NO independent SL; the position stays
+    # protected by its existing base SL (base_entry_price, base_sl_pct,
+    # closeFraction="1" already covers the whole position). Kept only so older
+    # callers that still send this field don't fail request validation.
+    stop_loss_pct: float = Field(default=0.01, description="Deprecated, ignored (P3 V2) — the addon no longer gets an independent SL; see base_sl_pct in /api/v1/settings.")
     # Audit P9.7 (2026-09-08): was hardcoded to daemon.symbol regardless of caller
     # intent. Optional and defaulting to daemon.symbol to stay backward compatible
     # with existing callers that never set it.
@@ -505,8 +510,8 @@ async def emergency_reverse(request: Request) -> Dict[str, str]:
 @app.post("/api/v1/trade/high_risk_add", response_model=HighRiskAddResponse, tags=["Trading"], dependencies=[Depends(verify_api_key)])
 async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
     """
-    High-risk position add (leverage x1, independent ticket) with tight SL=1%.
-    Blocked if strategy is in SCOUT_MODE (REDUCED_RISK).
+    High-risk position add (leverage x1, independent ticket). Blocked if strategy
+    is in SCOUT_MODE (REDUCED_RISK).
 
     Audit P9.7 (2026-09-08): this manual path previously (a) always targeted
     daemon.symbol regardless of req.symbol, (b) never called daemon._record_addon,
@@ -515,6 +520,14 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
     execute_order's exception in a bare `except` and still reported
     executed: True/status: success even when the order failed — the same class of
     bug as P9.3's emergency/reverse. All three fixed here.
+
+    P3 V2 (2026-09-10): previously attached its own independent SL at
+    `req.stop_loss_pct` — the same non-determinism/misclassification problem the
+    automatic HIGH_RISK_ADD path had (this manual add's own attach would cancel and
+    replace the base SL with a DIFFERENT anchor, and reconcile_positions had no way
+    to know about it). Now consistent with the automatic path: no independent SL is
+    attached here either — the position stays protected by whatever SL is already
+    on it (base_entry_price, base_sl_pct).
     """
     target_symbol = req.symbol or daemon.symbol
     pos_side = "long" if req.side.upper() == "LONG" else "short"
@@ -554,13 +567,14 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
         }
 
     # Execute high risk add order via OKXExecutor. Failure must never be reported as
-    # executed: True/status: success (audit P9.7c / P9.3).
+    # executed: True/status: success (audit P9.7c / P9.3). stop_loss_pct=0.0: P3 V2 —
+    # no independent SL for the addon leg, see this endpoint's docstring.
     try:
-        order_info = await executor.execute_order(
+        await executor.execute_order(
             symbol=target_symbol,
             side=req.side,
             amount=req.size,
-            stop_loss_pct=req.stop_loss_pct,
+            stop_loss_pct=0.0,
             leverage=1.0
         )
     except Exception as e:
@@ -572,13 +586,7 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "details": {"symbol": target_symbol, "side": req.side, "size": req.size}
         }
 
-    # P3: persist the real composite SL trigger price execute_order reported (anchored
-    # to this add's own fill price, not to match_entry/avgPx) so reconciliation can
-    # classify a later stop-out correctly instead of guessing a % from avgPx.
-    addon_sl_trigger_price = 0.0
-    if isinstance(order_info, dict):
-        addon_sl_trigger_price = float(order_info.get("sl_trigger_price") or 0.0)
-    daemon._record_addon(target_symbol, pos_side, match_entry, addon_sl_trigger_price)
+    daemon._record_addon(target_symbol, pos_side, match_entry)
 
     return {
         "status": "success",
@@ -588,7 +596,8 @@ async def high_risk_add(req: HighRiskAddRequest) -> Dict[str, Any]:
             "symbol": target_symbol,
             "side": req.side,
             "size": req.size,
-            "stop_loss_pct": req.stop_loss_pct,
+            # P3 V2: this add has no independent SL — the position stays protected
+            "stop_loss_pct": daemon.base_sl_pct,
             "leverage": 1.0
         }
     }

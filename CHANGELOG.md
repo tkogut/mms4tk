@@ -4,6 +4,30 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.44.4] - 2026-09-10
+
+### 🧹 P3 Follow-up: Dead Code Cleanup + High-Risk-Add Endpoint Consistency
+- 🔎 **Dead code removed**: the addon composite-SL-trigger-price mechanism from P3
+  rounds 1-2 (`position_addons.sl_trigger_price`, `LoggerDB.get_addon_sl_trigger_price`/
+  `set_addon_sl_trigger_price`, `daemon._addon_sl_trigger_price`/
+  `_update_addon_sl_trigger_price`, `execute_order`'s `sl_trigger_price` report) —
+  fully superseded by V2's `base_entry_price`, nothing read it anymore.
+  `OKXExecutor._compute_sl_trigger_price` stays; `attach_stop_loss` still uses it.
+- 🔧 **`/api/v1/trade/high_risk_add` brought into V2 consistency**: this manual
+  endpoint still attached its own independent SL, reproducing the exact
+  determinism/classification bug V2 fixes for the automatic path. Now consistent:
+  no independent SL attached; the position stays protected by its existing base
+  SL. `stop_loss_pct` in the request is kept for backward compatibility but is
+  now deprecated/ignored.
+- 🧪 Added hedge-mode (long+short simultaneously) and close-then-reopen test
+  coverage for the Self-Healing SL Guard / `base_entry_price`, identified as gaps
+  by independent review. Full suite: **329/329 PASS**.
+- 📋 Docs: `STRATEGY_AND_ALGORITHM.md`/`MASTERMIND_STRATEGY.md` updated to drop
+  the addon's old independent-SL description; the audit doc's P3 finding gets a
+  "resolved" status pointer (historical diagnosis text left unchanged).
+
+---
+
 ## 🚀 [0.44.3] - 2026-09-10
 
 ### 🎯 P3: Single Source of Truth for Position Stop-Loss (V2)
