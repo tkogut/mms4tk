@@ -418,6 +418,48 @@ path". Uruchomienie `pytest` przez `docker exec antigravity_core` nie powinno ju
 dotykać `/app/.agents/swarm/logs.db` ani `/app/.agents/swarm/MAINTENANCE_LOCK` (w
 żadnym kierunku, enable czy disable) — zweryfikowane: 330/330 PASS z tą zmianą.
 
+### ✅ DONE — Follow-up cleanup po V2 (2026-09-10, worktree `chore/p3-followup-cleanup`)
+
+Domyka 3 z 4 wcześniej odłożonych, niskopriorytetowych punktów (A/B `engine_mode`,
+P4 wariant #2, P6.2 wciąż nie zaczęte — patrz niżej):
+
+- **Martwy kod z rund 1-2 P3 usunięty:** `logger_db.py` — kolumna
+  `position_addons.sl_trigger_price` przestaje być tworzona/czytana/pisana
+  (`get_addon_sl_trigger_price`/`set_addon_sl_trigger_price` usunięte,
+  `record_addon` wraca do 3 argumentów); `daemon.py` — `_addon_sl_trigger_price`/
+  `_update_addon_sl_trigger_price` usunięte, `_record_addon` wraca do 3
+  argumentów; `okx_executor.py` — `execute_order` przestaje zwracać
+  `sl_trigger_price` (zachowany błąd-log gdy `attach_stop_loss` faktycznie
+  zawiedzie). `_compute_sl_trigger_price` **zostaje** — nadal używane wewnętrznie
+  przez `attach_stop_loss` do realnego wystawiania zleceń SL. Istniejąca w
+  produkcyjnej bazie kolumna `sl_trigger_price` zostaje fizycznie w schemacie
+  (SQLite nie wymaga migracji, żeby zignorować nieużywaną kolumnę) — nie
+  usuwana z żywej bazy, świadomie, żeby uniknąć ryzykownej operacji DROP COLUMN
+  na produkcji dla zerowej korzyści funkcjonalnej.
+- **`/api/v1/trade/high_risk_add` wprowadzony do spójności V2:** ręczny dodatek
+  też przestaje attachować niezależny SL (`stop_loss_pct=0.0` do
+  `execute_order`, zamiast `req.stop_loss_pct`) — pole `stop_loss_pct` w
+  `HighRiskAddRequest` zostaje w modelu (kompatybilność wsteczna dla starych
+  wywołujących) ale oznaczone jako deprecated/ignorowane; odpowiedź raportuje
+  teraz `daemon.base_sl_pct` jako realnie obowiązujący SL, nie ignorowaną
+  wartość z requestu.
+- **Brakujące testy dodane:** hedge-mode (long+short jednocześnie) dla
+  Self-Healing Guard (`test_okx_sl_algo_instid.py`) — potwierdza, że każda strona
+  dostaje WŁASNY `base_entry_price`, bez mieszania; pozycja w pełni zamknięta i
+  otwarta od nowa (`test_reconciliation_pnl.py`) — potwierdza reset
+  `base_entry_price` na świeżej pozycji, nie dziedziczenie starej wartości.
+  Usunięte testy dla skasowanej funkcjonalności (`test_execute_order_reports_real_sl_trigger_price`,
+  `test_update_addon_sl_trigger_price_*`).
+- **Docs:** `docs/STRATEGY_AND_ALGORITHM.md` (tabela sygnałów — `HIGH_RISK_ADD`
+  nie ma już własnego SL) i `docs/MASTERMIND_STRATEGY.md` (sekcja alokacji
+  kapitału — usunięty opis "ciasnego SL 1.0%" dla dokładki, poprawiony wzór
+  Max Loss) zaktualizowane pod V2. `docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md`
+  — sekcja P3 dostała status-owy nagłówek "ZAIMPLEMENTOWANE" z odnośnikiem do
+  `task.md`; **treść historycznej diagnozy audytu celowo NIE zmieniona** (to
+  zapis stanu z dnia audytu, nie żywa dokumentacja).
+- Pełny suite: **329/329 PASS** (330 z poprzedniej sesji − 3 usunięte testy
+  martwej funkcjonalności + 2 nowe = 329).
+
 ### 🔜 Wciąż otwarte (nie zaadresowane w tej sesji)
 
 - **A/B `engine_mode` CLASSIC-vs-ADAPTIVE** (nigdy nie testowane, efekt 5.8× na
@@ -425,14 +467,6 @@ dotykać `/app/.agents/swarm/logs.db` ani `/app/.agents/swarm/MAINTENANCE_LOCK` 
 - **P4 wariant #2** (poprawiony: BTC przypięty na 2.0%, siatka tylko na ETH) —
   nie zaczęte.
 - **P6.2** — nie zaczęte.
-- Sprzątnięcie martwego kodu z rund 1-2 P3 (`sl_trigger_price` i pokrewne) —
-  niskie ryzyko, nie pilne, patrz wyżej.
-- `/api/v1/trade/high_risk_add` poza spójnością V2 (klasyfikacja i determinizm) —
-  patrz wyżej.
-- Brakujące testy (niski priorytet, zidentyfikowane przez recenzję rundy 3, nie
-  dodane w tej sesji): Self-Healing Guard w hedge-mode (long+short jednocześnie),
-  pozycja w pełni zamknięta i otwarta od nowa na poziomie `execute_symbol_cycle`
-  (zweryfikowane ręcznie przez recenzenta, nie jako test w suite).
 - Endpoint `/api/v1/trade/high_risk_add` nadal poza spójnością V2 — patrz wyżej.
 
 ---

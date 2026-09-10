@@ -75,7 +75,16 @@ Sygnały generowane są w module `analytics.py` i podlegają rygorystycznym bram
 |---|---|---|---|
 | `BASE_LONG` | $Low \le TMA_{Lower}$ oraz $Close > Low$ (potwierdzenie odrzucenia dołka) | 70% Alokacji | -2.00% |
 | `BASE_SHORT` | $High \ge TMA_{Upper}$ oraz $Close < High$ (potwierdzenie odrzucenia szczytu) | 70% Alokacji | -2.00% |
-| `HIGH_RISK_ADD` | Pogłębienie odchylenia o kolejne $1.0 \times ATR$ poza wstęgę | 30% Alokacji | -1.25% |
+| `HIGH_RISK_ADD` | Pogłębienie odchylenia o kolejne $1.0 \times ATR$ poza wstęgę | 30% Alokacji | *(brak własnego)* |
+
+> **P3 V2 (2026-09-10):** `HIGH_RISK_ADD` nie ma już własnego, osobnego SL.
+> Wcześniej dokładka dostawała ciasny, niezależny stop (-1.25%) zakotwiczony w
+> cenie jej własnego wypełnienia — co powodowało niedeterminizm (dwie różne
+> ścieżki kodu mogły policzyć tę cenę inaczej) i błędną klasyfikację stop-outów
+> przy rekoncyliacji. Dziś cała pozycja (baza + dokładka) chroniona jest
+> WYŁĄCZNIE przez SL bazy (-2.00% od `base_entry_price`, nigdy nieaktualizowany
+> uśrednieniem) — `closeFraction="1"` na giełdzie obejmuje pełny, powiększony
+> rozmiar pozycji. Szczegóły: `task.md`, sekcja P3.
 
 ### 🛡️ Bramki Filtrujące Wejścia:
 1. **Candle-Close Gate (`_last_signal_candle_ts`):** 
