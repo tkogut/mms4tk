@@ -4,6 +4,46 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.44.3] - 2026-09-10
+
+### 🎯 P3: Single Source of Truth for Position Stop-Loss (V2)
+- 🔎 **Root cause**: a High-Risk-Add ("addon") position previously got its own,
+  separate composite SL — anchored to the addon's own fill price, not to the
+  position's average entry (avgPx). Two independent code paths (the addon's own
+  `execute_order` attach vs the Self-Healing SL Guard's re-attach) could compute
+  that composite SL from two DIFFERENT reference prices, so the same position
+  could end up with two different real SL prices depending on which path fired
+  last — and `reconcile_positions`'s stop-out classification, keyed off avgPx,
+  regularly missed real stop-outs on addon-carrying positions (audit
+  `docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md`, §1.2/P3).
+- 🔧 **Fix (V2)**: the addon leg no longer gets an independent SL at all.
+  `position_snapshots` gains `base_entry_price` — pinned once, at a position's
+  first snapshot, and never moved by later addon averaging. `reconcile_positions`,
+  the Self-Healing SL Guard, and the Midline Partial TP re-attach now all
+  classify/re-attach unconditionally from `base_entry_price` + `base_sl_pct` —
+  OKX's existing `closeFraction="1"` algo order already protects the whole
+  (larger, post-addon) position, so leaving it untouched is sufficient.
+- 🎯 **Side effect**: `state_manager.py`'s `>=2%` SCOUT_MODE/Hermes-H4 gate now
+  fires correctly for addon-carrying stop-outs too (the reported `sl_percent` is
+  now `base_entry_price`-relative), with zero changes to `state_manager.py`
+  itself. `pnl_percent`/`pnl_usd` (accounting) stay avgPx-based, unchanged.
+- 🧪 **Test isolation hardening**: `tests/conftest.py` now forces an isolated
+  `MMS4_DB_PATH` and maintenance-lock file location before any `mms4tk` module is
+  imported, closing a real risk (running the suite against a live deployment
+  could otherwise have written to the production DB and released a real
+  maintenance lock).
+- 🧪 Went through 3 rounds of independent adversarial review; 32 new/rewritten
+  tests across `test_reconciliation_pnl.py`, `test_okx_sl_algo_instid.py`,
+  `test_midline_inactivity_tp.py`, `test_max_margin_allocation.py`. Full suite:
+  **330/330 PASS**.
+- 📋 Known, documented gaps (not addressed here): the manual
+  `/api/v1/trade/high_risk_add` endpoint still attaches its own independent SL;
+  dead code from the superseded composite-trigger mechanism
+  (`position_addons.sl_trigger_price` and friends) left in place, unused, pending
+  a low-risk cleanup follow-up. See `task.md` for the full writeup.
+
+---
+
 ## 🚀 [0.44.2] - 2026-09-04
 
 ### 🐛 Duplicate Telegram Alerts Fixed (POSITION_OPENED, STALE_POSITION_FORCE_CLOSE)
