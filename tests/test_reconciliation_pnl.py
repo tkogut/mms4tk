@@ -107,6 +107,89 @@ def test_reconciliation_pnl_eth(temp_db: LoggerDB):
     assert abs(pnl) < 10.0  # Must NOT be ~ -4162 USD
 
 
+def test_reconciliation_classifies_addon_stop_out_at_composite_threshold(temp_db: LoggerDB):
+    """
+    P3: a position that received a High Risk Add gets its SL re-attached at the
+    composite (addon_sl_pct) distance from the averaged entry, not base_sl_pct.
+    A loss between the two thresholds (0.9375% .. 1.5% with defaults) is a real
+    exchange-side stop-out on such a position and must be classified as one.
+    """
+    executor = OKXExecutor()
+    executor.exchange = MagicMock()
+    executor.exchange.markets = {"BTC/USDC": {"contractSize": 0.0001}}
+    executor.exchange.market = MagicMock(return_value={"contractSize": 0.0001})
+
+    state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+    state_mgr.record_trade = MagicMock()
+
+    daemon = MMS4Daemon(
+        executor=executor,
+        state_manager=state_mgr,
+        logger_db=temp_db,
+        symbol="BTC/USDC",
+    )
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC",
+        side="long",
+        contracts=37.0,
+        entry_price=100.0,
+        last_price=100.0,
+    )
+    # This position already carries a High Risk Add.
+    temp_db.record_addon("BTC/USDC", "long")
+
+    # Loss of 1.2%: below base_sl_pct*0.75 (1.5%) but above addon_sl_pct*0.75
+    # (0.9375%) — must be recognized as the composite SL firing.
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC",
+        live_positions=[],
+        current_price=98.8,
+    )
+
+    state_mgr.record_trade.assert_called_once()
+    kwargs = state_mgr.record_trade.call_args[1]
+    assert kwargs["is_stop_loss"] is True
+
+
+def test_reconciliation_without_addon_still_uses_base_threshold(temp_db: LoggerDB):
+    """Regression guard: a position with no addon keeps the pre-P3 base_sl_pct
+    threshold — the same 1.2% loss is NOT classified as a stop-out."""
+    executor = OKXExecutor()
+    executor.exchange = MagicMock()
+    executor.exchange.markets = {"BTC/USDC": {"contractSize": 0.0001}}
+    executor.exchange.market = MagicMock(return_value={"contractSize": 0.0001})
+
+    state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+    state_mgr.record_trade = MagicMock()
+
+    daemon = MMS4Daemon(
+        executor=executor,
+        state_manager=state_mgr,
+        logger_db=temp_db,
+        symbol="BTC/USDC",
+    )
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC",
+        side="long",
+        contracts=37.0,
+        entry_price=100.0,
+        last_price=100.0,
+    )
+    # No addon recorded for this position.
+
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC",
+        live_positions=[],
+        current_price=98.8,
+    )
+
+    state_mgr.record_trade.assert_called_once()
+    kwargs = state_mgr.record_trade.call_args[1]
+    assert kwargs["is_stop_loss"] is False
+
+
 def test_take_profit_pnl_with_contract_size(temp_db: LoggerDB):
     """
     Test Take Profit PnL calculation scaled by contract size.

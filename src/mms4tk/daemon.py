@@ -510,8 +510,16 @@ class MMS4Daemon:
                 pnl_pct = (entry_price - exit_price) / entry_price
 
             loss_pct = -pnl_pct  # positive when the position lost money
+            # A position carrying an addon has its SL re-attached at the composite
+            # distance (addon_sl_pct) from the averaged entry, not the base distance —
+            # classifying it against base_sl_pct made a real stop-out on ~70% of
+            # positions (those with an addon) read as "closed without SL trigger"
+            # (P3: composite SL is tighter than base, so the loss never reached the
+            # base threshold before the exchange's own stop fired).
+            has_addon = self._addon_count(target_symbol, side, entry_price) > 0
+            effective_sl_pct = self.addon_sl_pct if has_addon else self.base_sl_pct
             # Tolerance: the stop fills at market, so allow a little slippage either way.
-            sl_threshold = self.base_sl_pct * 0.75
+            sl_threshold = effective_sl_pct * 0.75
             is_stop_out = loss_pct >= sl_threshold
 
             contracts = float(snap["contracts"] or 0.0)
