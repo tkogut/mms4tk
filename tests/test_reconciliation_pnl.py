@@ -107,16 +107,10 @@ def test_reconciliation_pnl_eth(temp_db: LoggerDB):
     assert abs(pnl) < 10.0  # Must NOT be ~ -4162 USD
 
 
-def test_reconciliation_classifies_addon_stop_out_at_composite_threshold(temp_db: LoggerDB):
-    """
-    P3: a position that received a High Risk Add gets its SL re-attached at the
-    composite (addon_sl_pct) distance from the averaged entry, not base_sl_pct.
-    A loss between the two thresholds (0.9375% .. 1.5% with defaults) is a real
-    exchange-side stop-out on such a position and must be classified as one.
-    """
+def _make_daemon(temp_db: LoggerDB, symbol: str = "BTC/USDC") -> "tuple[MMS4Daemon, MagicMock]":
     executor = OKXExecutor()
     executor.exchange = MagicMock()
-    executor.exchange.markets = {"BTC/USDC": {"contractSize": 0.0001}}
+    executor.exchange.markets = {symbol: {"contractSize": 0.0001}}
     executor.exchange.market = MagicMock(return_value={"contractSize": 0.0001})
 
     state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
@@ -126,8 +120,76 @@ def test_reconciliation_classifies_addon_stop_out_at_composite_threshold(temp_db
         executor=executor,
         state_manager=state_mgr,
         logger_db=temp_db,
-        symbol="BTC/USDC",
+        symbol=symbol,
     )
+    return daemon, state_mgr
+
+
+def test_reconciliation_classifies_addon_stop_out_at_real_trigger_price(temp_db: LoggerDB):
+    """
+    P3 (corrected per independent review): the composite SL for an addon-carrying
+    position is anchored to the ADDON's own fill price, not to avgPx — a %
+    threshold measured from avgPx cannot detect it reliably. This is the audit's
+    own canonical example (§1.1): SHORT base@100, addon@99, avgPx=99.70, composite
+    SL = 99 * 1.0125 = 100.2375. The exchange's own SL then fires at ~100.24 — a
+    loss of only ~0.54% from avgPx, which the OLD base_sl_pct*0.75 (1.5%) threshold
+    (and even the superseded addon_sl_pct*0.75 draft threshold, 0.9375%) would both
+    have missed. Only comparing against the real, persisted trigger price catches it.
+    """
+    daemon, state_mgr = _make_daemon(temp_db)
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC",
+        side="short",
+        contracts=37.0,
+        entry_price=99.70,
+        last_price=99.70,
+    )
+    temp_db.record_addon("BTC/USDC", "short", sl_trigger_price=100.2375)
+
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC",
+        live_positions=[],
+        current_price=100.24,
+    )
+
+    state_mgr.record_trade.assert_called_once()
+    kwargs = state_mgr.record_trade.call_args[1]
+    assert kwargs["pnl_percent"] == pytest.approx(-0.00542, abs=1e-4)
+    assert kwargs["is_stop_loss"] is True
+
+
+def test_reconciliation_addon_position_far_from_trigger_is_not_stop_out(temp_db: LoggerDB):
+    """The same addon-carrying position, closed near avgPx (nowhere near the
+    persisted composite SL trigger price) — e.g. a take-profit flip whose
+    snapshot wasn't cleared in time — must NOT be misclassified as a stop-out."""
+    daemon, state_mgr = _make_daemon(temp_db)
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC",
+        side="short",
+        contracts=37.0,
+        entry_price=99.70,
+        last_price=99.70,
+    )
+    temp_db.record_addon("BTC/USDC", "short", sl_trigger_price=100.2375)
+
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC",
+        live_positions=[],
+        current_price=99.50,  # closed favorably, far short of the 100.2375 trigger
+    )
+
+    state_mgr.record_trade.assert_called_once()
+    kwargs = state_mgr.record_trade.call_args[1]
+    assert kwargs["is_stop_loss"] is False
+
+
+def test_reconciliation_addon_without_captured_trigger_price_falls_back_to_base_threshold(temp_db: LoggerDB):
+    """If the addon was recorded but its trigger price is unknown (0.0 — e.g. the
+    SL attach's reference price couldn't be resolved), reconciliation must fall
+    back to the base-only % heuristic rather than trust a fabricated price level."""
+    daemon, state_mgr = _make_daemon(temp_db)
 
     temp_db.save_position_snapshot(
         symbol="BTC/USDC",
@@ -136,39 +198,23 @@ def test_reconciliation_classifies_addon_stop_out_at_composite_threshold(temp_db
         entry_price=100.0,
         last_price=100.0,
     )
-    # This position already carries a High Risk Add.
-    temp_db.record_addon("BTC/USDC", "long")
+    temp_db.record_addon("BTC/USDC", "long")  # sl_trigger_price defaults to 0.0
 
-    # Loss of 1.2%: below base_sl_pct*0.75 (1.5%) but above addon_sl_pct*0.75
-    # (0.9375%) — must be recognized as the composite SL firing.
+    # 1.2% loss: below base_sl_pct*0.75 (1.5%) — the fallback heuristic says "no".
     daemon.reconcile_positions(
         target_symbol="BTC/USDC",
         live_positions=[],
         current_price=98.8,
     )
-
     state_mgr.record_trade.assert_called_once()
-    kwargs = state_mgr.record_trade.call_args[1]
-    assert kwargs["is_stop_loss"] is True
+    assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is False
 
 
-def test_reconciliation_without_addon_still_uses_base_threshold(temp_db: LoggerDB):
-    """Regression guard: a position with no addon keeps the pre-P3 base_sl_pct
-    threshold — the same 1.2% loss is NOT classified as a stop-out."""
-    executor = OKXExecutor()
-    executor.exchange = MagicMock()
-    executor.exchange.markets = {"BTC/USDC": {"contractSize": 0.0001}}
-    executor.exchange.market = MagicMock(return_value={"contractSize": 0.0001})
-
-    state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
-    state_mgr.record_trade = MagicMock()
-
-    daemon = MMS4Daemon(
-        executor=executor,
-        state_manager=state_mgr,
-        logger_db=temp_db,
-        symbol="BTC/USDC",
-    )
+def test_reconciliation_without_addon_uses_base_threshold(temp_db: LoggerDB):
+    """Regression guard: a position with no addon at all uses the base_sl_pct
+    threshold. A loss comfortably past it (2.1%) is a stop-out; the same loss
+    used in the addon tests above (1.2%) is not (see test above)."""
+    daemon, state_mgr = _make_daemon(temp_db)
 
     temp_db.save_position_snapshot(
         symbol="BTC/USDC",
@@ -182,12 +228,73 @@ def test_reconciliation_without_addon_still_uses_base_threshold(temp_db: LoggerD
     daemon.reconcile_positions(
         target_symbol="BTC/USDC",
         live_positions=[],
-        current_price=98.8,
+        current_price=97.9,  # 2.1% loss, past base_sl_pct*0.75 (1.5%)
     )
 
     state_mgr.record_trade.assert_called_once()
     kwargs = state_mgr.record_trade.call_args[1]
-    assert kwargs["is_stop_loss"] is False
+    assert kwargs["is_stop_loss"] is True
+
+
+def test_reconciliation_addon_trigger_lookup_failure_falls_back_gracefully(temp_db: LoggerDB, monkeypatch):
+    """If reading the persisted trigger price blows up (DB error), reconciliation
+    must not crash — it logs and falls back to the base % heuristic (fail-open,
+    same as the pre-P3 behavior), not raise out of the whole reconciliation cycle."""
+    daemon, state_mgr = _make_daemon(temp_db)
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC",
+        side="long",
+        contracts=37.0,
+        entry_price=100.0,
+        last_price=100.0,
+    )
+    temp_db.record_addon("BTC/USDC", "long", sl_trigger_price=95.0)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("db is on fire")
+    monkeypatch.setattr(temp_db, "get_addon_sl_trigger_price", _boom)
+
+    # Must not raise.
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC",
+        live_positions=[],
+        current_price=97.9,  # 2.1% loss — past the base fallback threshold
+    )
+
+    state_mgr.record_trade.assert_called_once()
+    assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is True
+
+
+def test_update_addon_sl_trigger_price_syncs_ledger_without_touching_count(temp_db: LoggerDB):
+    """
+    P3: the Self-Healing SL Guard re-attaches an addon-carrying position's SL
+    anchored to avgPx, not the original addon fill price — daemon.py syncs the
+    ledger's trigger price to match via _update_addon_sl_trigger_price so a later
+    reconciliation classifies against what OKX actually now holds. This must only
+    update the price, never the addon count (that would silently permit another
+    add past the Single Addon Guard).
+    """
+    daemon, _ = _make_daemon(temp_db)
+
+    temp_db.record_addon("BTC/USDC", "long", sl_trigger_price=95.0)
+    assert temp_db.get_addon_count("BTC/USDC", "long") == 1
+
+    daemon._update_addon_sl_trigger_price("BTC/USDC", "long", 96.5)
+
+    assert temp_db.get_addon_sl_trigger_price("BTC/USDC", "long") == pytest.approx(96.5)
+    assert temp_db.get_addon_count("BTC/USDC", "long") == 1  # unchanged
+
+
+def test_update_addon_sl_trigger_price_is_noop_without_an_addon(temp_db: LoggerDB):
+    """No addon row exists yet — syncing a trigger price must not fabricate one
+    (that would make a position look like it has an addon when it doesn't)."""
+    daemon, _ = _make_daemon(temp_db)
+
+    daemon._update_addon_sl_trigger_price("BTC/USDC", "long", 96.5)
+
+    assert temp_db.get_addon_count("BTC/USDC", "long") == 0
+    assert temp_db.get_addon_sl_trigger_price("BTC/USDC", "long") == 0.0
 
 
 def test_take_profit_pnl_with_contract_size(temp_db: LoggerDB):

@@ -193,3 +193,57 @@ def test_daemon_self_healing_sl_uses_native_inst_id(tmp_path: Path):
         assert call_args["slTriggerPx"] == "1960.00"
 
     asyncio.run(_run())
+
+
+@pytest.mark.allow_real_okx_network
+def test_execute_order_reports_real_sl_trigger_price():
+    """
+    P3: execute_order must report back the absolute price it anchored the composite
+    SL algo to (via attach_stop_loss), so callers that persist an addon ledger
+    (daemon.py, api.py) can record the real trigger level instead of re-deriving it
+    from a % of avgPx (which the composite SL is NOT measured from — it's anchored
+    to this order's own fill/reference price).
+
+    Marked allow_real_okx_network to exercise the REAL execute_order (one of the 7
+    methods tests/conftest.py fakes by default) rather than its network-safety fake
+    — not because this test makes any live call: `self.exchange` below is fully
+    mocked, so nothing here touches the network.
+    """
+    async def _run():
+        executor = OKXExecutor()
+        executor.has_credentials = True
+
+        mock_exchange = MagicMock()
+        mock_exchange.markets = {"ETH/USD:USD-310404": {"id": "ETH-USD_UM_XPERP-310404", "spot": False}}
+        mock_exchange.market = lambda sym: mock_exchange.markets.get(sym, {})
+        mock_exchange.price_to_precision = MagicMock(side_effect=lambda sym, px: f"{px:.2f}")
+        mock_exchange.create_order = AsyncMock(return_value={"id": "order_1", "average": 99.0})
+        mock_exchange.private_get_trade_orders_algo_pending = AsyncMock(return_value={"data": []})
+        mock_exchange.private_post_trade_cancel_algos = AsyncMock(return_value={"code": "0"})
+        mock_exchange.private_post_trade_order_algo = AsyncMock(return_value={"code": "0", "data": [{"algoId": "algo_1"}]})
+        executor.exchange = mock_exchange
+        executor.set_leverage = AsyncMock(return_value={})
+
+        # SHORT addon: reference price 99.0, composite SL 1.25% -> 99.0 * 1.0125 = 100.2375
+        order = await executor.execute_order(
+            symbol="ETH/USD:USD-310404",
+            side="SELL",
+            amount=1.0,
+            stop_loss_pct=0.0125,
+            leverage=1.0,
+            price=99.0,
+        )
+        assert order["sl_trigger_price"] == pytest.approx(100.2375, abs=1e-6)
+
+        # LONG: reference price 2000.0, base SL 2% -> 2000 * 0.98 = 1960.0
+        order_long = await executor.execute_order(
+            symbol="ETH/USD:USD-310404",
+            side="BUY",
+            amount=1.0,
+            stop_loss_pct=0.02,
+            leverage=1.0,
+            price=2000.0,
+        )
+        assert order_long["sl_trigger_price"] == pytest.approx(1960.0, abs=1e-6)
+
+    asyncio.run(_run())

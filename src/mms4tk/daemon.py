@@ -364,13 +364,46 @@ class MMS4Daemon:
             logger.warning(f"Addon ledger read failed for {symbol}/{side}: {e}")
             return 0
 
-    def _record_addon(self, symbol: str, side: str, entry_price: float) -> int:
+    def _record_addon(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        sl_trigger_price: float = 0.0,
+    ) -> int:
+        """
+        `sl_trigger_price`: the absolute price OKXExecutor.execute_order reported back
+        via its `sl_trigger_price` key (P3) — the real composite SL algo level, anchored
+        to the addon's fill price, not to `entry_price`/avgPx. Pass 0.0 (default) when
+        it's unknown; reconciliation then falls back to a % heuristic instead of trusting
+        a fabricated price level.
+        """
         try:
             self._addons_known_clear.discard((symbol, side.lower()))
-            return self.logger_db.record_addon(symbol, side, self._position_key(entry_price))
+            return self.logger_db.record_addon(
+                symbol, side, self._position_key(entry_price), sl_trigger_price
+            )
         except Exception as e:
             logger.warning(f"Addon ledger write failed for {symbol}/{side}: {e}")
             return 1
+
+    def _addon_sl_trigger_price(self, symbol: str, side: str) -> float:
+        """Absolute SL trigger price persisted for this position's addon, or 0.0
+        if there is none on record (no addon, or the price wasn't captured)."""
+        try:
+            return float(self.logger_db.get_addon_sl_trigger_price(symbol, side))
+        except Exception as e:
+            logger.warning(f"Addon SL trigger price read failed for {symbol}/{side}: {e}")
+            return 0.0
+
+    def _update_addon_sl_trigger_price(self, symbol: str, side: str, sl_trigger_price: float) -> None:
+        """Keep the ledger's trigger price in sync when the Self-Healing SL Guard
+        re-attaches an addon-carrying position's SL at a different anchor (avgPx)
+        than the original addon fill. No-op if there is no addon row to update."""
+        try:
+            self.logger_db.set_addon_sl_trigger_price(symbol, side, sl_trigger_price)
+        except Exception as e:
+            logger.warning(f"Addon SL trigger price update failed for {symbol}/{side}: {e}")
 
     def _clear_addons(self, symbol: str, side: Optional[str] = None) -> None:
         """
@@ -510,17 +543,44 @@ class MMS4Daemon:
                 pnl_pct = (entry_price - exit_price) / entry_price
 
             loss_pct = -pnl_pct  # positive when the position lost money
-            # A position carrying an addon has its SL re-attached at the composite
-            # distance (addon_sl_pct) from the averaged entry, not the base distance —
-            # classifying it against base_sl_pct made a real stop-out on ~70% of
-            # positions (those with an addon) read as "closed without SL trigger"
-            # (P3: composite SL is tighter than base, so the loss never reached the
-            # base threshold before the exchange's own stop fired).
-            has_addon = self._addon_count(target_symbol, side, entry_price) > 0
-            effective_sl_pct = self.addon_sl_pct if has_addon else self.base_sl_pct
-            # Tolerance: the stop fills at market, so allow a little slippage either way.
-            sl_threshold = effective_sl_pct * 0.75
-            is_stop_out = loss_pct >= sl_threshold
+
+            # P3: a % threshold measured from avgPx cannot classify an addon-carrying
+            # position's stop-out correctly. The composite SL algo OKX holds is
+            # anchored to the ADDON's own fill price (okx_executor.attach_stop_loss /
+            # execute_order's sl_trigger_price), not to avgPx — so the true trigger can
+            # sit at a very different distance from avgPx than addon_sl_pct implies,
+            # and for some fills even on the profitable side of avgPx (loss_pct
+            # negative at the exact moment the exchange's own SL fires). No
+            # percentage-of-avgPx threshold can detect that case; only the real
+            # trigger price can. `_addon_sl_trigger_price` returns that persisted
+            # absolute price (0.0 if this position has no addon, or the price wasn't
+            # captured — then we fall back to the pre-P3 percentage heuristic).
+            addon_sl_trigger_price = self._addon_sl_trigger_price(target_symbol, side)
+            if addon_sl_trigger_price > 0:
+                # Tolerance is a fraction (0.75, same convention as the base-only
+                # branch below) of the REAL distance from avgPx to the actual trigger
+                # — not a % of the trigger's absolute price level. The composite SL
+                # can sit very close to avgPx (the audit's own example: ~0.54% away),
+                # so a fixed %-of-price tolerance would swallow ordinary favorable
+                # closes into "stop-out" (verified: a 1%-of-price band is wider than
+                # the entire entry-to-trigger distance in that example). Distance-based
+                # tolerance also correctly classifies a trigger that lands on the
+                # profitable side of avgPx (signed_distance shrinks or goes negative,
+                # so even a small/no adverse move already clears the eased bar) — the
+                # case no %-of-avgPx threshold can ever catch.
+                if side == "long":
+                    signed_distance = entry_price - addon_sl_trigger_price
+                    adverse_move = entry_price - exit_price
+                else:
+                    signed_distance = addon_sl_trigger_price - entry_price
+                    adverse_move = exit_price - entry_price
+                is_stop_out = adverse_move >= signed_distance * 0.75
+            else:
+                # No addon (or no trigger price captured for it) — base-only
+                # percentage heuristic, measured from avgPx. Tolerance: the stop
+                # fills at market, so allow a little slippage either way.
+                sl_threshold = self.base_sl_pct * 0.75
+                is_stop_out = loss_pct >= sl_threshold
 
             contracts = float(snap["contracts"] or 0.0)
             ct_size = self._get_contract_size(target_symbol)
@@ -962,6 +1022,18 @@ class MMS4Daemon:
                                 stop_loss_pct=sl_pct,
                                 pos_side=p_side
                             )
+                            if sl_pct == self.addon_sl_pct:
+                                # P3: this re-attach is anchored to avgPx (entry_px),
+                                # not the original addon fill price — keep the ledger's
+                                # trigger price in sync with what OKX now actually
+                                # holds, so reconciliation classifies against the real
+                                # current trigger, not a stale one from the original
+                                # (possibly since-replaced) addon attach.
+                                self._update_addon_sl_trigger_price(
+                                    target_symbol,
+                                    p_side,
+                                    type(self.executor)._compute_sl_trigger_price(p_side, entry_px, sl_pct),
+                                )
                     except Exception as sl_heal_err:
                         logger.debug(f"SL self-healing check for {target_symbol}/{p_side}: {sl_heal_err}")
 
@@ -1633,7 +1705,10 @@ class MMS4Daemon:
                                 leverage=sym_leverage,
                                 price=signal.price
                             )
-                            self._record_addon(target_symbol, target_pos_side, match_entry)
+                            addon_sl_trigger_price = 0.0
+                            if isinstance(order_info, dict):
+                                addon_sl_trigger_price = float(order_info.get("sl_trigger_price") or 0.0)
+                            self._record_addon(target_symbol, target_pos_side, match_entry, addon_sl_trigger_price)
                             outcome = f"EXECUTED_{signal.signal_type}"
                             details = (
                                 f"Executed High Risk Add order for {target_symbol} "
