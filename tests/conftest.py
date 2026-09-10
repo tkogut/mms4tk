@@ -168,6 +168,14 @@ def _isolate_system_settings():
         os.environ[k] = v
     syms_snapshot = {k: dict(v) if isinstance(v, dict) else v for k, v in configured_symbols_store.items()}
     set_maintenance_lock(False)
+    # Audit P6.1 (2026-09-08): full-table snapshot, not just the 5 fixed keys below —
+    # this is the general safety net for ANY system_settings key a test writes,
+    # including per-symbol-qualified ones (e.g. "stale_candles_threshold:BTC/USDC")
+    # that this fixture has no fixed list for. Without this, a test writing such a
+    # key pollutes the real DB (which docker-compose mounts into the live daemon)
+    # for every test/process that opens this same db file afterward — found by
+    # independent review while this same ticket's own new tests did exactly that.
+    settings_snapshot = dict(api_logger_db.get_all_settings()) if api_logger_db else {}
     if api_logger_db:
         api_logger_db.set_settings_bulk({
             "engine_mode": "CLASSIC",
@@ -187,6 +195,16 @@ def _isolate_system_settings():
     configured_symbols_store.clear()
     configured_symbols_store.update({k: dict(v) if isinstance(v, dict) else v for k, v in syms_snapshot.items()})
     if api_logger_db:
+        # General restore first: undo anything this test wrote, known or not.
+        after_settings = api_logger_db.get_all_settings()
+        for key in after_settings.keys() - settings_snapshot.keys():
+            api_logger_db.delete_setting(key)
+        for key, val in settings_snapshot.items():
+            if after_settings.get(key) != val:
+                api_logger_db.set_setting(key, val, updated_by="test_isolation_cleanup")
+        # Then re-force the 5 fixed keys to canonical defaults regardless of what the
+        # snapshot happened to contain — guarantees the NEXT test starts from the same
+        # known state this fixture has always guaranteed for these specific keys.
         api_logger_db.set_settings_bulk({
             "engine_mode": "CLASSIC",
             "adaptive_vr_high": "1.6",

@@ -1145,6 +1145,17 @@ class LoggerDB:
             cursor.execute("SELECT key, value FROM system_settings")
             return {row["key"]: str(row["value"]) for row in cursor.fetchall()}
 
+    def delete_setting(self, key: str) -> None:
+        """Remove a single setting from system_settings entirely — unlike
+        set_setting, which can only overwrite a value, never un-set one. Primarily
+        for test cleanup of per-symbol-qualified keys that must not linger past the
+        test that wrote them (audit P6.1, 2026-09-08 — see
+        tests/conftest.py::_isolate_system_settings)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM system_settings WHERE key = ?", (key,))
+            conn.commit()
+
     def set_setting(self, key: str, value: Any, updated_by: str = "system") -> None:
         """Upsert a single system setting."""
         now_str = datetime.now(timezone.utc).isoformat()
