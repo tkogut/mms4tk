@@ -762,24 +762,12 @@ class OKXExecutor:
                         stop_loss_pct=stop_loss_pct,
                         pos_side=pos_side
                     )
-                    # P3 (independent review, round 2): attach_stop_loss swallows its
-                    # own exceptions and returns {"error": ...} instead of raising —
-                    # only report sl_trigger_price when the algo order actually went
-                    # through, so the ledger never records a trigger price for an SL
-                    # that was never placed.
-                    if not (isinstance(sl_attach_result, dict) and sl_attach_result.get("error")):
-                        # Expose the absolute price the SL algo was actually anchored
-                        # to (the addon's own fill/reference price, not avgPx) so
-                        # callers that persist an addon ledger (daemon.py, api.py) can
-                        # record the real trigger level for reconciliation instead of
-                        # guessing a % from the position's average entry.
-                        order["sl_trigger_price"] = self._compute_sl_trigger_price(
-                            pos_side, current_price, stop_loss_pct
-                        )
-                    else:
+                    # attach_stop_loss swallows its own exceptions and returns
+                    # {"error": ...} instead of raising — surface that here rather
+                    # than silently reporting the order as fully executed.
+                    if isinstance(sl_attach_result, dict) and sl_attach_result.get("error"):
                         logger.warning(
-                            f"SL attach failed for {target_symbol}, not recording a "
-                            f"trigger price: {sl_attach_result.get('error')}"
+                            f"SL attach failed for {target_symbol}: {sl_attach_result.get('error')}"
                         )
 
             return order

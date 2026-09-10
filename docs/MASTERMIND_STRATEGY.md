@@ -59,13 +59,22 @@ Aby zapewnić sztywną ochronę depozytu i wyeliminować ryzyko przekroczenia za
 - **Zmienna Środowiskowa**: `MMS4_MAX_MARGIN_USD` (np. **`10.0 USD`**).
 - **Pozycja Bazowa (`BASE_LONG` / `BASE_SHORT`)**:
   - Wykorzystuje **70% całkowitego limitu** = **`7.00 USD`** (przy lewarze 1.0x).
-  - Sztywny Stop Loss = **`2.0%`**.
+  - Sztywny Stop Loss = **`2.0%`**, liczony od ceny wejścia bazy (`base_entry_price`) —
+    zawsze, przez cały cykl życia pozycji.
 - **Dokupienie Dodatkowe (`HIGH_RISK_ADD`)**:
   - Wykorzystuje **30% całkowitego limitu** = **`3.00 USD`** (przy lewarze 1.0x).
-  - Ciasny Stop Loss = **`1.0%`**.
+  - **Bez własnego Stop Lossa** (P3 V2, 2026-09-10) — dokładka nie dostaje osobnego
+    zlecenia SL. Istniejący algo SL bazy ma `closeFraction="1"` (obejmuje całą,
+    powiększoną pozycję), więc pozostawienie go nietkniętym już chroni dokładkę.
+    Wcześniejsza wersja tego dokumentu opisywała osobny, ciasny SL 1.0% dla
+    dokładki — usunięte jako architektonicznie niemożliwe do utrzymania w sposób
+    deterministyczny (patrz `task.md`, sekcja P3).
 - **Maksymalny Łączny Depozyt na Rynku**: $7.00 + $3.00 = **`10.00 USD`** (nieprzekraczalny limit).
-- **Maksymalna Łączna Strata przy SL obu pozycji**:
-  $$\text{Max Loss} = (7.00 \times 0.02) + (3.00 \times 0.01) = 0.14 + 0.03 = \mathbf{0.17 \text{ USD}} \quad (17 \text{ centów!})$$
+- **Maksymalna Łączna Strata przy SL całej pozycji (przybliżenie)**:
+  $$\text{Max Loss} \approx (7.00 + 3.00) \times 0.02 = \mathbf{0.20 \text{ USD}} \quad (20 \text{ centów})$$
+  Przybliżenie, nie dokładna wartość: rzeczywista strata w USD na leg'u dokładki
+  zależy od różnicy między ceną dokładki a `base_entry_price`, bo obie nogi
+  zamykają się razem po tej samej cenie triggera.
 
 ---
 

@@ -221,6 +221,14 @@ Gate wdrożenia: V1 lub V2 bije V0 na R:R **i** total_pnl netto w **min. 5 z 6 o
 
 ### P3 — Przywrócić rozróżnianie stop-outu z dokładką w rekoncyliacji 🟠
 
+> ✅ **STATUS (2026-09-10): ZAIMPLEMENTOWANE i wdrożone na produkcję** (PR #31,
+> v0.44.3). Finalne rozwiązanie (V2) poszło dalej niż ten opis: zamiast liczyć SL
+> dokładki jako osobny, świadomy procent, dokładka w ogóle przestała mieć własny
+> SL — cała pozycja jest odtąd chroniona wyłącznie przez SL bazy, zakotwiczony na
+> stałe w `base_entry_price`. Historyczna analiza poniżej pozostaje niezmieniona
+> jako zapis diagnozy z tamtego dnia; pełny opis wdrożonego rozwiązania i historia
+> 3 rund niezależnej recenzji — `task.md`, sekcja "P3".
+
 **(a) Dowód:** §1.2. `daemon.py:488` — `sl_threshold = base_sl_pct * 0.75` bez świadomości dokładki. Ledger `position_addons` **już zawiera** potrzebną informację i jest odczytywany 40 linii wyżej (`daemon.py:851`).
 
 **(b) Mechanizm:** przywraca redukcję ekspozycji (KB 3.2 — *„nadrzędna zasada przetrwania"*) i 3-świecową karencję dla ~70% pozycji. Odblokowuje też trigger H4 dla Hermesa.
