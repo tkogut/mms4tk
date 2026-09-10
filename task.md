@@ -171,6 +171,10 @@ P4 krok 0 + P6.1 → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 �
   3. `GET /api/v1/symbols` czyta je przez `_trend_filter_fields`, nie bezpośrednio z `config.get()`.
   4. `daemon.py`: nowa metoda `_get_inactivity_overrides(symbol)` (analogiczna do `_get_indicator_params`) zastępuje inline blok czytający wyłącznie `configured_symbols_store` — `system_settings` jest teraz SSOT, fallback zachowany bez regresji.
 - 8 nowych testów (6 daemon-level, w tym test symulujący restart przez świeży `LoggerDB` handle na tym samym pliku db; 2 API-level end-to-end przez `TestClient`). Pełny suite: **315/315 PASS**.
+- **Dwie tury niezależnej recenzji (Opus, drugi agent):**
+  - **1. tura** znalazła krytyczne zanieczyszczenie żywej `.agents/swarm/logs.db` (docker-mounted do demona) przez nowe testy bez cleanupu. Naprawione (`658d55a`): nowa `LoggerDB.delete_setting()`, `conftest.py::_isolate_system_settings` rozszerzony o pełny snapshot/restore całej tabeli `system_settings`, jawny try/finally w testach.
+  - **2. tura** (weryfikacja naprawy) potwierdziła empirycznie, że naprawa działa dla kluczy per-symbol, ale znalazła: (a) komentarz przesadnie twierdził "ANY key" — 5 kluczy globalnych (`engine_mode`/`adaptive_vr_*`/`time_lock_*`) jest zawsze wymuszanych na kanoniczne wartości niezależnie od snapshotu, **zachowanie sprzed tego PR-a** (commit `3a9c688`), niezmienione tutaj, tylko doprecyzowany opis; (b) endpoint `/symbols/update` pisze też do `symbol_configurations`/`symbols.json`, czego mój cleanup nie przywracał — naprawione (`84b5de7`), test teraz przechwytuje pełny config i przywraca przez `save_symbols_config()`.
+  - **Nie w zakresie tego PR-a:** pełna izolacja testów od żywej bazy (np. `MMS4_DB_PATH` na katalog tmp przed importem `mms4tk`) — osobny, większy temat, wart własnego ticketu.
 
 **P4 krok 0** (pomiar ATR%/SL per symbol, druga część Etapu 3) — nie zaczęte.
 
