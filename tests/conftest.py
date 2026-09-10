@@ -17,12 +17,45 @@ protect the rest. A class-level patch protects all of them — including instanc
 BEFORE the fixture runs, because attribute lookup on an instance falls through to the
 class when there is no instance-level override.
 """
+
+# P3 conftest hygiene (2026-09-10): confirmed live risk — running this suite via
+# `docker exec antigravity_core pytest ...` on the production container would have
+# every test import `mms4tk.api`'s module-level `logger_db`/`daemon` singletons
+# pointed at the REAL production DB (`LoggerDB()`'s default resolves
+# `/app/.agents/swarm/logs.db` when `MMS4_DB_PATH` isn't already overridden), and
+# `_isolate_system_settings` below unconditionally writes 5 global settings and
+# calls `set_maintenance_lock(False)` there. See `.agents/MEMORY.md` for the
+# operational rule (don't run pytest that way at all) — this is the belt-and-
+# braces code fix the fixture's own prior docstring flagged as "a separate,
+# larger piece of work, not in scope" for the earlier P6.1 review: force BOTH
+# the DB path AND the maintenance-lock file locations to an isolated per-session
+# temp directory, unconditionally, regardless of which environment variables or
+# real files already exist on the machine running pytest. This MUST run before
+# any `mms4tk.*` module is imported anywhere in the test session (DEFAULT_DB_PATH
+# is resolved once, at `logger_db` module import time) — hence it is the very
+# first thing this file does, ahead of even the stdlib imports below.
+import os as _os
+import tempfile as _tempfile
+
+_TEST_STATE_DIR = _tempfile.mkdtemp(prefix="mms4tk_pytest_")
+_os.environ["MMS4_DB_PATH"] = _os.path.join(_TEST_STATE_DIR, "test_logs.db")
+
 import time
 from typing import Any, Dict, List, Optional
 
 import pytest
 
+from mms4tk import okx_executor as _okx_executor_module
 from mms4tk.okx_executor import OKXExecutor, _generate_mock_candles
+
+# Redirect every maintenance-lock path this process will ever check/write to a
+# single file under the isolated temp dir above — `set_maintenance_lock`/
+# `is_maintenance_locked` iterate this exact list, so replacing its contents
+# (not just appending) is what keeps them off `/app/.agents/swarm/MAINTENANCE_LOCK`
+# and every other real location a production deploy might use.
+_okx_executor_module.MAINTENANCE_LOCK_PATHS[:] = [
+    _os.path.join(_TEST_STATE_DIR, "MAINTENANCE_LOCK")
+]
 
 
 # ---------------------------------------------------------------------------
