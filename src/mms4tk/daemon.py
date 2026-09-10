@@ -556,25 +556,54 @@ class MMS4Daemon:
             # absolute price (0.0 if this position has no addon, or the price wasn't
             # captured — then we fall back to the pre-P3 percentage heuristic).
             addon_sl_trigger_price = self._addon_sl_trigger_price(target_symbol, side)
+            signed_distance = 0.0
             if addon_sl_trigger_price > 0:
-                # Tolerance is a fraction (0.75, same convention as the base-only
-                # branch below) of the REAL distance from avgPx to the actual trigger
-                # — not a % of the trigger's absolute price level. The composite SL
-                # can sit very close to avgPx (the audit's own example: ~0.54% away),
-                # so a fixed %-of-price tolerance would swallow ordinary favorable
-                # closes into "stop-out" (verified: a 1%-of-price band is wider than
-                # the entire entry-to-trigger distance in that example). Distance-based
-                # tolerance also correctly classifies a trigger that lands on the
-                # profitable side of avgPx (signed_distance shrinks or goes negative,
-                # so even a small/no adverse move already clears the eased bar) — the
-                # case no %-of-avgPx threshold can ever catch.
                 if side == "long":
                     signed_distance = entry_price - addon_sl_trigger_price
                     adverse_move = entry_price - exit_price
                 else:
                     signed_distance = addon_sl_trigger_price - entry_price
                     adverse_move = exit_price - entry_price
+            if addon_sl_trigger_price > 0 and signed_distance > 0:
+                # Tolerance is a fraction (0.75, same convention as the base-only
+                # branch below) of the REAL distance from avgPx to the actual trigger
+                # — not a % of the trigger's absolute price level. The composite SL
+                # can sit very close to avgPx (the audit's own example: ~0.54% away),
+                # so a fixed %-of-price tolerance would swallow ordinary favorable
+                # closes into "stop-out" (verified: a 1%-of-price band is wider than
+                # the entire entry-to-trigger distance in that example).
+                #
+                # KNOWN LIMITATION (independent review, round 2, unresolved): this
+                # branch's `exit_price` is signal.price — the last CLOSED candle's
+                # close, not the real fill price. When the true trigger distance is
+                # this small, a stale-by-up-to-one-candle exit_price can undershoot
+                # the 0.75 bar even for a genuine stop-out (measured on repo fixtures:
+                # single-digit-to-low-20s % recall under realistic candle-close
+                # timing). Reconciliation is a fast/optimistic heuristic by design
+                # (see this method's docstring) and trade_sync.py does NOT
+                # independently re-classify is_stop_loss, so there is currently no
+                # slower, more accurate backstop for this flag specifically. Do not
+                # read the numbers in task.md's P3 section as "solved" — this gap is
+                # open and needs either a real-fill-price source for exit_price here,
+                # or an explicit decision to accept the reduced recall.
                 is_stop_out = adverse_move >= signed_distance * 0.75
+            elif addon_sl_trigger_price > 0:
+                # Degenerate geometry: the composite SL trigger sits AT or on the
+                # profitable side of avgPx (signed_distance <= 0) — this happens
+                # because HIGH_RISK_ADD pyramids further INTO an already-favorable
+                # move (analytics.py), so the addon's own tight SL can end up closer
+                # to entry, or past it, than avgPx itself. A one-sided distance-based
+                # comparison is not well-defined here (a naive extension inverts the
+                # classification — confirmed by independent review, round 2): do not
+                # attempt it. Fall back to the base-only heuristic, which has no such
+                # failure mode, and log so this rare shape is visible operationally.
+                logger.warning(
+                    f"Addon SL trigger for {target_symbol}/{side} is not on the adverse "
+                    f"side of avgPx (entry={entry_price}, trigger={addon_sl_trigger_price}) "
+                    f"— falling back to the base-only % heuristic for this reconciliation."
+                )
+                sl_threshold = self.base_sl_pct * 0.75
+                is_stop_out = loss_pct >= sl_threshold
             else:
                 # No addon (or no trigger price captured for it) — base-only
                 # percentage heuristic, measured from avgPx. Tolerance: the stop
@@ -1003,7 +1032,8 @@ class MMS4Daemon:
                 if entry_px > 0 and p_side in ["long", "short"]:
                     try:
                         target_inst = p.get("info", {}).get("instId") or target_symbol
-                        sl_pct = self.addon_sl_pct if self._addon_count(target_symbol, p_side, entry_px) > 0 else self.base_sl_pct
+                        has_addon = self._addon_count(target_symbol, p_side, entry_px) > 0
+                        sl_pct = self.addon_sl_pct if has_addon else self.base_sl_pct
                         raw_inst_id = self.executor.to_native_inst_id(target_inst) if hasattr(self.executor, "to_native_inst_id") else target_inst
                         pending_algos = await self.executor.exchange.private_get_trade_orders_algo_pending({
                             "instId": raw_inst_id,
@@ -1022,7 +1052,7 @@ class MMS4Daemon:
                                 stop_loss_pct=sl_pct,
                                 pos_side=p_side
                             )
-                            if sl_pct == self.addon_sl_pct:
+                            if has_addon:
                                 # P3: this re-attach is anchored to avgPx (entry_px),
                                 # not the original addon fill price — keep the ledger's
                                 # trigger price in sync with what OKX now actually

@@ -185,6 +185,52 @@ def test_reconciliation_addon_position_far_from_trigger_is_not_stop_out(temp_db:
     assert kwargs["is_stop_loss"] is False
 
 
+def test_reconciliation_degenerate_trigger_on_profitable_side_falls_back_and_does_not_invert(temp_db: LoggerDB):
+    """
+    P3, Bug A (independent review, round 2): HIGH_RISK_ADD pyramids INTO an
+    already-favorable move (analytics.py), so the addon's own tight composite SL
+    can end up anchored on the PROFITABLE side of avgPx (signed_distance <= 0) —
+    e.g. SHORT avgPx=99.10, composite trigger=98.2125 (below entry). A naive
+    extension of the distance-based formula inverts here: it missed the real
+    stop-out at the exact trigger price, and falsely flagged a barely-moved,
+    still-profitable close as a stop-out. Falling back to the base % heuristic
+    must not reproduce either failure.
+    """
+    daemon, state_mgr = _make_daemon(temp_db)
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC",
+        side="short",
+        contracts=37.0,
+        entry_price=99.10,
+        last_price=99.10,
+    )
+    temp_db.record_addon("BTC/USDC", "short", sl_trigger_price=98.2125)
+
+    # A barely-moved, still-profitable close (short: price fell 0.10%) must NOT
+    # be classified as a stop-out — this is exactly what the inverted formula
+    # got wrong (it returned True here).
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=99.00,
+    )
+    assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is False
+
+    # A real, comfortably-past-base-threshold loss must still be caught by the
+    # fallback (base_sl_pct*0.75 = 1.5%; this is a 2.1% loss for a short).
+    state_mgr.record_trade.reset_mock()
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="short", contracts=37.0, entry_price=99.10, last_price=99.10,
+    )
+    # The first call's reconciliation cleared the addon ledger (position "closed");
+    # re-record it so this second call also exercises the degenerate-fallback
+    # branch (addon present, signed_distance <= 0), not the no-addon branch.
+    temp_db.record_addon("BTC/USDC", "short", sl_trigger_price=98.2125)
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=101.18,
+    )
+    assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is True
+
+
 def test_reconciliation_addon_without_captured_trigger_price_falls_back_to_base_threshold(temp_db: LoggerDB):
     """If the addon was recorded but its trigger price is unknown (0.0 — e.g. the
     SL attach's reference price couldn't be resolved), reconciliation must fall
