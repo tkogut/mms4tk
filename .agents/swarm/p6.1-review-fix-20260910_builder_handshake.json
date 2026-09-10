@@ -1,0 +1,13 @@
+{
+  "conversation_id": "p6.1-review-fix-20260910",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/logger_db.py",
+    "tests/conftest.py",
+    "tests/test_inactivity_api_persistence.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-10T09:07:18Z",
+  "notes": "Niezalezna recenzja (Opus, drugi agent) przed merge PR #29 znalazla krytyczny problem: nowe testy API pisaly nie-domyslne wartosci (w tym impulse_negation_enabled:ETH/USDC=False) do .agents/swarm/logs.db bez cleanupu - docker-compose montuje ten katalog do zywego demona, wiec ten PR sprawial ze taki zapis staje sie skuteczny (przed PR ten sam zapis byl nieszkodliwy - to byl caly bug). Naprawa dwuwarstwowa: (1) nowa metoda LoggerDB.delete_setting(key) (usuwa wiersz calkowicie, nie tylko nadpisuje wartosc); (2) tests/conftest.py::_isolate_system_settings rozszerzony o pelny snapshot/restore CALEJ tabeli system_settings (nie tylko 5 znanych kluczy globalnych jak wczesniej) - ogolny mechanizm ochronny dla KAZDEGO testu w calym suicie, nie tylko moich 2 nowych; (3) oba nowe testy w test_inactivity_api_persistence.py dostaly jawny try/finally cleanup (belt-and-suspenders, nie polegaja wylacznie na fixture). Zweryfikowano recznie: baza w tym worktree miala realny wyciek z poprzedniego (niepoprawionego) przebiegu testow (stale_candles_threshold:BTC/USDC=9, stale_atr_threshold:ETH/USDC=0.35, impulse_negation_enabled:ETH/USDC=False) - wyczyszczono, potwierdzono ze po naprawie przebieg testow nie zostawia zadnego sladu. Pelny test suite: 315/315 PASS (259s), zero regresji od rozszerzenia dzielonego fixture'a."
+}

@@ -1,0 +1,14 @@
+{
+  "conversation_id": "p6.1-inactivity-persistence-fix-20260910",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/api.py",
+    "src/mms4tk/daemon.py",
+    "tests/test_inactivity_per_symbol_persistence.py",
+    "tests/test_inactivity_api_persistence.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-10T08:10:38Z",
+  "notes": "Audyt docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md, P6.1 (naprawa buga persystencji per-symbol config Inactivity Managera, Etap 3 czesc 1, bezwarunkowa naprawa poprawnosci - bez backtestu). Bug: stale_candles_threshold/stale_atr_threshold/impulse_negation_enabled byly zapisywane WYLACZNIE do configured_symbols_store/symbols.json, nigdy do system_settings; load_symbols_config() preferuje SQLite symbol_configurations (stala schema, brak kolumn dla tych pol) gdy tylko ma jakiekolwiek wiersze (zawsze ma, gdy istnieje symbol) - wiec po kazdym restarcie/redeployu ustawienia operatora cicho resetowaly sie do hardcoded defaultow (12/0.5/True), a UI klamalo ze sa zapisane. Naprawa dokladnie mirroruje wzorzec juz uzyty dla trend-filtra: (1) api.py _trend_filter_fields rozszerzone o 3 pola (czyta system_settings per-symbol-qualified pierwsze, potem configured_symbols_store); (2) add_or_update_trading_symbol teraz zapisuje te 3 klucze do logger_db.set_settings_bulk per-symbol-qualified; (3) GET /api/v1/symbols czyta je teraz przez _trend_filter_fields zamiast bezposrednio z config.get(); (4) daemon.py: nowa metoda _get_inactivity_overrides(symbol) (analogiczna do _get_indicator_params) zastepuje inline blok czytajacy wylacznie configured_symbols_store - teraz system_settings jest SSOT, fallback do configured_symbols_store zachowany bez regresji. 8 nowych testow (6 daemon-level w test_inactivity_per_symbol_persistence.py, w tym test symulujacy restart przez fresh LoggerDB handle na tym samym pliku db + test ze system_settings wygrywa nad in-memory store; 2 API-level w test_inactivity_api_persistence.py sprawdzajace write i read path end-to-end przez TestClient). Pelny test suite: 315/315 PASS (343s)."
+}
