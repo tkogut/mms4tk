@@ -181,13 +181,48 @@ został jeszcze zlecony.
 
 ---
 
+## 🔹 Etap 4: P3 — Przywrócić rozróżnianie stop-outu z dokładką w rekoncyliacji 🟠
+
+### ✅ DONE (027f9af) — warunek z P1 spełniony (V0 zostaje), więc P3 miało sens
+
+- **Plik:** `src/mms4tk/daemon.py` (`reconcile_positions`), test: `tests/test_reconciliation_pnl.py`
+- **Dowód:** audyt §1.2 / §P3 — `sl_threshold = base_sl_pct * 0.75` (1.5%) był
+  liczony bez świadomości dokładki, mimo że ledger `position_addons` jest
+  odczytywany 40 linii wyżej w tej samej funkcji (Self-Healing SL Guard). Composite
+  SL dokładki (`addon_sl_pct` = 1.25%) jest WĘŻSZY niż base (2%) — więc realny
+  stop-out na pozycji z dokładką (strata ~1.2-1.5%) nigdy nie osiągał starego progu
+  1.5% i był błędnie klasyfikowany jako "closed without SL trigger" zamiast
+  `STOP_LOSS`. Dotyczy ~70% pozycji (te z dokładką, per audyt).
+- **Naprawa:** `reconcile_positions` sprawdza teraz `_addon_count(symbol, side,
+  entry_price)` (ledger `position_addons`, kluczowany wyłącznie na `(symbol,
+  side)` — patrz komentarz w `logger_db.get_addon_count`) i liczy próg z
+  `addon_sl_pct` zamiast `base_sl_pct`, gdy pozycja ma zarejestrowaną dokładkę.
+- **Efekt:** poprawnie zaklasyfikowany `is_stop_loss=True` odblokowuje (a) 3-świecowy
+  Post-SL Cooldown (`daemon.py`, gate na samym `is_stop_loss`, bez własnego progu
+  %) i (b) poprawny zapis `closed_trades`/PnL jako stop-out. **Próg 2% w
+  `state_manager.on_stop_loss_hit` (wejście w SCOUT_MODE + webhook H4) świadomie
+  NIE został zmieniony** — harness (`backtest_engine.py:323-326`) już dokumentuje
+  i modeluje to jako zamierzone: composite SL dokładki jest z definicji węższy niż
+  2%, więc pozycja z samą dokładką nigdy nie wchodzi w SCOUT_MODE przez ten
+  mechanizm — to zachowanie już zweryfikowane w P1 (`test_p1_addon_sl_gate_analysis`),
+  nie jest to część błędu, który P3 naprawia.
+- **2 nowe testy** (`test_reconciliation_classifies_addon_stop_out_at_composite_threshold`,
+  `test_reconciliation_without_addon_still_uses_base_threshold`) — ta sama strata
+  1.2%, z dokładką → `is_stop_loss=True`, bez dokładki → `is_stop_loss=False`
+  (regression guard na stare zachowanie bazowe). Pełny suite (bez `slow`):
+  **320/320 PASS**.
+
+---
+
 ## ✅ Następny krok
 
 **Wszystkie 6 ticketów Etapów 0-3 (P9, P7, P2, P1, P4-krok-0, P6.1) zaimplementowane,
 przetestowane, po trzech turach niezależnej recenzji (Opus) i zmergowane do `main`**
-(PR #24/#26/#27/#30/#28/#29). Otwarte tematy zapisane jako osobne, nieblokujące
-tickety do rozważenia później (patrz wyżej). Etap 4+ (P3/P4-wariant#2/P4.2/P5/P6.2/P8)
-— nic nie zostało jeszcze zlecone, czeka na osobne polecenie. Ten dokument wymaga
-też jednorazowego porządkowania (kolejność sekcji nie odpowiada kolejności etapów —
-Etap 1 → Etap 3cz.2 → Etap 2 → Etap 3cz.1 — bo tak scaliły się branch'e; treść jest
-poprawna, tylko kolejność wizualna nielogiczna).
+(PR #24/#26/#27/#30/#28/#29). P3 (Etap 4) zaimplementowane w tej sesji, worktree
+`feature/p3-ssot-position-sl`, jeszcze przed PR-em. Otwarte tematy zapisane jako
+osobne, nieblokujące tickety do rozważenia później (patrz wyżej). Reszta Etapu 4+
+(P4-wariant#2/P4.2/P5/P6.2/P8) — nic nie zostało jeszcze zlecone, czeka na osobne
+polecenie. Ten dokument wymaga też jednorazowego porządkowania (kolejność sekcji
+nie odpowiada kolejności etapów — Etap 1 → Etap 3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4
+— bo tak scaliły się branch'e; treść jest poprawna, tylko kolejność wizualna
+nielogiczna).
