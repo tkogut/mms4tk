@@ -226,6 +226,55 @@ def test_midline_tp_hard_sl_preservation(tmp_path):
     assert db.is_midline_tp_active("ETH/USDC", "long") is True
 
 
+def test_midline_tp_reattaches_sl_at_base_entry_price_not_avgpx(tmp_path):
+    """
+    P3 V2 (independent review, round 3 — blocker fix): before this fix, the
+    Midline TP re-attach anchored the hard SL to the LIVE avgPx
+    (active_entry_price), not base_entry_price — silently reproducing the exact
+    determinism bug V2 fixes on any addon-carrying position. Once the live avgPx
+    diverges from base_entry_price (e.g. an addon averaged it from 100.0 down to
+    95.0), the re-attach must still use 100.0 — the same anchor
+    reconcile_positions and the Self-Healing Guard use — not 95.0.
+    """
+    db = LoggerDB(db_path=os.path.join(tmp_path, "daemon_tp_addon.db"))
+    db.set_setting("midline_partial_tp_enabled", "true")
+    # base opened at 100.0; a later addon fill averaged the live position down to
+    # 95.0 — base_entry_price must stay pinned at 100.0.
+    db.save_position_snapshot(symbol="ETH/USDC", side="long", contracts=4.0, entry_price=100.0, last_price=100.0)
+    db.save_position_snapshot(symbol="ETH/USDC", side="long", contracts=7.0, entry_price=95.0, last_price=95.0)
+    db.record_addon("ETH/USDC", "long")
+
+    sm = MMS4StateManager(trading_symbol="ETH/USDC")
+
+    ex = MagicMock(spec=OKXExecutor)
+    candles = mk_candle_seq([(105.0, 106.0, 104.0, 105.5)] * 50)
+    ex.fetch_candles = AsyncMock(return_value=candles)
+    ex.fetch_positions = AsyncMock(return_value=[
+        position_dict("ETH/USDC", "long", contracts=7.0, entry=95.0, notional=20.0)
+    ])
+    ex.reduce_position = AsyncMock(return_value={"id": "red_1", "status": "closed"})
+    ex.attach_stop_loss = AsyncMock(return_value={"status": "attached"})
+    ex.reduction_amount = MagicMock(return_value=3.5)
+    ex.calculate_order_amount = MagicMock(return_value=3.5)
+
+    sig = SignalResult(signal_type="NONE", price=106.0, stop_loss=0.0, leverage=3.0)
+    d = MMS4Daemon(
+        executor=ex,
+        state_manager=sm,
+        signal_engine=StubEngine(sig),
+        logger_db=db,
+        symbol="ETH/USDC",
+    )
+
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+
+    assert res["outcome"] == "MIDLINE_PARTIAL_TP"
+    assert ex.attach_stop_loss.await_count == 1
+    call_kwargs = ex.attach_stop_loss.call_args.kwargs
+    assert call_kwargs["entry_price"] == 100.0  # base_entry_price, NOT avgPx (95.0)
+    assert call_kwargs["stop_loss_pct"] == 0.02
+
+
 # ── 6. Micro-Position Indivisibility ─────────────────────────────────────
 
 def test_micro_position_indivisibility(tmp_path):

@@ -586,7 +586,8 @@ class MMS4Daemon:
             # widens the tolerance band back to base_sl_pct's (2%, not addon_sl_pct's
             # ~1.25%), matching the pre-P3 heuristic's tolerance to candle-close
             # staleness.
-            base_entry_price = float(snap.get("base_entry_price") or 0.0) or entry_price
+            _raw_base_entry_price = float(snap.get("base_entry_price") or 0.0)
+            base_entry_price = _raw_base_entry_price if _raw_base_entry_price > 0 else entry_price
             sl_distance = base_entry_price * self.base_sl_pct
             if side == "long":
                 adverse_move = base_entry_price - exit_price
@@ -1193,12 +1194,22 @@ class MMS4Daemon:
                             reason="MIDLINE_PARTIAL_TP"
                         )
 
-                        # 2. Scale / re-attach 2.0% hard Stop-Loss with exact same trigger price
+                        # 2. Re-attach the 2.0% hard Stop-Loss anchored to base_entry_price
+                        # (P3 V2 SSOT) — NOT active_entry_price/avgPx. Using avgPx here
+                        # would silently reproduce the exact determinism bug V2 fixes: on
+                        # an addon-carrying position this re-attach would cancel the
+                        # original base-anchored algo and replace it with one at a
+                        # DIFFERENT price, and reconcile_positions/the Self-Healing Guard
+                        # would keep comparing against base_entry_price while OKX actually
+                        # holds a different trigger (independent review, round 3).
                         try:
+                            reattach_anchor = self._base_entry_price(
+                                target_symbol, side_to_close, fallback=active_entry_price
+                            )
                             await self.executor.attach_stop_loss(
                                 symbol=target_symbol,
                                 side="sell" if side_to_close == "long" else "buy",
-                                entry_price=active_entry_price,
+                                entry_price=reattach_anchor,
                                 stop_loss_pct=self.base_sl_pct,
                                 pos_side=side_to_close,
                             )
