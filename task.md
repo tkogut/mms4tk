@@ -154,6 +154,25 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 - **5 nowych testów** (nie 9, jak błędnie podano wcześniej — poprawiono). Pełny suite: **312/312 PASS**.
 
 **Kolejność dalej wg audytu §5 (dla orientacji, nie zlecone jeszcze):** Etap 3 = P4 krok 0 (pomiar ATR%/SL per symbol) + P6.1 (naprawa buga persystencji) → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 (logowanie `volatility_zone`) → Etap 6 = P8 (analiza sesyjna).
+**Kolejność dalej wg audytu §5:** Etap 2 = P1 (SL dokładki, V0/V1/V2 — osobny PR,
+patrz historia gita/PR #28: wynik "V0 zostaje", bramka 5/6 nieprzeszła) → Etap 3 =
+P4 krok 0 + P6.1 → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
+
+---
+
+## 🔹 Etap 3 (część 1): P6.1 — Naprawa buga persystencji per-symbol config Inactivity 🟠
+
+### ✅ DONE (13a2c49, 88e7877) — bezwarunkowa naprawa poprawności, bez backtestu
+- **Pliki:** `src/mms4tk/api.py`, `src/mms4tk/daemon.py`
+- **Dowód:** audyt §1.7 — `stale_candles_threshold`/`stale_atr_threshold`/`impulse_negation_enabled` były zapisywane WYŁĄCZNIE do `configured_symbols_store`/`symbols.json`, nigdy do `system_settings`. `load_symbols_config()` preferuje SQLite `symbol_configurations` (stała schema, brak kolumn dla tych pól) gdy tylko ma jakiekolwiek wiersze (zawsze ma, gdy istnieje symbol) → po każdym restarcie/redeployu ustawienia operatora cicho resetowały się do hardcoded defaultów (12/0.5/True), a UI kłamało, że są zapisane.
+- **Naprawa (dokładnie ten sam wzorzec co dla trend-filtra):**
+  1. `_trend_filter_fields` w `api.py` rozszerzone o te 3 pola (czyta `system_settings` per-symbol-qualified pierwsze, potem `configured_symbols_store`).
+  2. `add_or_update_trading_symbol` zapisuje teraz te 3 klucze do `logger_db.set_settings_bulk` per-symbol-qualified.
+  3. `GET /api/v1/symbols` czyta je przez `_trend_filter_fields`, nie bezpośrednio z `config.get()`.
+  4. `daemon.py`: nowa metoda `_get_inactivity_overrides(symbol)` (analogiczna do `_get_indicator_params`) zastępuje inline blok czytający wyłącznie `configured_symbols_store` — `system_settings` jest teraz SSOT, fallback zachowany bez regresji.
+- 8 nowych testów (6 daemon-level, w tym test symulujący restart przez świeży `LoggerDB` handle na tym samym pliku db; 2 API-level end-to-end przez `TestClient`). Pełny suite: **315/315 PASS**.
+
+**P4 krok 0** (pomiar ATR%/SL per symbol, druga część Etapu 3) — nie zaczęte.
 
 ---
 
@@ -166,3 +185,5 @@ P9, P7, P2 i P1 zaimplementowane, przetestowane, PR-y otwarte/zmergowane. P1
 zakończyło się wynikiem "V0 zostaje" (gate nie przeszedł) — to prawidłowe,
 kompletne zamknięcie ticketu, nie odłożenie. Etap 3 (P4 krok 0 + P6.1) czeka na
 osobne polecenie.
+P9, P7, P2, P1 i P6.1 zaimplementowane. PR-y do sprawdzenia/merge. P4 krok 0
+(druga część Etapu 3) czeka na osobne polecenie.
