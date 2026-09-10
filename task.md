@@ -114,11 +114,29 @@ jakąkolwiek kontynuacją PLAN-010.
 - **Test regresji (wymagany przez audyt), policzony naprawdę na fixture'ach:** ponowna walidacja Midline TP (6 okien BTC/ETH × H1/H2/full) i high-vol base filter (4 okna) pod NET pnl. **Wynik: żaden werdykt się nie odwrócił** — Midline TP nadal przegrywa 6/6, high-vol filter nadal bije baseline w dokładnie tych samych 2/4 oknach (BTC_H2, ETH_H2) co brutto. Przyrząd wykalibrowany; oba filtry NIE wracają do kolejki kandydatów.
 - 8 nowych testów, pełny suite: **307/307 PASS**.
 
-**Kolejność dalej wg audytu §5 (dla orientacji, nie zlecone jeszcze):** Etap 2 = P1 (SL dokładki, V0/V1/V2 — teraz może korzystać z wykalibrowanego przyrządu) → Etap 3 = P4 krok 0 + P6.1 → Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
+**Kolejność dalej wg audytu §5:** Etap 2 = P1 (osobny PR #28: wynik "V0 zostaje",
+bramka 5/6 nieprzeszła) → Etap 3 = P4 krok 0 + P6.1 (P6.1: osobny PR #29) → Etap 4 =
+warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
+
+---
+
+## 🔹 Etap 3 (część 2): P4 krok 0 — pomiar ATR%/SL per symbol 🟠
+
+### ✅ DONE (e4401a9, e1e61bf) — czysty pomiar, ZERO zmian w kodzie produkcyjnym
+- **Plik:** `tests/test_atr_sl_measurement.py` (nowy, tylko testy — brak zmian w `src/`)
+- **Hipoteza audytu:** SL jest price-relative (2% zawsze), wstęga jest ATR-relative → stop ETH może być tłumaczeniem gorszego R:R na ETH.
+- **Policzone naprawdę** na 90-dniowych fixture'ach, produkcyjnym `TMAIndicator`/`IndicatorParams` (tma_length=20, atr_period=14):
+  - **BTC/USDC:** ATR/cena median=0.498% (mean=0.556%) → SL_distance/ATR median=4.017 (mean=4.888)
+  - **ETH/USDC:** ATR/cena median=0.672% (mean=0.735%) → SL_distance/ATR median=2.975 (mean=3.567)
+  - **Stop ETH jest ~26-27% ciaśniejszy w jednostkach ATR niż BTC** — kierunek zgodny z hipotezą, skala mniejsza niż ilustracyjne ~40% z samego dokumentu audytu (te liczby były jawnie oznaczone jako "ilustracyjne, nie ustalenie").
+- **Wynik bramki kroku 0** (audyt: "jeśli różnica okaże się mała, hipoteza upada i tu kończymy"): różnica **NIE jest mała** (26-27% ≫ 15% przyjęte jako konserwatywny próg "nie-mały") → **hipoteza NIE upada**. To NIE oznacza automatycznego przejścia do wariantu #2 (per-symbol `base_sl_pct` grid, 2-way OOS) ani #3 (`SL=k·ATR`, zmiana doktryny KB 1.4) — to osobna, większa decyzja wymagająca zgody właściciela strategii, poza zakresem kroku 0.
+- 2 nowe testy: jeden lockuje pomiar z konserwatywnym progiem 15% (nie dokładną wartością — nie sflaczeje na drobnych zmianach fixture/wskaźnika), drugi to sanity check zgodności z produkcyjnymi defaultami. Pełny suite: **309/309 PASS**.
+- **Niezależna recenzja (Opus, drugi agent, 2026-09-10):** liczby przeliczone niezależnie, zgodne co do 4. cyfry znaczącej. Metodologia potwierdzona jako zgodna z produkcją. Zero zastrzeżeń poza kosmetyką opisu (poprawione powyżej). Rekomendacja: **MERGE**. Bonus finding: BTC SL/ATR≈4.02 to praktycznie cała szerokość wstęgi (4·ATR) — stop na BTC jest wręcz *za szeroki*, co wzmacnia hipotezę P4 mocniej niż oryginalnie napisano.
 
 ---
 
 ## ✅ Następny krok
 
-P9, P7 i P2 zaimplementowane, przetestowane, PR-y otwarte/zmergowane. Etap 2 (P1)
-czeka na osobne polecenie.
+P9, P7, P2, P1, P6.1 i P4-krok-0 zaimplementowane. PR-y #28/#29/(ten) do
+sprawdzenia/merge. Decyzja o P4 wariancie #2 (per-symbol SL grid) — czeka na
+osobne polecenie, bo to głębsza zmiana doktryny.
