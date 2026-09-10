@@ -34,11 +34,14 @@ class when there is no instance-level override.
 # any `mms4tk.*` module is imported anywhere in the test session (DEFAULT_DB_PATH
 # is resolved once, at `logger_db` module import time) — hence it is the very
 # first thing this file does, ahead of even the stdlib imports below.
+import atexit as _atexit
 import os as _os
+import shutil as _shutil
 import tempfile as _tempfile
 
 _TEST_STATE_DIR = _tempfile.mkdtemp(prefix="mms4tk_pytest_")
 _os.environ["MMS4_DB_PATH"] = _os.path.join(_TEST_STATE_DIR, "test_logs.db")
+_atexit.register(_shutil.rmtree, _TEST_STATE_DIR, ignore_errors=True)
 
 import time
 from typing import Any, Dict, List, Optional
@@ -216,13 +219,13 @@ def _isolate_system_settings():
     # every test, regardless of what the snapshot contained — so a test that
     # legitimately changes one of these 5 (e.g. to exercise CLASSIC mode) does NOT
     # leak it forward, but conversely the snapshot/restore logic below can never
-    # protect a value an operator set for these 5 specific keys either; the DB row
-    # for each is always whatever this fixture last wrote. A second independent
-    # review (2026-09-10) confirmed this is pre-existing behavior this ticket did
-    # not introduce, but flagged it as a real, currently-live effect on the shared
-    # repo-root logs.db (docker-mounted) — fixing it fully (e.g. via MMS4_DB_PATH
-    # pointed at a per-test-run tmp directory before mms4tk is imported) is a
-    # separate, larger piece of work, not in scope here.
+    # protect a value set for these 5 specific keys either; the DB row for each is
+    # always whatever this fixture last wrote. Harmless now: this DB is the
+    # isolated per-session temp one this file forces at import time (see the top
+    # of this module) — the "real, currently-live effect on the shared repo-root
+    # logs.db (docker-mounted)" a second review flagged here (2026-09-10) no
+    # longer applies to a normal test run; it only would if something else in the
+    # process overrode MMS4_DB_PATH again after this file's own override.
     settings_snapshot = dict(api_logger_db.get_all_settings()) if api_logger_db else {}
     if api_logger_db:
         api_logger_db.set_settings_bulk({
