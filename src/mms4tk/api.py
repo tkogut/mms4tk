@@ -4,6 +4,7 @@ import sqlite3
 import logging
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
@@ -121,6 +122,30 @@ class StateResponse(BaseModel):
     total_trades: int
 
 
+class EpochKpiBlock(BaseModel):
+    """A2 (2026-09-10): the same KPIs as the enclosing PnLResponse, but computed only
+    over trades at or after `epoch_start` — the earliest `data_collection_epoch_start`
+    among the currently ACTIVE symbols. The top-level fields stay all-time so no
+    existing consumer's numbers move; this block is the trustworthy one, because the
+    epoch marker is exactly the line the operator drew to say "trades before this
+    belong to a different regime" (allocation change, filter changes, the P2/P3/
+    PLAN-011 correctness fixes)."""
+    epoch_start: Optional[str] = Field(default=None, description="ISO8601 epoch the KPIs below are computed from; null means no active symbol has an epoch set, so this block equals all-time")
+    per_symbol_epochs: Dict[str, Optional[str]] = Field(default_factory=dict, description="data_collection_epoch_start per active symbol (null = never set for that symbol)")
+    total_trades: int = Field(default=0)
+    realized_pnl: float = Field(default=0.0, description="Alias of realized_gross_pnl_usd, mirroring the top-level shape")
+    realized_gross_pnl_usd: float = Field(default=0.0)
+    total_fees_usd: float = Field(default=0.0)
+    realized_net_pnl_usd: float = Field(default=0.0)
+    win_rate: float = Field(default=0.0)
+    net_win_rate_pct: float = Field(default=0.0)
+    profit_factor: float = Field(default=0.0)
+    max_drawdown: float = Field(default=0.0, description="USD, peak-to-trough WITHIN the epoch (curve restarts at the epoch boundary)")
+    max_drawdown_usd: float = Field(default=0.0)
+    max_drawdown_pct: float = Field(default=0.0)
+    average_rr: float = Field(default=0.0)
+
+
 class PnLResponse(BaseModel):
     daily_roe: float = Field(default=0.0, description="Daily Return on Equity percentage")
     realized_pnl: float = Field(default=0.0, description="Realized Profit and Loss")
@@ -137,6 +162,7 @@ class PnLResponse(BaseModel):
     free_balance: float = Field(default=0.0, description="Free available USDC balance")
     btc_balance: float = Field(default=0.0, description="BTC asset balance")
     is_mock: bool = Field(default=False, description="True if OKX API is operating in mock mode without live credentials")
+    since_epoch: Optional[EpochKpiBlock] = Field(default=None, description="A2: the same KPIs restricted to the current data-collection epoch — see EpochKpiBlock")
 
 
 class EmergencyKillallResponse(BaseModel):
@@ -351,10 +377,56 @@ async def get_balance() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _active_symbol_epochs() -> Dict[str, Optional[str]]:
+    """A2: `data_collection_epoch_start` for every ACTIVE configured symbol.
+
+    Only active symbols count: SOL/ICP/XRP are suspended (see task.md GATE
+    2026-09-10), and letting a suspended symbol's older epoch win the `min()` below
+    would drag the reporting window back into exactly the pre-fix history the epoch
+    marker exists to exclude.
+    """
+    epochs: Dict[str, Optional[str]] = {}
+    for sym, config in configured_symbols_store.items():
+        is_active = config if isinstance(config, bool) else config.get("is_active", True)
+        if not is_active:
+            continue
+        epochs[sym] = logger_db.get_data_collection_epoch(sym)
+    return epochs
+
+
+def _earliest_epoch(epochs: Dict[str, Optional[str]]) -> Optional[str]:
+    """The earliest non-null epoch, or None when no active symbol has one set.
+
+    The EARLIEST (not the latest) is deliberate: a symbol whose epoch was never
+    advanced is still trading its full history, so cutting everything at the latest
+    epoch would silently hide that symbol's older-but-still-current-regime trades.
+    Erring wide keeps the block a superset of every symbol's own epoch window.
+    """
+    values = [e for e in epochs.values() if e]
+    if not values:
+        return None
+
+    def _key(iso: str):
+        try:
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return (1, iso)  # unparseable sorts last, never silently wins the min()
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (0, dt.isoformat())
+
+    return min(values, key=_key)
+
+
 @app.get("/api/v1/stats/pnl", response_model=PnLResponse, tags=["Stats"])
 @app.get("/api/v1/stats", response_model=PnLResponse, tags=["Stats"])
 async def get_pnl() -> Dict[str, Any]:
-    """Get daily ROE %, realized PnL, unrealized PnL, KPI summary, and account balances."""
+    """Get daily ROE %, realized PnL, unrealized PnL, KPI summary, and account balances.
+
+    A2 (2026-09-10): the top-level KPIs are still ALL-TIME (unchanged contract, no
+    consumer's number moves), with the epoch-restricted view added alongside as
+    `since_epoch` — see `EpochKpiBlock`.
+    """
     summary = state_manager.get_summary()
     kpi = logger_db.get_kpi_summary()
 
@@ -374,6 +446,32 @@ async def get_pnl() -> Dict[str, Any]:
     net_pnl = float(kpi.get("realized_net_pnl_usd", gross_pnl - total_fees))
     net_win_rate = float(kpi.get("net_win_rate_pct", kpi.get("win_rate", 0.0)))
 
+    # A2: epoch-restricted KPIs alongside (never instead of) the all-time ones.
+    # `since=None` when no active symbol has an epoch set, which makes the block a
+    # copy of the all-time figures — honest, and it keeps the field's shape stable
+    # for the dashboard rather than making it appear and disappear.
+    epochs = _active_symbol_epochs()
+    epoch_start = _earliest_epoch(epochs)
+    epoch_kpi = logger_db.get_kpi_summary(since=epoch_start) if epoch_start else kpi
+    epoch_gross = float(epoch_kpi.get("realized_gross_pnl_usd", epoch_kpi.get("total_pnl_usd", 0.0)))
+    epoch_fees = float(epoch_kpi.get("total_fees_usd", 0.0))
+    since_epoch = {
+        "epoch_start": epoch_start,
+        "per_symbol_epochs": epochs,
+        "total_trades": epoch_kpi.get("total_trades", 0),
+        "realized_pnl": epoch_gross,
+        "realized_gross_pnl_usd": epoch_gross,
+        "total_fees_usd": epoch_fees,
+        "realized_net_pnl_usd": float(epoch_kpi.get("realized_net_pnl_usd", epoch_gross - epoch_fees)),
+        "win_rate": epoch_kpi.get("win_rate", 0.0),
+        "net_win_rate_pct": float(epoch_kpi.get("net_win_rate_pct", epoch_kpi.get("win_rate", 0.0))),
+        "profit_factor": epoch_kpi.get("profit_factor", 0.0),
+        "max_drawdown": epoch_kpi.get("max_drawdown_usd", epoch_kpi.get("max_drawdown", 0.0)),
+        "max_drawdown_usd": epoch_kpi.get("max_drawdown_usd", 0.0),
+        "max_drawdown_pct": epoch_kpi.get("max_drawdown_pct", 0.0),
+        "average_rr": epoch_kpi.get("average_rr", 0.0),
+    }
+
     return {
         "daily_roe": 0.0,
         "realized_pnl": gross_pnl,
@@ -391,7 +489,8 @@ async def get_pnl() -> Dict[str, Any]:
         "average_rr": kpi.get("average_rr", 0.0),
         "free_balance": free_usdc,
         "btc_balance": btc_bal,
-        "is_mock": is_mock
+        "is_mock": is_mock,
+        "since_epoch": since_epoch,
     }
 
 

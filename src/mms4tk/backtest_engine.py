@@ -48,13 +48,43 @@ IMPULSE_NEGATION_ENABLED = True
 # they are) and understates anything that trades LESS (a filter that reduces churn
 # looks relatively worse than it is).
 #
-# TAKER_FEE_PCT: OKX taker fee per leg. Same reference already used for
-# inactivity_manager.py's DEFAULT_ROUND_TRIP_COST_PCT ("OKX taker 0.05% x2 +
-# funding") — not re-derived independently, reused from that already-verified
-# constant so the two don't silently drift apart.
+# TAKER_FEE_PCT: OKX taker fee per leg, the exchange's published schedule figure.
+# Kept as documentation of where the ORIGINAL assumption came from — it is no
+# longer what ROUND_TRIP_FEE_PCT is derived from (see the calibration below).
 TAKER_FEE_PCT = 0.0005
-# Round-trip = open + close, duration-independent (unlike funding below).
-ROUND_TRIP_FEE_PCT = TAKER_FEE_PCT * 2  # 0.0010 (0.10%)
+#
+# ── A1 CALIBRATION FROM PRODUCTION (2026-09-10), audit P2(c) point 3 ──────────
+# The audit's own instruction was explicit: "Kalibracja round_trip_cost_pct na
+# realnych danych: logger_db.get_closed_trades() ma fee_usd per transakcja — nie
+# zgadywać, wyprowadzić z produkcji." Until now this constant was ASSUMED — it was
+# `TAKER_FEE_PCT * 2`, itself reused from inactivity_manager's
+# DEFAULT_ROUND_TRIP_COST_PCT. That assumption is now REPLACED by a measurement.
+#
+#   formula:  effective_round_trip_pct = SUM(fee_usd) / SUM(notional)
+#             notional = entry_price * amount * contract_size
+#             (contract_size per daemon._get_contract_size: BTC 1e-4, ETH 1e-3)
+#   source:   production `closed_trades`, exported from the live logs.db
+#   window:   2026-08-30 .. 2026-09-10 (from v0.41.0, the first release writing a
+#             real fee_usd; earlier rows default fee_usd to 0.0 and are unusable)
+#   n:        52 closed trades (BTC 29, ETH 23)
+#   measured: BTC   0.00099968   (sum_fee $1.942895 / notional $1943.5098)
+#             ETH   0.00100103   (sum_fee $1.585347 / notional $1583.7099)
+#             ALL   0.00100029   (sum_fee $3.528242 / notional $3527.2197)
+#
+# fee_usd on a `closed_trades` row is the commission for the WHOLE round trip
+# (open+close already settled together by the time the row is written), so the
+# measurement is directly comparable to this constant — no x2 and no /2.
+#
+# Blended BTC+ETH is used: the per-symbol spread is 0.00000135 absolute, i.e.
+# 0.13% of the blended rate — far below any level at which a per-symbol constant
+# could change a backtest verdict, and well inside the noise of a 52-trade sample.
+#
+# RESULT: the measurement CONFIRMS the previous assumption to within 0.03%
+# relative (0.00100029 vs 0.0010). The value below is nonetheless written as the
+# measured figure rather than left as `TAKER_FEE_PCT * 2`, so the constant is
+# traceable to production data instead of to another constant's assumption — the
+# next person changing OKX fee tiers must re-measure, not re-derive.
+ROUND_TRIP_FEE_PCT = 0.0010003  # measured (see above); duration-independent, unlike funding
 # OKX perpetual funding: charged every 8 hours. On H1 candles (this engine's only
 # timeframe, see run_calibration_job/_fetch_calibration_candles) that is every 8
 # candles. 0.01% is a conservative flat estimate (real funding rates float and can
