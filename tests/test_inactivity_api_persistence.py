@@ -15,7 +15,7 @@ self-contained rather than relying solely on the global fixture.
 """
 from fastapi.testclient import TestClient
 
-from mms4tk.api import app, configured_symbols_store, logger_db
+from mms4tk.api import app, configured_symbols_store, logger_db, save_symbols_config
 
 client = TestClient(app)
 AUTH_HEADERS = {"X-MMS4-API-KEY": "test-api-auth-key-unit-test"}
@@ -26,14 +26,25 @@ def test_symbols_update_persists_inactivity_fields_to_system_settings():
     system_settings under a per-symbol-qualified key — previously only
     tma_trend_filter_enabled/tma_slope_*/high_vol_base_filter_enabled were persisted
     there; stale_candles_threshold/stale_atr_threshold/impulse_negation_enabled were
-    silently left configured_symbols_store-only."""
+    silently left configured_symbols_store-only.
+
+    Cleanup restores THREE places this endpoint writes, not just system_settings:
+    it also calls save_symbols_config() (rewrites symbols.json AND the SQLite
+    symbol_configurations row via configured_symbols_store) with AddSymbolRequest's
+    OWN defaults (allocation_usd=10.0/base_ratio=70/timeframe="15m") for every field
+    this request doesn't set — a second independent review found the first version
+    of this cleanup restored only the 3 inactivity keys, leaving an operator's real
+    allocation_usd/base_ratio/timeframe silently reset to those defaults in the
+    live-mounted db/file if they ever differed. Today harmless only by coincidence
+    (the live table already holds those exact defaults for ETH/USDC)."""
     symbol = "ETH/USDC"
     keys = [
         f"stale_candles_threshold:{symbol}",
         f"stale_atr_threshold:{symbol}",
         f"impulse_negation_enabled:{symbol}",
     ]
-    before = {k: logger_db.get_setting(k) for k in keys}
+    before_settings = {k: logger_db.get_setting(k) for k in keys}
+    before_full_config = dict(configured_symbols_store.get(symbol, {}))
     try:
         res = client.post(
             "/api/v1/symbols/update",
@@ -52,10 +63,16 @@ def test_symbols_update_persists_inactivity_fields_to_system_settings():
         assert logger_db.get_setting(keys[2]) == "False"
     finally:
         for k in keys:
-            if before[k] is None:
+            if before_settings[k] is None:
                 logger_db.delete_setting(k)
             else:
-                logger_db.set_setting(k, before[k], updated_by="test_cleanup")
+                logger_db.set_setting(k, before_settings[k], updated_by="test_cleanup")
+        # Restore symbol_configurations (SQLite) + symbols.json to their pre-test
+        # values too — the endpoint writes both via save_symbols_config() (which
+        # itself writes to both places), not just system_settings.
+        if before_full_config:
+            configured_symbols_store[symbol] = before_full_config
+            save_symbols_config(configured_symbols_store)
 
 
 def test_get_symbols_reads_inactivity_fields_from_system_settings_not_stale_in_memory():
