@@ -25,6 +25,33 @@ def _default_db_path() -> str:
 DEFAULT_DB_PATH = _default_db_path()
 
 
+def _timestamp_at_or_after(timestamp: Any, since: str) -> bool:
+    """True when `timestamp` is at or after `since` (both ISO8601).
+
+    Parsed as datetimes rather than compared as strings, because the two sides come
+    from different writers and are not guaranteed to share a format: `closed_trades`
+    rows carry microseconds and an explicit offset ("...T08:00:14.769000+00:00")
+    while an operator-set `data_collection_epoch_start` is typically minute-precision
+    ("...T16:00:00+00:00"), and a bare-Z or naive value is possible from either.
+    A naive value is read as UTC — every writer in this system records UTC.
+
+    Falls back to lexicographic comparison (the convention used by
+    `count_clean_closed_trades`) if either side is unparseable, so a malformed row
+    degrades to the old behaviour rather than raising inside a KPI read.
+    """
+    raw = "" if timestamp is None else str(timestamp)
+    try:
+        left = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        right = datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return raw >= str(since)
+    if left.tzinfo is None:
+        left = left.replace(tzinfo=timezone.utc)
+    if right.tzinfo is None:
+        right = right.replace(tzinfo=timezone.utc)
+    return left >= right
+
+
 class LoggerDB:
     """
     SQLite database logger for MMS4 strategy cycle events and state metrics.
@@ -638,11 +665,28 @@ class LoggerDB:
         """Fetch the most recent closed trades (sorted chronologically)."""
         return self.get_closed_trades(limit=limit)
 
-    def get_kpi_summary(self, initial_equity: float = 0.0) -> Dict[str, Any]:
+    def get_kpi_summary(self, initial_equity: float = 0.0, since: Optional[str] = None) -> Dict[str, Any]:
         """
         Compute KPI summary (Win Rate, Profit Factor, MDD %, Average R:R) from closed_trades.
 
         Runs over the FULL history — no silent truncation.
+
+        `since` (A2, 2026-09-10): optional ISO8601 timestamp. When given, only trades
+        with `timestamp >= since` are aggregated — everything downstream (win rate,
+        profit factor, fees, the drawdown equity curve, R:R) is computed on that
+        subset only. The intended caller passes `data_collection_epoch_start`, so the
+        numbers describe the CURRENT trading regime instead of being diluted by
+        trades taken before the P2/P3/PLAN-011 fixes, which the epoch marker exists
+        precisely to fence off (see `get_data_collection_epoch`).
+
+        `since=None` (the default) keeps the pre-A2 behaviour byte-for-byte: the whole
+        history, no filtering. Every existing caller is therefore unaffected.
+
+        Note the drawdown consequence, which is a feature and not an accident: the
+        equity curve is restarted at `initial_equity` at the epoch boundary, so
+        `max_drawdown` is the worst peak-to-trough WITHIN the epoch, not a slice of
+        the all-time curve. Asking "how has the current regime behaved" and getting
+        an answer anchored to a pre-regime equity peak would be the wrong answer.
 
         Drawdown is reported in two explicit fields because the old single `max_drawdown`
         was documented as a percentage while actually holding USD:
@@ -655,6 +699,8 @@ class LoggerDB:
         carry pnl == 0 and are not round-trip results).
         """
         trades = self.get_closed_trades(limit=None)
+        if since:
+            trades = [t for t in trades if _timestamp_at_or_after(t.get("timestamp"), since)]
         if not trades:
             return {
                 "total_trades": 0,
