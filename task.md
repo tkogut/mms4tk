@@ -721,10 +721,11 @@ zmierzyć na tej ilości danych.**
 #### 🆕 Nowe priorytety, których audyt nie miał (ważniejsze niż jego oryginalna lista)
 
 1. **Kalibracja realnej stawki prowizji z produkcji** (P2(c) punkt 3, nigdy
-   niezrealizowany) — patrz Etap 5/A1 niżej, w trakcie.
+   niezrealizowany) — ✅ zrobione, patrz sekcja "Sesja A1+A2" wyżej.
 2. **KPI netto liczone od epoki** (`data_collection_epoch_start` istnieje w
    schemacie, nigdy nieużywane do filtrowania `get_kpi_summary()`) — dzisiejszy
-   dashboardowy "39% winrate" miesza dane sprzed napraw P2/P3. Patrz Etap 5/A2.
+   dashboardowy "39% winrate" miesza dane sprzed napraw P2/P3. ✅ zrobione, patrz
+   sekcja "Sesja A1+A2" wyżej.
 3. **Egzekucja 100% `market`/taker, zero `postOnly`/maker** (`okx_executor.py`,
    `execute_order` + zamknięcia) — przeliczenie tej samej populacji transakcji na
    stawkę maker (0,02% vs dzisiejsze 0,05%/leg taker) daje **BTC netto +0,81% →
@@ -745,21 +746,23 @@ transakcję faktycznie rośnie zgodnie z hipotezą, ale stosunek SL:TP_flip psuj
 się drastycznie na wyższych TF (BTC 4h: 16 SL na 9 TP vs 1h: 22 SL na 23 TP) →
 gross się załamuje na obu symbolach. Nie realizować.
 
-### 🔜 Sesja A (w trakcie, zlecona 2 agentom Opus równolegle + ja sam robię ten wpis)
+### Sesja A — status
 
-- **A1 + A2** (worktree `chore/session-a1-a2-fee-calibration-epoch-kpi`):
-  kalibracja `ROUND_TRIP_FEE_PCT` z realnych `closed_trades` od `2026-08-30`
-  (52 transakcje wyeksportowane z produkcji przez read-only kopię pliku DB na
-  hoście VPS, zero ryzyka dla żywego procesu) + ponowna regresja P2 (Midline TP
-  6 okien, high-vol filter 4 okna) pod nową stawką; KPI `get_kpi_summary(since=...)`
-  filtrowane po `data_collection_epoch_start`, eksponowane w API. **W trakcie —
-  wynik do uzupełnienia w tym dokumencie po przeglądzie.**
-- **A3** (worktree `chore/session-a3-long-history-fixtures`): budowa 24-miesięcznej
-  historii 1h (BTC/ETH) przez produkcyjną `OKXExecutor.fetch_candles_paginated`
-  (publiczne API OKX, potwierdzony bezpośredni dostęp do internetu z tego
-  środowiska), nowe fixture'y `ohlcv_{BTC,ETH}_USDC_1h_24m.csv`, stare zostają
-  nietknięte. **W trakcie — wynik do uzupełnienia.**
-- **A4** (ten wpis) — zamknięcie 3 ticketów powyżej. **Zrobione.**
+- **✅ A1 + A2 DONE, zmergowane (PR #34, `09dc681`, v0.44.5).** Zlecone agentowi
+  Opus, przejrzane przeze mnie samodzielnie (diff + niezależne ponowne
+  uruchomienie 340 szybkich testów + 2 wolnych testów regresji P2, oba PASS) —
+  bez dodatkowej pełnej rundy adwersarialnej (niskie ryzyko: zmiana czysto
+  addytywna, nie dotyka egzekucji zleceń). Wyniki: `ROUND_TRIP_FEE_PCT` = pomiar
+  z produkcji, 0.0010003 (potwierdza starą wartość ±0.03%), żaden werdykt P2 się
+  nie odwrócił; `since_epoch` w `/api/v1/stats`. Szczegóły: sekcja "Sesja A1+A2"
+  wyżej w tym dokumencie.
+- **🔜 A3 w trakcie** (worktree `chore/session-a3-long-history-fixtures`): budowa
+  24-miesięcznej historii 1h (BTC/ETH) przez produkcyjną
+  `OKXExecutor.fetch_candles_paginated` (publiczne API OKX, potwierdzony
+  bezpośredni dostęp do internetu z tego środowiska), nowe fixture'y
+  `ohlcv_{BTC,ETH}_USDC_1h_24m.csv`, stare zostają nietknięte. **Wynik do
+  uzupełnienia po przeglądzie.**
+- **✅ A4 (ten wpis) DONE** — zamknięcie 3 ticketów powyżej.
 
 Po przeglądzie A1-A3 (przez nadrzędną sesję, nie automatycznie) — Sesja B:
 zawieszenie ETH (warunkowane wynikiem A3), PoC egzekucji maker-first (z twardą
