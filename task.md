@@ -491,3 +491,134 @@ wariant #2, P6.2 (patrz sekcja wyżej). Ten dokument wymaga też jednorazowego
 porządkowania (kolejność sekcji nie odpowiada kolejności etapów — Etap 1 → Etap
 3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4 — bo tak scaliły się branch'e; treść jest
 poprawna, tylko kolejność wizualna nielogiczna).
+
+---
+
+## 🔹 Sesja A3: długa historia 1h jako nowe fixture'y (2026-09-11)
+
+Worktree `chore/session-a3-long-history-fixtures`. Zadanie: zbudować 24-miesięczną
+historię 1h dla BTC/ETH jako nowe fixture'y, **bez ruszania istniejących**
+(`ohlcv_BTC_USDC_1h.csv` / `ohlcv_ETH_USDC_1h.csv` — nietknięte, dalej używane
+przez testy). Powód: cała dotychczasowa walidacja (P1-P4, A/B) stoi na JEDNYM
+oknie 90 dni (2160 świec/symbol), co daje ~±20 pp 90% przedziału ufności.
+
+### ⚠️ Ustalenie blokujące: 24 miesięcy BTC/USDC na OKX NIE MA
+
+`fetch_candles_paginated("BTC/USDC", ...)` — ta sama ścieżka, której używa produkcja
+— rozwiązuje się w ccxt do **instrumentu SPOT `BTC-USDC`** (nie swap; `defaultType:
+swap` nie zmienia notacji bez sufiksu `:USDC`, a `BTC/USDC:USDC` w ogóle nie
+istnieje w markets OKX). `listTime` tego instrumentu to **2025-08-21T08:00:00Z** dla
+BTC-USDC i ETH-USDC — czyli maksymalna dostępna głębokość to ~386 dni, nie 730.
+Żądanie `days=730` zwracało **0 świec** (pierwsza strona paginacji ląduje przed
+listingiem → pusta → pętla produkcyjna kończy na pierwszej pustej stronie).
+Zweryfikowane niezależnie: `/api/v5/public/instruments` (SPOT BTC-USDC listTime =
+2025-08-21T08:00Z; `instId=BTC-USDC-SWAP` **nie istnieje**) i binary search po
+`days` (granica 398 dni, obie monety identycznie).
+
+Dlatego zamiast jednego kompletu powstały **dwa**, a plik nie nazywa się `_24m`,
+jeśli nie ma w nim 24 miesięcy:
+
+| plik | świece | zakres (UTC) | span |
+|---|---|---|---|
+| `tests/fixtures/ohlcv_BTC_USDC_1h_max.csv` | **9216** | 2025-08-22T23:00 .. 2026-09-10T22:00 | 383.96 d |
+| `tests/fixtures/ohlcv_ETH_USDC_1h_max.csv` | **9216** | 2025-08-22T23:00 .. 2026-09-10T22:00 | 383.96 d |
+| `tests/fixtures/ohlcv_BTC_USDT_1h_swap_24m.csv` | **17520** | 2024-09-10T23:00 .. 2026-09-10T22:00 | 729.96 d |
+| `tests/fixtures/ohlcv_ETH_USDT_1h_swap_24m.csv` | **17520** | 2024-09-10T23:00 .. 2026-09-10T22:00 | 729.96 d |
+
+- `_max` = pełna dostępna głębokość **dokładnie tej serii, której używa produkcja**
+  (BTC/USDC, ETH/USDC spot). 4,27× więcej świec niż stare okno 90-dniowe.
+- `_swap_24m` = `BTC/USDT:USDT` / `ETH/USDT:USDT` (swap USDT, listing 2019) —
+  **jedyna** seria na OKX z realną 24-miesięczną głębokością. To **proxy**, nie ten
+  sam instrument; wolno go używać dokładnie na tych samych prawach, na jakich cała
+  produkcja używa BTC/USDC jako proxy dla realnie handlowanego X-Perp (patrz
+  docstring `fetch_candles_paginated`) — ale **musi być tak nazwane w każdym
+  wyniku**, nigdy jako "dane instrumentu produkcyjnego".
+  Zmierzona rozbieżność proxy vs produkcyjna seria na 9216 wspólnych świecach:
+  **korelacja zwrotów 1h = 0.9614 (BTC) / 0.9648 (ETH)**, mediana |spread cen| =
+  0.055% (BTC) / 0.064% (ETH), max 0.75% / 1.22%.
+
+### Weryfikacja jakości danych (policzona, nie założona)
+
+1. **Liczba świec:** dokładnie zgodna z oczekiwaniem — 9216 = 384 d × 24 (po
+   przycięciu do listingu), 17520 = 730 d × 24. Zero brakujących.
+2. **Dziury:** **0 przerw > 6 h** we wszystkich 4 plikach. Mocniejszy check też
+   przeszedł: **każdy krok to dokładnie 3 600 000 ms**, 0 duplikatów timestampu,
+   0 miejsc nierosnących.
+3. **Ciągłość ze starym oknem:** stare okno (2026-05-30T17:00 .. 2026-08-28T16:00,
+   2160 świec) mieści się **w całości** wewnątrz wszystkich 4 nowych plików; 0 starych
+   timestampów nieobecnych w nowych. Dodatkowo policzona identyczność wartości na
+   części wspólnej z `_max`: **2159/2160 świec bit-identycznych** (OHLCV + volume).
+   Jedyna różnica to **ostatnia świeca starego fixture'a** (2026-08-28T16:00) —
+   stara ma close 77887.1 / vol 107.10628945, nowa 77790.0 / 107.80341082 (ETH
+   analogicznie): to świeca złapana w trakcie formowania przy generowaniu starego
+   pliku. Nowe dane są więc **ścisłym supersetem**, nie osobnym segmentem.
+4. **Regresja zero:** `python3 -m pytest -q -m "not slow"` → **329 passed, 4
+   deselected** — identycznie jak baseline przed tą sesją. Dodanie plików nic nie
+   zepsuło (żaden istniejący test ich nie widzi).
+
+### Czy 24 miesiące odblokowują P5 i P8? (policzone realnym silnikiem, nie szacunkiem)
+
+`scripts/fixture_power_analysis.py` tnie fixture na kolejne, **nienachodzące** okna
+121 d (~4 mies.) i puszcza na każdym prawdziwy `run_backtest()` z produkcyjnymi
+parametrami (ADAPTIVE, VR 1.6/0.8, `stale_candles_threshold=12`, trend filter off).
+Strefa zmienności i sesja UTC są kubełkowane po świecy WYJŚCIA (`exit_idx` to
+jedyny indeks, który zwraca `run_backtest`) — przybliżenie kubełka wejścia, nie jego
+dokładna reprodukcja.
+
+- **24 mies. dają 6 pełnych niezależnych okien 121-dniowych** (730 / 121.7 = 6.0);
+  seria `_max` (384 d) daje 3 takie okna.
+- **Realna częstotliwość: ~1.79 txn/dzień (BTC) i ~1.94 txn/dzień (ETH)** na
+  `_swap_24m` (odpowiednio 1300 i 1406 transakcji w 24 mies., w tym 870/853 pełnych
+  domknięć). Na `_max`: 1.98 (BTC) / 2.14 (ETH) txn/dzień. Zakładane w poprzednim
+  raporcie ~2 txn/dzień/symbol **potwierdzone empirycznie**.
+- **~187-266 transakcji na okno 4-miesięczne na symbol** (min 189, max 266 w 12
+  oknach BTC+ETH na `_swap_24m`).
+
+**P8 (analiza sesyjna, ~30 txn/komórkę): ODBLOKOWANE.** Najsłabsza komórka sesyjna
+(ASIA 00-08 / EU 08-16 / US 16-24 UTC) w **każdym** z 6 okien i dla obu symboli to
+51-83 transakcji — z zapasem ≥1.7× nad progiem 30. Nawet pojedyncze 4-miesięczne
+okno wystarcza; 24 mies. dają 6 niezależnych powtórzeń tego samego testu.
+
+**P5 (parametry per strefa zmienności, ~19 txn/strefę × 3 strefy): ODBLOKOWANE
+TYLKO POOLOWANE PO CAŁYCH 24 MIES., NIE PER OKNO 4-MIESIĘCZNE.** Wiążącym
+ograniczeniem jest strefa **HIGH (VR > 1.6)** — z definicji rzadka:
+- per okno 121 d, strefa HIGH: BTC `[23, 20, 9, 23, 14, 23]`, ETH `[16, 29, 19, 16,
+  16, 19]` → **próg 19 nie jest spełniony w 2/6 okien BTC i 4/6 okien ETH.**
+- pooled po całych 24 mies.: HIGH = **112 (BTC) / 115 (ETH)**, NORMAL = 932/1044,
+  LOW = 256/247 → wszystkie 3 strefy z dużym zapasem nad 19; łącznie dla obu
+  symboli HIGH = **227**.
+- Na `_max` (384 d, okna 122 d) strefa HIGH wypada `[35, 32, 27]` (BTC) i
+  `[31, 37, 28]` (ETH) → per okno **PASS**, ale to tylko 3 okna i inny (nowszy,
+  bardziej zmienny) reżim rynkowy — nie zastępuje 6 okien z `_swap_24m`.
+
+**Wniosek operacyjny:** P8 można prowadzić z walidacją out-of-sample okno-po-oknie.
+P5 wymaga albo poolowania po całych 24 miesiącach (wtedy tracimy niezależne okna
+OOS na strefie HIGH), albo podziału na 2 połowy po 12 mies. (HIGH ≈ 56/symbol na
+połowę — dalej ≥19), albo poolowania BTC+ETH razem. Per-okno-4-miesięczne testowanie
+strefy HIGH **nadal nie jest statystycznie możliwe** i nie należy go obiecywać.
+
+### Narzędzia (odtwarzalne, zostawione w repo)
+
+- `scripts/fetch_ohlcv_fixture.py` — pobiera historię **produkcyjną ścieżką**
+  (`OKXExecutor.fetch_candles_paginated`, PLAN-010 §4.1a, bez poświadczeń — publiczne
+  dane rynkowe), zapisuje CSV w identycznym formacie co istniejące fixture'y,
+  domyślnie **nie nadpisuje** istniejącego pliku (`--force` wymagane) i **przycina
+  okno do `listTime` instrumentu**, zamiast po cichu zwrócić 0 wierszy. Sam raportuje
+  liczbę świec, zakres, dziury > 6 h, duplikaty i niemonotoniczność.
+- `scripts/fixture_power_analysis.py` — powyższa analiza mocy (txn/okno, per strefa,
+  per sesja, bramki P5/P8).
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/fetch_ohlcv_fixture.py --symbols BTC/USDC ETH/USDC --days 730 --suffix _max
+PYTHONPATH=src python3 scripts/fetch_ohlcv_fixture.py --symbols BTC/USDT:USDT ETH/USDT:USDT --days 730 --suffix _swap_24m
+PYTHONPATH=src python3 scripts/fixture_power_analysis.py --window-days 121 \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv
+```
+
+### Czego ta sesja NIE zrobiła
+
+Zero zmian w `src/` i zero zmian w istniejących testach — to sesja danowa. Żaden
+istniejący werdykt (P1-P4, A/B) **nie został przeliczony** na nowych danych; nowe
+fixture'y są dostępne, ale dopóki ktoś tego nie zrobi, wszystkie dotychczasowe
+wnioski dalej stoją na jednym oknie 90-dniowym z ~±20 pp przedziałem ufności.
