@@ -422,6 +422,65 @@ def test_addon_uses_tighter_composite_sl(monkeypatch):
     assert stop_losses[0]["exit_price"] == pytest.approx(98.75, abs=0.01)
 
 
+# ── Addon SL variants (audit P1, 2026-09-08) ──
+# Base LONG @ 100.0 (4 contracts), addon fires at 110.0 (not the same price as the
+# base — needed to make avgPx (103.0, worked out below) diverge from
+# base_entry_price (100.0), the only way to actually discriminate V2 from V0/V1:
+#   addon_contracts = 4.0 * (0.3/0.7) ≈ 1.714286
+#   avgPx = (4.0*100.0 + 1.714286*110.0) / (4.0+1.714286) = 103.0 exactly
+# A deep dip (low=90.0) guarantees a trigger under ALL three variants' thresholds,
+# so exit_price alone discriminates which formula actually fired.
+
+def _addon_sl_variant_scenario(monkeypatch, variant):
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    candles[warmup + 1] = Candle(timestamp=warmup + 1, open=100.0, high=110.5, low=99.5,
+                                  close=110.0, volume=1.0)  # addon fires here, at 110.0
+    candles[warmup + 2] = Candle(timestamp=warmup + 2, open=110.0, high=110.5, low=90.0,
+                                  close=110.0, volume=1.0)  # deep dip: triggers under any variant
+    _scripted_engine(monkeypatch, {
+        warmup: "BASE_LONG",
+        warmup + 1: "HIGH_RISK_ADD_LONG",
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, addon_sl_variant=variant)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1
+    assert stop_losses[0]["addon_applied"] is True
+    return stop_losses[0]
+
+
+def test_addon_sl_variant_v0_is_composite_from_avgpx(monkeypatch):
+    """V0 (current production, also the default): composite 1.25% from the
+    averaged (avgPx=103.0) entry -> 103.0 * 0.9875 = 101.7125."""
+    sl = _addon_sl_variant_scenario(monkeypatch, "V0")
+    assert sl["exit_price"] == pytest.approx(101.7125, abs=0.01)
+
+
+def test_addon_sl_variant_v1_is_wider_composite_from_avgpx(monkeypatch):
+    """V1: composite 2.0% from the same averaged (avgPx=103.0) entry ->
+    103.0 * 0.98 = 100.94 — same mechanism as V0, wider threshold."""
+    sl = _addon_sl_variant_scenario(monkeypatch, "V1")
+    assert sl["exit_price"] == pytest.approx(100.94, abs=0.01)
+
+
+def test_addon_sl_variant_v2_stays_pegged_to_original_base_entry(monkeypatch):
+    """V2: SL pegged to the ORIGINAL base entry (100.0), never the addon-averaged
+    103.0 -> 100.0 * 0.98 = 98.0. Proves the addon fill did NOT move the SL basis
+    at all, unlike V0/V1."""
+    sl = _addon_sl_variant_scenario(monkeypatch, "V2")
+    assert sl["exit_price"] == pytest.approx(98.0, abs=0.01)
+
+
+def test_run_backtest_rejects_unknown_addon_sl_variant():
+    params = IndicatorParams()
+    candles = _flat_candles(50)
+    with pytest.raises(ValueError, match="addon_sl_variant"):
+        be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                         trend_filter_enabled=False, addon_sl_variant="V3")
+
+
 # ── Post-SL Cooldown (audit P7 "same file" follow-on, 2026-09-08) ──
 # Mirrors daemon.py's PLAN-008 Phase 2 mechanism (_sl_cooldown_until): after a
 # genuine STOP_LOSS close, new BASE_LONG/BASE_SHORT entries are blocked for
@@ -546,6 +605,127 @@ def test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees():
 
     expected = {"BTC_H1": False, "BTC_H2": True, "ETH_H1": False, "ETH_H2": True}
     assert beats == expected, f"High-vol filter NET verdict changed: {beats} vs expected {expected}"
+
+
+@pytest.mark.slow
+def test_p1_addon_sl_gate_analysis():
+    """Audit P1 (2026-09-08): required gate for implementing V1 or V2 in production
+    — V1 OR V2 must beat V0 on BOTH R:R and total_pnl (NET) in >= 5/6 windows
+    (BTC/ETH x H1/H2/full).
+
+    CORRECTED 2026-09-10 after independent review (2nd agent) found the first
+    version of this test used adaptive_vr_high=1.0/adaptive_vr_low=0.75 — the exact
+    literals audit P7 (§1.5) calls "stale, already reset in production" (production
+    runs 1.6/0.8). Under those stale thresholds addon volume was much lower in
+    several windows (e.g. addon-affected STOP_LOSS trades were 0 in BTC_H1/ETH_H2),
+    understating how much the SL variant could possibly matter there.
+
+    Recomputed under PRODUCTION thresholds (adaptive_vr_high=1.6, adaptive_vr_low=0.8,
+    confirmed live in system_settings) — real numbers, 2026-09-10, every one of the
+    6 windows now has real addon activity (12 to 56 addon fills each):
+        strict gate (BOTH R:R and total_pnl beat V0): V1 = 3/6, V2 = 3/6
+        total_pnl ALONE (no R:R requirement):         V1 = 5/6 (never worse than V0),
+                                                        V2 = 4/6
+
+    Neither variant clears the strict 5/6 gate, so per the audit's own fallback
+    ("poniżej — zostaje V0...") V0 stays in production for now. But this is NOT a
+    clean rejection of the hypothesis: V1's total_pnl is at least as good as V0's in
+    every one of the 6 windows (strictly better in 5, tied in ETH_H2) — it fails the
+    STRICT gate only because R:R softens in 2 of the 6 windows (BTC_H1: 1.3235 ->
+    1.1818, a real ~10.7% drop, not "a few percent"; ETH_H1: 1.3121 -> 1.2919, ~1.5%).
+    A future reader should NOT read "V0 wins" as "V1/V2 are worse" — read it as "the
+    combined R:R+PnL gate is a high bar that a directionally-positive PnL signal
+    doesn't clear alone".
+
+    CORRECTED AGAIN 2026-09-10 (same review round, verification pass caught a second
+    error in THIS docstring): ETH_H2's tie is NOT because that window "has zero
+    addon fills" — it has 16, same order of magnitude as the other windows. The real
+    reason V0/V1/V2 are bit-for-bit identical there is that none of those 16
+    addon-affected positions' actual exits were sensitive to which composite SL
+    threshold was used in that window's specific price action — addon activity
+    existed, the compared mechanism just never ended up mattering. Do not conflate
+    "no addon activity" with "addon activity that happened not to matter" again.
+
+    Separately, and NOT fixed by this correction: V0 in this harness models the
+    composite SL as 1.25% of the AVERAGED (avgPx) entry — but production's actual
+    mechanism (daemon.py ~1574, okx_executor's attach_stop_loss with
+    price=signal.price) computes the addon leg's SL off the ADDON FILL PRICE, not
+    avgPx. For the audit §1.1 example (base@100 short, addon@99), that is ~0.54%
+    real risk from avgPx, not the harness's 1.25% — i.e. V0-in-this-harness is
+    already ~2.3x more conservative than production's real V0. A null/weak result
+    against this softened baseline does NOT falsify the §1.1 diagnosis, because the
+    pathological case §1.1 describes was never actually modeled here. This is a
+    known, documented limitation of this analysis, not something this test can
+    self-correct — closing it requires modeling per-fill-price SL in the harness,
+    a separate, larger piece of work. (Also note: the stale 1.0/0.75 VR literals this
+    docstring flags remain in several OTHER tests in this same file — fixing this one
+    test does not fix those; out of scope here, but do not read this test's fix as
+    having closed that class of problem file-wide.)
+
+    This test locks in the EXACT gate numbers (3/6, 3/6, and the 5/6 pnl-only signal)
+    as a regression guard: if any of them changes, a real change to run_backtest's
+    addon/SL/signal logic moved the analysis's outcome — that IS grounds to revisit
+    the P1 production decision, not something to silently absorb by loosening the
+    assertion back to "still under 5". It does NOT lock in "V0 is confirmed
+    correct" — that conclusion was withdrawn along with the stale-VR-params bug this
+    docstring documents.
+    """
+    windows = []
+    for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
+                                  ("ETH", "ohlcv_ETH_USDC_1h.csv", "ETH/USDC")]:
+        candles = load_fixture_candles(fname)
+        mid = len(candles) // 2
+        windows.append((f"{label}_H1", symbol, candles[:mid]))
+        windows.append((f"{label}_H2", symbol, candles[mid:]))
+        windows.append((f"{label}_full", symbol, candles))
+
+    # Production thresholds — NOT the stale 1.0/0.75 the first version of this test
+    # used (see docstring). Confirm against live system_settings before trusting
+    # this literal again if VR calibration ever changes.
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.6, adaptive_vr_low=0.8)
+    v1_strict_wins = 0
+    v2_strict_wins = 0
+    v1_pnl_wins = 0
+    v2_pnl_wins = 0
+    any_addon_activity = 0
+    for label, symbol, candles in windows:
+        v0_trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                     trend_filter_enabled=False, addon_sl_variant="V0")
+        v1_trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                     trend_filter_enabled=False, addon_sl_variant="V1")
+        v2_trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
+                                     trend_filter_enabled=False, addon_sl_variant="V2")
+        v0, v1, v2 = be._stats(v0_trades), be._stats(v1_trades), be._stats(v2_trades)
+
+        if any(t.get("addon_applied") for t in v0_trades):
+            any_addon_activity += 1
+        if v1["rr"] > v0["rr"] and v1["total_pnl"] > v0["total_pnl"]:
+            v1_strict_wins += 1
+        if v2["rr"] > v0["rr"] and v2["total_pnl"] > v0["total_pnl"]:
+            v2_strict_wins += 1
+        if v1["total_pnl"] > v0["total_pnl"]:
+            v1_pnl_wins += 1
+        if v2["total_pnl"] > v0["total_pnl"]:
+            v2_pnl_wins += 1
+
+    # Sanity: under production VR every one of the 6 windows has real addon
+    # activity (measured 2026-09-10: 12-56 fills each) — if this drops, the analysis
+    # is silently measuring less than it claims to again (the stale-VR-params bug
+    # this test was corrected for hid exactly this).
+    assert any_addon_activity == 6, (
+        f"only {any_addon_activity}/6 windows had any addon activity — the analysis "
+        "may be running under a VR configuration that starves HIGH_RISK_ADD signals"
+    )
+
+    # Exact lock-in, not "< 5" — a change from 3/6 to e.g. 4/6 would silently pass a
+    # "< 5" check while still being a real, worth-noticing shift in the analysis.
+    assert v1_strict_wins == 3, f"V1's strict-gate win count changed ({v1_strict_wins}/6, was 3/6) — re-read this test's docstring"
+    assert v2_strict_wins == 3, f"V2's strict-gate win count changed ({v2_strict_wins}/6, was 3/6) — re-read this test's docstring"
+    # Locks in the softer PnL-only signal too, so it stays visible rather than
+    # silently regressing without anyone noticing — this is documentation, not a
+    # deployment gate.
+    assert v1_pnl_wins == 5, f"V1's total_pnl-only signal changed ({v1_pnl_wins}/6, was 5/6) — re-read this test's docstring"
+    assert v2_pnl_wins == 4, f"V2's total_pnl-only signal changed ({v2_pnl_wins}/6, was 4/6) — re-read this test's docstring"
 
 
 # ── Midline Partial TP (PLAN-009 v2) harness support ──
