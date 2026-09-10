@@ -186,6 +186,33 @@ def test_reconciliation_v2_addon_position_far_from_trigger_is_not_stop_out(temp_
     assert state_mgr.record_trade.call_args[1]["is_stop_loss"] is False
 
 
+def test_reconciliation_v2_addon_position_classified_by_base_entry_price_long(temp_db: LoggerDB):
+    """LONG mirror of the canonical SHORT test above — all existing V2 addon
+    tests were SHORT-only (independent review, round 3); this closes that gap."""
+    daemon, state_mgr = _make_daemon(temp_db)
+
+    # base opened at 100.0; an addon later averaged the live position UP to 100.30
+    # (LONG addon fills higher, pyramiding into a favorable move) — base_entry_price
+    # must stay pinned at 100.0.
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="long", contracts=26.0, entry_price=100.0, last_price=100.0,
+    )
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="long", contracts=37.0, entry_price=100.30, last_price=100.30,
+    )
+    temp_db.record_addon("BTC/USDC", "long")
+
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=98.0,  # 100.0 * 0.98
+    )
+
+    state_mgr.record_trade.assert_called_once()
+    kwargs = state_mgr.record_trade.call_args[1]
+    assert kwargs["is_stop_loss"] is True
+    assert kwargs["sl_percent"] == pytest.approx(0.02, abs=1e-6)
+    assert kwargs["pnl_percent"] == pytest.approx((98.0 - 100.30) / 100.30, abs=1e-6)
+
+
 def test_reconciliation_without_addon_uses_base_threshold(temp_db: LoggerDB):
     """Regression guard: a position with no addon at all — base_entry_price ==
     avgPx (never averaged), so this is unchanged from pre-V2 behavior. A loss
@@ -282,12 +309,17 @@ def test_reconciliation_v2_daemon_fallback_when_snapshot_missing_base_entry_pric
 
 def test_update_addon_sl_trigger_price_syncs_ledger_without_touching_count(temp_db: LoggerDB):
     """
-    P3: the Self-Healing SL Guard re-attaches an addon-carrying position's SL
-    anchored to avgPx, not the original addon fill price — daemon.py syncs the
-    ledger's trigger price to match via _update_addon_sl_trigger_price so a later
-    reconciliation classifies against what OKX actually now holds. This must only
-    update the price, never the addon count (that would silently permit another
-    add past the Single Addon Guard).
+    Direct unit test of logger_db's set_addon_sl_trigger_price/get_addon_sl_trigger_price
+    plus daemon._update_addon_sl_trigger_price, independent of any caller.
+
+    P3 V2 (2026-09-10, independent review round 3): this mechanism (the addon
+    composite-trigger ledger from P3 rounds 1-2) is superseded — the Self-Healing
+    SL Guard no longer calls _update_addon_sl_trigger_price, and reconcile_positions
+    no longer reads this value at all (both now use base_entry_price
+    unconditionally, see reconcile_positions/the Self-Healing Guard). The method
+    itself still works correctly (verified here) and is left in place for schema/
+    backward-compat safety on rows written before V2, but nothing in the live
+    code path calls it anymore.
     """
     daemon, _ = _make_daemon(temp_db)
 
