@@ -4,6 +4,28 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.44.5] - 2026-09-10
+
+### 📊 Sesja A1+A2: Fee Calibration from Production + Epoch-Scoped KPIs
+- 🔎 **A1 — `ROUND_TRIP_FEE_PCT` calibrated from real production data** (audit
+  P2(c) point 3, never previously done): measured `SUM(fee_usd) / SUM(notional)`
+  over 52 real closed trades (2026-08-30..2026-09-10, the window with real
+  per-trade `fee_usd`) → `0.0010003`, confirming the prior assumption
+  (`TAKER_FEE_PCT * 2`) to within 0.03% relative. The constant is now traceable to
+  a production measurement instead of another constant's assumption. Re-ran the
+  P2 regression gate under the calibrated rate — no verdict flipped (Midline TP
+  still loses 6/6, high-vol base filter still wins in exactly BTC_H2/ETH_H2).
+- 🎯 **A2 — KPIs scoped to `data_collection_epoch_start`**: `LoggerDB.get_kpi_summary()`
+  gained an optional `since` filter so win rate, profit factor, fees, R:R and the
+  drawdown curve can all be computed only over the current trading regime, not
+  diluted by pre-P2/P3/PLAN-011 history. `/api/v1/stats` (and its `/stats/pnl`
+  alias) now carries a `since_epoch` block alongside the unchanged all-time
+  figures — fully additive, no existing field or endpoint touched.
+- 🧪 11 new tests (1 for A1's calibration lock, 10 in new `tests/test_epoch_kpi.py`
+  for A2). Full suite: **340/340 PASS**.
+
+---
+
 ## 🚀 [0.44.4] - 2026-09-10
 
 ### 🧹 P3 Follow-up: Dead Code Cleanup + High-Risk-Add Endpoint Consistency
