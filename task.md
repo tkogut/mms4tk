@@ -601,5 +601,177 @@ NIE przeszło niezależnej recenzji** — to duża zmiana architektoniczna
 przed PR-em. Otwarte, nie zaczęte: A/B `engine_mode` CLASSIC-vs-ADAPTIVE, P4
 wariant #2, P6.2 (patrz sekcja wyżej). Ten dokument wymaga też jednorazowego
 porządkowania (kolejność sekcji nie odpowiada kolejności etapów — Etap 1 → Etap
-3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4 — bo tak scaliły się branch'e; treść jest
+3cz.2 → Etap 2 → Etap 3cz.1 → Etap 4 → Etap 5 — bo tak scaliły się branch'e; treść jest
 poprawna, tylko kolejność wizualna nielogiczna).
+
+---
+
+## 🔹 Etap 5: Raport strategiczny (Opus) — czy w ogóle zarabiamy, co dalej
+
+### 📊 Rekomendacja strategiczna (2026-09-10) — zlecona po pytaniu usera "chcę w końcu zarabiać"
+
+Niezależny doradca (Opus, nowa tura tej samej sesji, zero zmian w repo — czyste
+zadanie analityczne) dostał zadanie: ocenić rentowność strategii i
+spriorytetyzować pozostałe tickety audytu (A/B `engine_mode`, P4#2, P6.2, P5, P8)
+pod kątem realnego wpływu na PnL. Metodologia: backtest na 90-dniowych fixture'ach
+(2026-05-30 → 2026-08-28), produkcyjna konfiguracja, netto z modelem P2 (wtedy
+jeszcze niekalibrowanym z produkcji — patrz Etap 5, sekcja A1 niżej).
+
+**Werdykt:** strategia **nie ma dziś wykazanego edge'a** — problem strukturalny
+(koszty ≈ zysk brutto), nie brak danych. Atrybucja PnL po typie wyjścia: cały
+edge siedzi w `TP_AND_FLIP` (dotknięcie przeciwnej wstęgi, +1,25%/txn, tylko 13%
+zdarzeń); 75% aktywności (Inactivity: `FORCE_CLOSE`+`STALE_SPLIT_50`) generuje
+gross dodatni ale **netto ujemny** po kosztach. Koszt = 94% grossu na BTC. Moc
+statystyczna: żeby wykazać istotność dzisiejszego "edge'a" na BTC (t=2) trzeba
+**~7000 transakcji ≈ 9 lat** przy obecnej częstotliwości (~2/dzień/symbol) — stąd
+Etap 5 sekcja A3 (długa historia) niżej.
+
+**Ważne zastrzeżenie usera, przyjęte:** doradca w pierwszej wersji wliczył koszt
+utrzymania VPS do rachunku rentowności — **odrzucone jako błędna rama**, bo ten
+VPS hostuje kilkanaście niezwiązanych projektów (n8n×3, budzet-*,
+portfolio-sentinel, hermes-agent, osint-lead-tracker, linkedin_tracker_app) —
+przypisanie mu pełnego kosztu do PnL mms4tk to nie jest analiza kosztu
+krańcowego. Reszta wniosków (poniżej) nie zależy od tego punktu i zostaje w mocy.
+
+**Trzy tickety zmierzone i zamykane teraz** (patrz sekcje niżej, każdy z
+konkretnymi liczbami z tego pomiaru):
+
+#### ✅ ZAMKNIĘTE — A/B `engine_mode` CLASSIC-vs-ADAPTIVE: brak sygnału
+
+6 okien (BTC/ETH × H1/H2/full), produkcyjne VR 1.6/0.8, netto:
+
+| okno | CLASSIC | ADAPTIVE | ratio | txn C→A |
+|---|---|---|---|---|
+| BTC_H1 | +4,55% | −1,84% | −0,41 | 83→80 |
+| BTC_H2 | +2,16% | +4,62% | 2,14 | 101→92 |
+| **BTC_full** | **+4,73%** | **+0,81%** | **5,84** | 189→177 |
+| ETH_H1 | −3,78% | −6,73% | 1,78 | 98→96 |
+| ETH_H2 | −4,37% | −3,09% | 0,71 | 81→74 |
+| ETH_full | −6,27% | −7,95% | 1,27 | 183→174 |
+
+Liczba "5,8× na BTC_full" (z pamięci usera) się zgadza co do wartości —
+**ale znak jest odwrócony**: to CLASSIC jest 5,8× lepszy od ADAPTIVE, nie
+odwrotnie, a produkcja stoi na ADAPTIVE. **Mimo to NIE przełączać na CLASSIC** —
+`ADAPTIVE` różni się mechanicznie tylko blokadą ~6% wejść (177 vs 189 txn na
+BTC), więc krotność 5,8× to artefakt dzielenia dwóch liczb bliskich zeru przy
+90% CI ±20pp (pkt Etap 5/A3 niżej — te CI zawężą się po długiej historii).
+CLASSIC ≥ ADAPTIVE w 4/6 okien netto i 5/6 na R:R — kierunkowo spójne, ale
+całkowicie w szumie przy obecnej ilości danych. **Status: zamknięte jako
+"zmierzone, brak rozstrzygającego sygnału". Produkcja zostaje na `ADAPTIVE`.**
+Do ponownego sprawdzenia dopiero po Etapie 5/A3 (długa historia), nie wcześniej.
+
+#### ✅ ZAMKNIĘTE — P4 wariant #2 (SL per-symbol): hipoteza SFALSYFIKOWANA
+
+Siatka `base_sl_pct` ∈ {1.5, 2.0, 2.5, 3.0, 3.5}%, netto, 2 połowy OOS + full:
+
+| SL% | BTC full | ETH H1 | ETH H2 | **ETH full** | ETH SL-exits |
+|---|---|---|---|---|---|
+| 1,5 | −3,08% | +1,16% | −13,22% | −12,63% | 37 |
+| **2,0 (dziś)** | **+0,81%** | −6,73% | −3,09% | **−7,95%** | 26 |
+| 2,5 | +2,50% | −8,96% | −7,28% | −13,90% | 24 |
+| 3,0 | +1,44% | −10,41% | −7,11% | −14,73% | 23 |
+| 3,5 | +0,52% | −10,51% | −9,09% | −16,37% | 20 |
+
+**Na ETH poszerzanie SL monotonicznie pogarsza wynik netto w OBU połowach OOS
+niezależnie** (H1: −6,73→−10,51; H2: −3,09→−9,09), mimo malejącej liczby
+stop-outów (26→20) — mechanizm: szerszy stop nie zamienia SL w `TP_AND_FLIP`,
+tylko utrzymuje przegrane pozycje dłużej, żeby przegrały więcej. Pomiar
+`P4-krok-0` (SL/ATR: 2,98 ETH vs 4,02 BTC) był poprawny jako pomiar, ale
+**hipoteza przyczynowa (szerszy SL na ETH pomoże) się nie potwierdza** — ten sam
+wzorzec co Midline TP: sensowna arytmetyka, empirycznie szkodliwa. Na BTC 2,0-2,5%
+to płaskowyż bez wyraźnej przewagi. **Status: ODRZUCONE. `base_sl_pct=2.0%`
+zostaje niezmienione dla obu symboli. Wariant #3 (`SL=k·ATR`) tym bardziej nie ma
+podstaw i nie jest rekomendowany.**
+
+#### ✅ ZAMKNIĘTE — P6.2 (dobór progów Inactivity): efekt zerowy
+
+Ablacja na pełnych 90 dniach, netto (baseline = produkcja: stale=12, impulse
+negation on, profit stall gate on):
+
+| wariant | BTC net | ETH net |
+|---|---|---|
+| **produkcja** | **+0,81%** | **−7,95%** |
+| `stale=6` | −0,41% | −6,38% |
+| `stale=24` | −0,11% | −8,03% |
+| `stale=48` | −0,11% | −7,99% |
+| bez negacji impulsu | +15,37% | **−18,26%** |
+| INACTIVITY OFF (całkowicie) | +0,66% | −32,97% |
+
+`stale_candles_threshold` (6/12/24/48) nie ma znaczenia — rozrzut 1-2pp przy CI
+±20pp z jednego okna. Negacja impulsu daje **przeciwne znaki** na BTC (+15,4pp)
+i ETH (−18,3pp) — największy efekt w całej ablacji i klasyczny podpis
+przeuczenia na pojedynczym oknie — **nie ruszać**. Argument z audytu §1.8 (próg
+12 świec płaci 2 naliczenia fundingu) jest arytmetycznie prawdziwy, ale funding
+to tylko 1,53% z 12,37% kosztu na BTC — nie ten kanał. **Status: ODRZUCONE, nie
+uruchamiać siatki kalibracyjnej 5×3×2 z 2-way OOS dla efektu, którego nie da się
+zmierzyć na tej ilości danych.**
+
+#### 🔜 Odłożone (nie odrzucone) — czeka na długą historię (Etap 5/A3)
+
+- **P5 (`volatility_zone`)** — dobra hipoteza, zła metoda dowodowa: 2-tygodniowy
+  termin z audytu daje ~19 txn/strefę, za mało żeby cokolwiek rozstrzygnąć.
+  Logowanie (prerekwizyt P9.4) zostaje włączone, ale bramka decyzyjna przenosi
+  się na długą historię.
+- **P8 (sesyjność)** — siatka 5 dni × 24h przy obecnej częstotliwości daje ~1
+  txn/komórkę; bramka "≥30 txn/komórkę" z audytu wymaga ~3600 transakcji ≈ 2,5
+  roku. Niewykonalne na obecnych danych, automatycznie odblokowuje się po
+  Etapie 5/A3 (patrz tam dokładne przeliczenie). Kalendarz makro (CPI/FOMC)
+  odrzucony jako osobna zależność operacyjna nieuzasadniona przy alokacji $100.
+
+#### 🆕 Nowe priorytety, których audyt nie miał (ważniejsze niż jego oryginalna lista)
+
+1. **Kalibracja realnej stawki prowizji z produkcji** (P2(c) punkt 3, nigdy
+   niezrealizowany) — ✅ zrobione, patrz sekcja "Sesja A1+A2" wyżej.
+2. **KPI netto liczone od epoki** (`data_collection_epoch_start` istnieje w
+   schemacie, nigdy nieużywane do filtrowania `get_kpi_summary()`) — dzisiejszy
+   dashboardowy "39% winrate" miesza dane sprzed napraw P2/P3. ✅ zrobione, patrz
+   sekcja "Sesja A1+A2" wyżej.
+3. **Egzekucja 100% `market`/taker, zero `postOnly`/maker** (`okx_executor.py`,
+   `execute_order` + zamknięcia) — przeliczenie tej samej populacji transakcji na
+   stawkę maker (0,02% vs dzisiejsze 0,05%/leg taker) daje **BTC netto +0,81% →
+   +7,31%**. Jedyna dźwignia w projekcie działająca deterministycznie (arytmetyka
+   kosztu, nie hipoteza rynkowa) — kandydat do PoC w Etapie 6 (Sesja B), po
+   domknięciu Etapu 5.
+4. **ETH nie wykazał edge'a w ~30 zmierzonych konfiguracjach** (wszystkie
+   powyższe tabele + dodatkowy test timeframe 2h/4h, negatywny, patrz niżej) —
+   kandydat do zawieszenia w Etapie 6 (Sesja B), warunkowany wynikiem długiej
+   historii.
+5. Przy $100 kapitału realna skala projektu to dziś platforma R&D/harness
+   poprawnościowy, nie źródło dochodu — sam ten fakt nie blokuje pracy, ale
+   uczciwie ramuje oczekiwania na obecnym etapie skali.
+
+**Sprawdzone i odrzucone przy okazji (negatywny wynik, zapisany żeby nikt nie
+proponował tego ponownie):** zmiana interwału świec 1h→2h/4h — średni ruch na
+transakcję faktycznie rośnie zgodnie z hipotezą, ale stosunek SL:TP_flip psuje
+się drastycznie na wyższych TF (BTC 4h: 16 SL na 9 TP vs 1h: 22 SL na 23 TP) →
+gross się załamuje na obu symbolach. Nie realizować.
+
+### Sesja A — status
+
+- **✅ A1 + A2 DONE, zmergowane (PR #34, `09dc681`, v0.44.5).** Zlecone agentowi
+  Opus, przejrzane przeze mnie samodzielnie (diff + niezależne ponowne
+  uruchomienie 340 szybkich testów + 2 wolnych testów regresji P2, oba PASS) —
+  bez dodatkowej pełnej rundy adwersarialnej (niskie ryzyko: zmiana czysto
+  addytywna, nie dotyka egzekucji zleceń). Wyniki: `ROUND_TRIP_FEE_PCT` = pomiar
+  z produkcji, 0.0010003 (potwierdza starą wartość ±0.03%), żaden werdykt P2 się
+  nie odwrócił; `since_epoch` w `/api/v1/stats`. Szczegóły: sekcja "Sesja A1+A2"
+  wyżej w tym dokumencie.
+- **🔜 A3 w trakcie** (worktree `chore/session-a3-long-history-fixtures`): budowa
+  24-miesięcznej historii 1h (BTC/ETH) przez produkcyjną
+  `OKXExecutor.fetch_candles_paginated` (publiczne API OKX, potwierdzony
+  bezpośredni dostęp do internetu z tego środowiska), nowe fixture'y
+  `ohlcv_{BTC,ETH}_USDC_1h_24m.csv`, stare zostają nietknięte. **Wynik do
+  uzupełnienia po przeglądzie.**
+- **✅ A4 (ten wpis) DONE** — zamknięcie 3 ticketów powyżej.
+
+Po przeglądzie A1-A3 (przez nadrzędną sesję, nie automatycznie) — Sesja B:
+zawieszenie ETH (warunkowane wynikiem A3), PoC egzekucji maker-first (z twardą
+bramką rollbacku: fill-rate &lt;80% = natychmiastowy powrót do `market`), powtórka
+całej ablacji na długiej historii ze skalibrowaną stawką z A1.
+
+### Czego świadomie NIE robić teraz
+
+Nie ruszać progów Inactivity, `engine_mode`, `base_sl_pct`, nie budować filtra
+sesyjnego, nie skalować alokacji, nie wracać do Midline TP ani high-vol filtra
+(dopóki A1 nie odwróci ich werdyktu — jeśli odwróci, to osobny, ważny temat, nie
+cichy fakt do zignorowania).
