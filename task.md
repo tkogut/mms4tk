@@ -1425,3 +1425,179 @@ sesyjnego, nie skalować alokacji, nie wracać do Midline TP ani high-vol filtra
 cichy fakt do zignorowania). **Nowe, po Fazie 2:** nie traktować dotychczasowego
 odrzucenia filtra trendu (TMA slope) jako ostatecznego — było mierzone tylko na
 niereprezentatywnym 90-dniowym oknie, patrz sanity-check wyżej.
+
+---
+
+## 🔹 Faza 3.2 (2026-09-11) — H4 directional-bias gate (model asynchronicznego nadzoru Hermes)
+
+Worktree/branch: `chore/phase3-2-htf-directional-bias-gate`. **To NIE jest**
+`tma_trend_filter_enabled` (ten sam interwał co sygnały, próg nachylenia 0.002,
+blokuje pojedyncze kontr-trendowe wejścia — już rozstrzygnięty osobno, nietknięty
+w tej sesji). To nowy, wyższy poziom bramki: wyższa rama czasowa (H4), oparta o
+pozycję ceny względem wstęg TMA (nie surowe nachylenie), egzekwowana przez
+istniejący mechanizm `directional_bias` (`state_manager.StrategyProfile`,
+dziś ustawiany ręcznie przez Hermesa przez API) — hipoteza: mógłby (opcjonalnie)
+być ustawiany automatycznie z sygnału H4.
+
+### Weryfikacja stanu kodu (przed implementacją, zgodnie ze zleceniem)
+
+- `HigherTimeframeAnalytics.calculate_higher_tf` — `src/mms4tk/analytics.py:690-790`
+  (nie 683-780 jak w zleceniu, przesunięcie o kilka linii, treść zgodna). Liczy
+  `h4_tma_position` ∈ {"ABOVE","BELOW","INSIDE"} z `curr_h4.close` vs
+  `upper_band`/`lower_band` z `TMAIndicator.calculate(candles_h4, params)` —
+  potwierdzone: to pozycja ceny względem wstęg, NIE nachylenie TMA.
+- Osobne pole nachylenia (`tma_slope`, `pct_change(periods=tma_slope_lookback)`)
+  istnieje w `analytics.py:250` (nie ~245-260, ale ten sam wzór) — liczone WYŁĄCZNIE
+  na interwale sygnałów (H1), NIE na H4/D1. `calculate_higher_tf` nie liczy żadnego
+  H4/D1 nachylenia — potwierdza, że trzeba je policzyć analogicznie (zrobione,
+  patrz niżej), a nie że już istnieje gdzieś ukryte.
+- `directional_bias` (`BOTH`/`LONG_ONLY`/`SHORT_ONLY`/`FLAT`) — `state_manager.py:86`
+  (`StrategyProfile`), egzekwowany w `analytics.py:353-387` (`filter_bias()` wewnątrz
+  `evaluate_signals`, blokuje `BASE_SHORT`/`HIGH_RISK_ADD_SHORT` pod `LONG_ONLY`,
+  odwrotnie pod `SHORT_ONLY`, wszystko pod `FLAT`) — numeracja zgodna ze zleceniem.
+  Ustawiany dziś wyłącznie ręcznie przez `api.py:824-840` (endpoint profilu) i
+  `hermes_tools.py:191-197,251-253` (opis narzędzia dla Hermesa). Potwierdzone: nie
+  ma dziś żadnej automatycznej ścieżki H4→`directional_bias`.
+
+### Implementacja harnessu (backtest_engine.py)
+
+Nowy opcjonalny parametr `run_backtest(..., htf_directional_gate_enabled: bool =
+False)`. Gdy włączony:
+
+1. `_h4_bucket_ids()` grupuje te same świece H1 co reszta backtestu w kubełki 4h
+   wyrównane do zegara UTC (00/04/08/12/16/20 — standardowe wyrównanie giełdowych
+   świec 4h), wyłącznie na podstawie własnego timestampu każdej świecy — przyczynowo
+   z definicji.
+2. `_build_h4_candles()` agreguje OHLC per kubełek. Świeca kubełka, który już się
+   zamknął, jest identyczna niezależnie od tego, ile świec z przyszłych kubełków
+   dojdzie później do listy — zweryfikowane testem
+   (`test_build_h4_candles_no_lookahead_into_future_buckets`).
+3. `_htf_directional_bias_series()` liczy `TMAIndicator.calculate()` na całej
+   serii H4 RAZ (ten sam wzorzec co istniejący `full_df`/`tma_slope` prekompute dla
+   H1), tymi samymi `params` co produkcyjny `calculate_higher_tf` (więc
+   `tma_length`/`atr_period`/`atr_mult` identyczne). Dla świecy H1 w kubełku `b`
+   bias czytany jest z kubełka `b-1` — ostatniego kubełka gwarantowanie zamkniętego
+   PRZED rozpoczęciem `b` — bez data leakage z przyszłości (zamiast pojedynczej
+   "obrony" `use_closed_candles=True` z produkcji, tu cała marża to jeden pełny
+   kubełek).
+4. W pętli `run_backtest`, przed `engine.evaluate_signals()`: `sm.strategy_profile.
+   directional_bias = bias_series[i]` — bezpośrednia mutacja pola `StrategyProfile`
+   (bez `update_strategy_profile()`, więc zero zapisów do `logger_db`, które i tak
+   jest `None` w backteście). "ABOVE" → `LONG_ONLY` (blokuje nowe SHORT), "BELOW" →
+   `SHORT_ONLY`, "INSIDE"/brak historii → `BOTH` (bez zmian, zgodnie ze zleceniem).
+
+**12 nowych testów** (`tests/test_htf_directional_gate.py`): resampling
+(wyrównanie do granic UTC, agregacja OHLC, brak lookaheadu), derywacja bias
+(warmup→BOTH, no-lookahead na realnych danych, syntetyczny rajd wymusza
+LONG_ONLY/SHORT_ONLY), integracja z `run_backtest` (default off = bit-identyczne
+z jawnym `False`, gate faktycznie zmienia/redukuje transakcje, blokuje SHORT w
+trakcie syntetycznego uptrendu i LONG w downtrendzie, `BOTH` w range → identyczne
+transakcje on/off, nie rusza `tma_trend_filter_enabled`).
+
+### Metodologia pomiaru (Faza 2a/2b, bez zmian)
+
+`scripts/htf_directional_gate_analysis.py` (analogiczny do
+`ab_engine_mode_analysis.py`/`sl_grid_analysis.py`): `ohlcv_{BTC,ETH}_USDT_1h_
+swap_24m.csv` (730 d proxy), 5 kolejnych nienachodzących okien 122 d na symbol,
+`engine_mode=ADAPTIVE`, VR **1.6/0.8**, `stale_candles_threshold=12`, filtr
+trendu (same-interval, `tma_trend_filter_enabled`) **OFF** — nietknięty temat —
+`addon_sl_variant` = default (**V2**, produkcja), netto wg P2 ze skalibrowaną
+`ROUND_TRIP_FEE_PCT=0.0010003` (A1) + funding.
+
+### Wyniki — 10 niezależnych okien 122-dniowych, GATE OFF vs GATE ON
+
+| okno | zakres (UTC) | OFF | ON | Δ (ON−OFF) pp | OFF R:R | ON R:R | txn OFF→ON | SL OFF→ON | L/S OFF→ON |
+|---|---|---|---|---|---|---|---|---|---|
+| BTC_W1 | 2024-09-10..2025-01-10 | −28,84% | −25,93% | **+2,90** | 0,8274 | 0,9538 | 173→118 | 32→26 | 81/92→61/57 |
+| BTC_W2 | 2025-01-10..2025-05-12 | −33,43% | −26,15% | **+7,28** | 0,7204 | 0,5873 | 200→170 | 47→34 | 100/100→82/88 |
+| BTC_W3 | 2025-05-12..2025-09-11 | −20,35% | −14,76% | **+5,59** | 1,0727 | 1,1828 | 211→159 | 17→14 | 103/108→79/80 |
+| BTC_W4 | 2025-09-11..2026-01-11 | +1,13% | +5,08% | **+3,95** | 1,3668 | 1,3598 | 209→160 | 27→20 | 110/99→86/74 |
+| BTC_W5 | 2026-01-11..2026-05-13 | −22,83% | −19,21% | **+3,63** | 0,6609 | 0,6674 | 175→130 | 30→25 | 89/86→68/62 |
+| ETH_W1 | 2024-09-10..2025-01-10 | −15,72% | −7,54% | **+8,18** | 0,7531 | 0,8354 | 227→156 | 46→28 | 97/130→66/90 |
+| ETH_W2 | 2025-01-10..2025-05-12 | −14,38% | −7,29% | **+7,09** | 0,9408 | 1,0148 | 237→193 | 59→43 | 135/102→114/79 |
+| ETH_W3 | 2025-05-12..2025-09-11 | −45,09% | −34,11% | **+10,98** | 0,7570 | 0,8233 | 279→213 | 49→31 | 126/153→114/99 |
+| ETH_W4 | 2025-09-11..2026-01-11 | −6,19% | −5,06% | **+1,13** | 1,0631 | 0,8975 | 243→181 | 36→26 | 131/112→101/80 |
+| ETH_W5 | 2026-01-11..2026-05-13 | −32,06% | −21,14% | **+10,92** | 0,5318 | 0,5684 | 222→158 | 40→25 | 130/92→82/76 |
+
+**Test istotności (sign test dwustronny + t na różnicach parowanych, wzorzec
+identyczny jak Faza 2a):**
+
+| populacja | ON>OFF pnl | p (znaki) | mean Δ netto | t | ON>OFF R:R | p (znaki) | mean Δ R:R |
+|---|---|---|---|---|---|---|---|
+| BTC (n=5) | **5/5** | 0,0625 | +4,671 pp | +5,939 | 3/5 | 1,0000 | +0,0206 |
+| ETH (n=5) | **5/5** | 0,0625 | +7,658 pp | +4,252 | 4/5 | 0,3750 | +0,0187 |
+| **BTC+ETH (n=10)** | **10/10** | **0,0020** | **+6,165 pp** | **+5,862** | 7/10 | 0,3438 | +0,0197 |
+
+Pooled (suma okien): **BTC** OFF −104,33% → ON **−80,97%**; **ETH** OFF −113,44%
+→ ON **−75,15%**; **BTC+ETH** OFF −217,76% → ON **−156,12%**. Mechanizm zgodny z
+hipotezą: bramka redukuje liczbę transakcji o **~24-25%** w obu symbolach (BTC
+2176→1638 txn łącznie w oknach objętych bramką, ETH 1208→901) i liczbę SL-exitów
+o **22-33%** (BTC 383→272, ETH 230→153) — dokładnie tak, jak przewiduje hipoteza:
+mniej kontr-trendowych wejść pod prąd → mniej stopów.
+
+**BTC_W1 (rajd +64%, hipoteza z zadania):** delta **+2,90 pp** — pozytywna, ale
+**najmniejsza** w całej BTC-owej piątce (BTC_W2/W3 mają większy efekt bezwzględny),
+mimo że to okno miało najsilniejszy, najbardziej jednokierunkowy trend w całym
+zbiorze danych (patrz sanity-check Fazy 2 wyżej: +64,4% w oknie, max intra-window
+drawdown tylko 15,1%). To NIE obala hipotezy (kierunek zgodny, efekt realny), ale
+uczciwie: hipoteza "bramka pomoże NAJBARDZIEJ tam, gdzie strategia dziś najbardziej
+krwawi" nie potwierdza się dosłownie w rankingu — silniejszy efekt bezwzględny
+widać w oknach z więcej niż jedną zmianą reżimu (rajd + odwrócenie), gdzie bramka
+łapie WIĘCEJ przełączeń LONG_ONLY↔SHORT_ONLY, niż w jednym, gładkim, jednokierunkowym
+rajdzie.
+
+### Spójność (standard Fazy 2b)
+
+- **Kierunek (pnl netto): 10/10 okien pozytywne**, sign test p=0,0020 — to
+  najsilniejszy, najbardziej spójny sygnał ze wszystkich hipotez zmierzonych w tym
+  dokumencie (dla porównania: A/B `engine_mode` 4/10, `base_sl_pct` grid najlepiej
+  5/12). Żadne pojedyncze okno nie psuje obrazu.
+- **BTC vs ETH osobno: 5/5 i 5/5** — efekt nie jest specyficzny dla jednego
+  symbolu.
+- **R:R: 7/10 pozytywne** — słabszy, ale niesprzeczny sygnał. Tam gdzie R:R się
+  pogarsza (BTC_W2 0,7204→0,5873, ETH_W4 1,0631→0,8975), pnl netto i tak rośnie, a
+  liczba SL-exitów spada RÓWNIEŻ w tych oknach (BTC_W2 47→34, ETH_W4 36→26) — inny
+  wzorzec niż ostrzeżenie z Fazy 2b ("1,5% R:R kłamie", tam SL-exity ROSŁY przy
+  lepszym R:R). Tutaj oba spadają razem — spójne z mechanizmem "mniej wejść pod
+  prąd", nie z zacieśnieniem stopu.
+- **Uczciwe zastrzeżenie:** strategia pod GATE ON pozostaje **głęboko ujemna w
+  wartościach bezwzględnych** (BTC pooled −80,97%, ETH −75,15% na 5 okien/730 dni)
+  — bramka **redukuje straty o ~25-30%, nie odwraca ich na plus**. To zgodne z
+  głównym wnioskiem Etapu 5 ("brak wykazanego edge'a") — ta hipoteza nie zmienia
+  tego wniosku, tylko ogranicza szkody podczas silnych trendów.
+
+### 🟢 WERDYKT: WDROŻYĆ jako opcjonalną flagę produkcyjną (default OFF)
+
+Kryteria ze zlecenia ("jednoznacznie pozytywny i spójny"): **spełnione** — 10/10
+okien pozytywnych na netto (p=0,0020), spójne osobno na BTC i ETH (5/5 każdy),
+mechanizm zweryfikowany (mniej wejść → mniej SL), R:R niesprzeczny (7/10, bez
+degenerowanego wzorca z Fazy 2b). To najsilniejszy, najbardziej jednoznaczny wynik
+w całej historii tego dokumentu. Implementacja produkcyjna (kod przygotowany,
+**NIE wdrożony/deployed** — zgodnie ze zleceniem):
+
+- `IndicatorParams.htf_directional_gate_enabled: bool = False` (analytics.py) —
+  domyślnie wyłączony, per-symbol jak `tma_trend_filter_enabled`.
+- `daemon._get_indicator_params()` czyta go per-symbol-qualified z
+  `system_settings`, ten sam wzorzec `_sym_bool` co reszta filtrów.
+- `daemon.py`: nowa metoda licząca live H4 bias (fetch prawdziwych świec H4 z OKX,
+  `HigherTimeframeAnalytics.calculate_higher_tf`, mapowanie `h4_tma_position` →
+  `LONG_ONLY`/`SHORT_ONLY`/`BOTH`) wywoływana przed `evaluate_signals`, analogicznie
+  do backtestu — **NIE nadpisuje** ręcznie ustawionego `FLAT` (Hermes override
+  zachowuje pierwszeństwo nad automatycznym gate'em).
+- `api.py`/`hermes_tools.py`: pole `htf_directional_gate_enabled` w
+  `AddSymbolRequest`/`_trend_filter_fields`, ten sam wzorzec zapisu do
+  `system_settings` (`set_settings_bulk`) co `tma_trend_filter_enabled`.
+- **NIE wdrożone w tej sesji** — kod produkcyjny (`daemon.py`/`api.py`) do
+  zaimplementowania jako następny krok tej samej sesji, z testami, przed PR-em.
+
+### Odtworzenie
+
+```bash
+PYTHONPATH=src python3 scripts/htf_directional_gate_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv \
+  --window-days 122 --json /tmp/htf_gate_main.json
+```
+
+Zero zmian w istniejącym `tma_trend_filter_enabled`/`trend_filter_enabled` w tej
+sesji — harness (`run_backtest`) i produkcyjny kod docelowy trzymają obie bramki
+jako niezależne, ortogonalne flagi.
