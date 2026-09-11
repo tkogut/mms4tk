@@ -1,0 +1,14 @@
+{
+  "conversation_id": "phase3-4-d1-atr-exhaustion-filter",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/backtest_engine.py",
+    "tests/test_backtest_engine.py",
+    "scripts/d1_exhaustion_filter_analysis.py",
+    "task.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-11T14:14:02Z",
+  "notes": "D1 ATR exhaustion filter (2.5x ATR_D1) measured on 16 independent 122d windows (10 on 730d USDT-swap proxy + 6 control on 384d real USDC), production config (ADAPTIVE, VR 1.6/0.8, addon_sl_variant=V2, calibrated fees). Result: 0/16 windows show ANY change (bit-for-bit identical pnl/rr/txn/addons ON vs OFF) -- threshold flags only 2-7% of days even in BTC's worst trending window (W1, +64% rally), confirmed against both the causal intraday method and the literal production calculate_higher_tf semantics. Verdict: REJECTED, not wired into daemon.py -- HIGH_RISK_ADD execution path unchanged. Full suite: 350 passed, 4 deselected (-m 'not slow')."
+}
