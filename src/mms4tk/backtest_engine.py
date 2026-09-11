@@ -23,6 +23,7 @@ the evidence that justified them):
     every entry being sized as if BASE_MODE never left.
 """
 import asyncio
+import datetime as dt
 import json
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
@@ -239,6 +240,81 @@ def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     return dict(win_rate=win_rate, rr=rr, total_pnl=total_pnl, full_closes=full_closes)
 
 
+def _compute_d1_exhaustion_flags(
+    candles: List[Candle],
+    params: IndicatorParams,
+) -> List[bool]:
+    """Phase 3-4 (task.md, D1 ATR exhaustion filter): a causal, per-H1-candle
+    "the current UTC day is already overextended" flag, one bool per index of
+    `candles`, no lookahead.
+
+    Mirrors `analytics.HigherTimeframeAnalytics.calculate_higher_tf`'s own D1
+    range-vs-ATR_D1 classification (same ATR calc via `TMAIndicator.calculate`,
+    same reference threshold `params.htf_expansion_threshold` = 2.5 — NOT a new
+    number invented for this filter) but adapted for intraday, causal use:
+    production's version only ever looks at the last FULLY CLOSED D1 candle
+    (fine for a read-only Hermes-agent data point), whereas this filter has to
+    gate HIGH_RISK_ADD signals that fire mid-day, so it must decide *before* the
+    day is over.
+
+    Method, for each H1 candle at index i, belonging to calendar day D (UTC):
+      1. `atr_ref` = ATR_D1 computed from all FULLY CLOSED days strictly before
+         D (i.e. the ATR value as of yesterday's close) — this part uses only
+         past days, exactly like the production HTF analytics.
+      2. `running_range` = max(high) - min(low) over day D's H1 candles from
+         the start of the day up to AND INCLUDING candle i only (never later
+         candles in the same day) — the same day-to-date range a live daemon
+         could observe in real time.
+      3. flagged[i] = atr_ref > 0 and running_range >= threshold * atr_ref.
+
+    The first calendar day in `candles` has no prior-day ATR reference and is
+    never flagged (matches this module's existing warmup convention elsewhere).
+    """
+    if not candles:
+        return []
+    ts = [float(c.timestamp) for c in candles]
+    days = [dt.datetime.fromtimestamp(t / 1000.0, tz=dt.timezone.utc).date() for t in ts]
+    df = pd.DataFrame({
+        "day": days, "ts": ts,
+        "open": [c.open for c in candles], "high": [c.high for c in candles],
+        "low": [c.low for c in candles], "close": [c.close for c in candles],
+    })
+
+    daily = df.groupby("day", sort=True).agg(
+        open=("open", "first"), high=("high", "max"),
+        low=("low", "min"), close=("close", "last"), ts=("ts", "first"),
+    ).reset_index()
+    day_order = list(daily["day"])
+    if len(day_order) < 2:
+        return [False] * len(candles)  # no prior day exists anywhere -> no reference ever
+
+    d1_candles = [
+        Candle(timestamp=r.ts, open=r.open, high=r.high, low=r.low, close=r.close)
+        for r in daily.itertuples(index=False)
+    ]
+    d1_df = TMAIndicator.calculate(d1_candles, params)
+    atr_by_day = dict(zip(day_order, d1_df["atr"]))
+    day_index = {d: idx for idx, d in enumerate(day_order)}
+    threshold = float(params.htf_expansion_threshold)
+
+    df["running_high"] = df.groupby("day")["high"].cummax()
+    df["running_low"] = df.groupby("day")["low"].cummin()
+    running_range = df["running_high"] - df["running_low"]
+
+    flags: List[bool] = []
+    for pos, day in enumerate(days):
+        j = day_index[day]
+        if j == 0:
+            flags.append(False)
+            continue
+        atr_ref = atr_by_day.get(day_order[j - 1])
+        if atr_ref is None or pd.isna(atr_ref) or atr_ref <= 0:
+            flags.append(False)
+            continue
+        flags.append(bool(running_range.iloc[pos] >= threshold * atr_ref))
+    return flags
+
+
 def run_backtest(
     symbol: str,
     candles: List[Candle],
@@ -251,6 +327,7 @@ def run_backtest(
     midline_tp_fraction: float = 0.50,
     sl_cooldown_candles: int = 3,
     addon_sl_variant: str = "V2",
+    d1_exhaustion_filter_enabled: bool = False,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -329,9 +406,22 @@ def run_backtest(
     (a determinism fix — one position could otherwise get two different SL prices
     depending on which code path attached last — NOT a PnL optimization), and the
     harness had silently kept modeling the retired V0 mechanism.
+
+    Phase 3-4 (task.md, D1 ATR exhaustion filter, default OFF — measurement only,
+    NOT wired into daemon.py unless/until a backtest proves it clearly positive):
+    when `d1_exhaustion_filter_enabled` is True, a HIGH_RISK_ADD signal is dropped
+    entirely (no addon fills, base position is completely unaffected) on any H1
+    candle whose calendar day's day-to-date high-low range has already exceeded
+    `params.htf_expansion_threshold` (2.5, reused as-is from `analytics.py` —
+    NOT a new number) times the prior day's D1 ATR. See
+    `_compute_d1_exhaustion_flags` for the exact causal method. Only the addon
+    leg is gated — a fresh BASE_LONG/BASE_SHORT entry on an overextended day is
+    untouched, matching the audit's "blocks the 30%-budget High Risk Add pool
+    only" framing.
     """
     if addon_sl_variant not in ("V0", "V1", "V2"):
         raise ValueError(f"addon_sl_variant must be one of V0/V1/V2, got {addon_sl_variant!r}")
+    d1_exhausted = _compute_d1_exhaustion_flags(candles, params) if d1_exhaustion_filter_enabled else None
     sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=None)
     engine = MMS4SignalEngine()
     im = MMS4InactivityManager()
@@ -512,9 +602,11 @@ def run_backtest(
             side = position["side"]
             matching_add = "HIGH_RISK_ADD_LONG" if side == "long" else "HIGH_RISK_ADD_SHORT"
             opposite_signal = "BASE_SHORT" if side == "long" else "BASE_LONG"
+            d1_exhaustion_blocked = bool(d1_exhausted is not None and d1_exhausted[i])
             if (signal.signal_type == matching_add
                     and sm.get_symbol_state(symbol) == MMS4State.BASE_MODE  # addons blocked in SCOUT — daemon.py
-                    and not position.get("addon_done", False)):             # Single Addon Guard, never reset
+                    and not position.get("addon_done", False)                # Single Addon Guard, never reset
+                    and not d1_exhaustion_blocked):                          # Phase 3-4: D1 overextension filter
                 # Weighted-average entry price: an EXPLICIT APPROXIMATION of OKX's
                 # own avgPx merge — production never computes this in code (relies
                 # on the exchange reporting the merged average for the same-side
