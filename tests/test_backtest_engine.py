@@ -12,6 +12,7 @@ import pytest
 
 from mms4tk import backtest_engine as be
 from mms4tk.analytics import Candle, IndicatorParams
+from mms4tk.okx_executor import OKXExecutor
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
@@ -421,14 +422,15 @@ def test_addon_blocked_in_scout_mode(monkeypatch):
     assert scout_close[0]["weight"] == pytest.approx(0.1, abs=0.01)  # pure SCOUT sizing, no addon bump
 
 
-def test_addon_uses_tighter_composite_sl(monkeypatch):
-    """After an addon fires, the position's SL must move to the tighter 1.25%
-    composite threshold, not stay at the original 2% base threshold."""
+def _tight_dip_addon_scenario(monkeypatch, **kwargs):
+    """Base LONG @ 100.0, addon on the next (flat, same-price) candle, then a dip to
+    98.5 — i.e. 1.5% below entry, BETWEEN the legacy composite addon SL (1.25% =>
+    98.75) and the base SL (2% => 98.0). Discriminates "the addon tightened the SL"
+    from "it did not" directly, in a geometry where base_entry_price == avgPx, so the
+    ONLY thing under test is the SL PERCENTAGE, not the anchor."""
     params = IndicatorParams()
     warmup = max(params.tma_length, params.atr_period) + 5 + 2
     candles = _flat_candles(warmup + 10)
-    # 1.5% below entry: BETWEEN the tight addon SL (1.25%) and the base SL (2%) —
-    # discriminates the two thresholds directly.
     candles[warmup + 2] = Candle(timestamp=warmup + 2, open=100.0, high=100.5, low=98.5,
                                   close=100.0, volume=1.0)
     _scripted_engine(monkeypatch, {
@@ -436,14 +438,34 @@ def test_addon_uses_tighter_composite_sl(monkeypatch):
         warmup + 1: "HIGH_RISK_ADD_LONG",
         # candle warmup+2 supplies the price dip; no signal needed there
     })
-    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False, **kwargs)
+    return trades
+
+
+def test_addon_does_not_tighten_sl_under_default(monkeypatch):
+    """P3 V2 (production since 2026-09-10, harness default since 2026-09-11): an
+    addon fill must NOT tighten the position's stop. The addon leg gets no SL of its
+    own and the base algo (`closeFraction="1"`, already covering the enlarged
+    position) is left untouched at base_sl_pct from base_entry_price — so a 1.5% dip,
+    which the retired V0 composite 1.25% stop WOULD have caught, leaves the position
+    open here."""
+    trades = _tight_dip_addon_scenario(monkeypatch)
+    assert not [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+
+
+def test_addon_uses_tighter_composite_sl_under_legacy_v0(monkeypatch):
+    """The pre-P3 mechanism, still reachable explicitly for the P1 analysis: after an
+    addon fires, the SL moves to the tighter 1.25% composite threshold. Same scenario
+    as the test above — the ONLY difference is `addon_sl_variant="V0"`, which is what
+    makes this pair a real discriminator of the default rather than two unrelated
+    assertions."""
+    trades = _tight_dip_addon_scenario(monkeypatch, addon_sl_variant="V0")
     stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
     assert len(stop_losses) == 1
     assert stop_losses[0]["addon_applied"] is True
     # exit_price is the computed SL trigger price (entry * (1 - sl_pct)), not the
-    # candle's raw low. Without the addon's 1.25% composite override this would
-    # never have fired at all: the base 2% SL sits at 98.0, below the candle's
-    # 98.5 low, so only the tighter addon threshold (98.75) is actually crossed.
+    # candle's raw low: 100.0 * (1 - 0.0125) = 98.75.
     assert stop_losses[0]["exit_price"] == pytest.approx(98.75, abs=0.01)
 
 
@@ -457,6 +479,9 @@ def test_addon_uses_tighter_composite_sl(monkeypatch):
 # so exit_price alone discriminates which formula actually fired.
 
 def _addon_sl_variant_scenario(monkeypatch, variant):
+    """`variant=None` means "call run_backtest without the argument at all" — used to
+    prove the DEFAULT equals an explicit variant, not merely that the default exists."""
+    kwargs = {} if variant is None else {"addon_sl_variant": variant}
     params = IndicatorParams()
     warmup = max(params.tma_length, params.atr_period) + 5 + 2
     candles = _flat_candles(warmup + 10)
@@ -469,7 +494,7 @@ def _addon_sl_variant_scenario(monkeypatch, variant):
         warmup + 1: "HIGH_RISK_ADD_LONG",
     })
     trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
-                              trend_filter_enabled=False, addon_sl_variant=variant)
+                              trend_filter_enabled=False, **kwargs)
     stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
     assert len(stop_losses) == 1
     assert stop_losses[0]["addon_applied"] is True
@@ -477,8 +502,8 @@ def _addon_sl_variant_scenario(monkeypatch, variant):
 
 
 def test_addon_sl_variant_v0_is_composite_from_avgpx(monkeypatch):
-    """V0 (current production, also the default): composite 1.25% from the
-    averaged (avgPx=103.0) entry -> 103.0 * 0.9875 = 101.7125."""
+    """V0 (PRE-P3 production, retired 2026-09-10, no longer the default): composite
+    1.25% from the averaged (avgPx=103.0) entry -> 103.0 * 0.9875 = 101.7125."""
     sl = _addon_sl_variant_scenario(monkeypatch, "V0")
     assert sl["exit_price"] == pytest.approx(101.7125, abs=0.01)
 
@@ -496,6 +521,65 @@ def test_addon_sl_variant_v2_stays_pegged_to_original_base_entry(monkeypatch):
     at all, unlike V0/V1."""
     sl = _addon_sl_variant_scenario(monkeypatch, "V2")
     assert sl["exit_price"] == pytest.approx(98.0, abs=0.01)
+
+
+def test_addon_sl_variant_defaults_to_v2_the_live_production_mechanism(monkeypatch):
+    """The DEFAULT must be bit-for-bit identical to explicit V2 (2026-09-11).
+
+    Until this change `run_backtest()` defaulted to V0 — the composite-off-avgPx stop
+    production retired on 2026-09-10 when P3 V2 shipped — so every backtest, the P4 SL
+    grid, the engine_mode A/B and the P1 gate itself measured a mechanism the live
+    system no longer runs. Comparing the no-argument call against an explicit "V2"
+    call (rather than just reading the signature's default) also catches any future
+    branch that reads the variant string somewhere the default doesn't reach."""
+    default_sl = _addon_sl_variant_scenario(monkeypatch, None)
+    explicit_v2 = _addon_sl_variant_scenario(monkeypatch, "V2")
+    assert default_sl == explicit_v2
+    assert default_sl["exit_price"] == pytest.approx(98.0, abs=0.01)  # NOT V0's 101.7125
+
+
+@pytest.mark.parametrize("side,signal", [("long", "BASE_LONG"), ("short", "BASE_SHORT")])
+def test_default_variant_sl_price_matches_production_formula_exactly(monkeypatch, side, signal):
+    """Fidelity lock: the harness's own stop trigger under the default variant must
+    equal what production actually places on OKX for the same position — the SHARED
+    production formula `OKXExecutor._compute_sl_trigger_price(pos_side, ref, pct)`
+    evaluated at `ref = base_entry_price` (daemon's `_base_entry_price()`, pinned at
+    the position's first snapshot and never moved by addon averaging) and
+    `pct = base_sl_pct` (daemon's `MMS4_BASE_SL_PCT`, default 0.02 == BASE_SL_PCT here).
+
+    That is the one anchor production uses in all three places after P3 V2:
+    `reconcile_positions` (stop-out classification), the Self-Healing SL Guard and the
+    Midline-TP re-attach — while the HIGH_RISK_ADD branch attaches nothing at all
+    (`execute_order(..., stop_loss_pct=0.0, ...)`). Asserting against the imported
+    production function, not a copied literal, is what makes this a 1:1 check."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    # Addon fills 10% AWAY from the base entry, so avgPx (103.0 long / 97.0 short)
+    # differs from base_entry_price (100.0): if the harness ever anchored to avgPx
+    # again, the expected price below could not match.
+    # The addon candle must move only in the position's FAVOUR — a wick through the
+    # base stop here would close the position before the addon signal is even read.
+    addon_close = 110.0 if side == "long" else 90.0
+    candles[warmup + 1] = Candle(
+        timestamp=warmup + 1, open=100.0,
+        high=110.5 if side == "long" else 100.5,
+        low=99.5 if side == "long" else 89.5,
+        close=addon_close, volume=1.0)
+    candles[warmup + 2] = Candle(timestamp=warmup + 2, open=addon_close, high=120.0, low=80.0,
+                                  close=addon_close, volume=1.0)  # deep both ways: triggers either side
+    _scripted_engine(monkeypatch, {
+        warmup: signal,
+        warmup + 1: "HIGH_RISK_ADD_LONG" if side == "long" else "HIGH_RISK_ADD_SHORT",
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False)
+    stop_losses = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(stop_losses) == 1
+    assert stop_losses[0]["addon_applied"] is True
+
+    expected = OKXExecutor._compute_sl_trigger_price(side, 100.0, be.BASE_SL_PCT)
+    assert stop_losses[0]["exit_price"] == pytest.approx(expected, abs=1e-9)
 
 
 def test_run_backtest_rejects_unknown_addon_sl_variant():
