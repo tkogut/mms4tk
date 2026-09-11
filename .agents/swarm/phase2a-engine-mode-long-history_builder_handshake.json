@@ -1,0 +1,12 @@
+{
+  "conversation_id": "phase2a-engine-mode-long-history",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "scripts/ab_engine_mode_analysis.py",
+    "task.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-11T09:36:00Z",
+  "notes": "Faza 2a: A/B engine_mode CLASSIC-vs-ADAPTIVE przeliczone na 24-mies. historii (ohlcv_{BTC,ETH}_USDT_1h_swap_24m.csv, 10 niezaleznych okien 122d/2 symbole) pod produkcyjnym addon_sl_variant=V2, VR 1.6/0.8, netto ze stawka z A1. Werdykt UTRZYMUJE SIE: brak sygnalu na netto (4/10, sign test p=0.7539, mean delta +0.51pp vs sd 6.30pp), produkcja zostaje na ADAPTIVE. Liczba 5.8x na BTC_full rozbrojona - BTC przechyla sie teraz ku ADAPTIVE (1/5, pooled -12.06pp). Jedyna zmiana: R:R na ETH stwardnialo (8/8 okien obu fixture'ow) ale nie konwertuje sie na PnL i dekomponuje sie na przesuniecie sciezki, nie na wartosc odfiltrowanych wejsc. Dodatkowy check na ohlcv_{BTC,ETH}_USDC_1h_max.csv (384d, 6 okien) - ten sam werdykt. Zero zmian w src/. Suite: 344 passed, 4 deselected (-m 'not slow')."
+}
