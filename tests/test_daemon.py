@@ -103,7 +103,9 @@ def test_daemon_signal_handling_and_high_risk_add_blocking(temp_db: LoggerDB):
             logger_db=temp_db
         )
 
-        # Transition state manager to SCOUT_MODE (leverage 0.1) via SL hit
+        # Transition state manager to SCOUT_MODE (reduced position size via
+        # SCOUT_SIZE_MULT, not a 0.1x leverage — see SCOUT_LEVERAGE/SCOUT_SIZE_MULT
+        # in state_manager.py) via SL hit
         state_mgr.on_stop_loss_hit(0.02)
         assert state_mgr.current_state == MMS4State.SCOUT_MODE
         assert state_mgr.leverage == SCOUT_LEVERAGE
