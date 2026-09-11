@@ -278,6 +278,22 @@ def run_backtest(
     take-profit-flagged close exits it — a partial (SPLIT_50/Midline TP) explicitly
     preserves SCOUT_MODE, matching `record_trade()`'s own behavior exactly.
 
+    Audit Phase 3.1 (2026-09-11): this does NOT model the Hermes H4 webhook path
+    (`hermes_webhook.emit_scout_mode_event` / `api.py`'s `/hermes/scout-relax`
+    decision endpoint, SWEEP_WICK vs MARUBOZU_BREAKOUT). `sm` is constructed with
+    the library default `StrategyProfile()` (`scout_override=False`,
+    `directional_bias="BOTH"`) and nothing in this module ever calls
+    `sm.update_strategy_profile(...)` or `sm.relax_scout_mode(...)` — so a SCOUT_MODE
+    entry here always rides out to its natural exit (a full, non-partial TP), the
+    same as an unattended production instance would if Hermes/the operator never
+    responds to the emitted webhook. A SWEEP_WICK relaxation (early return to
+    BASE_MODE) or a MARUBOZU_BREAKOUT `directional_bias` change are both real,
+    intended parts of production behavior that this harness cannot reproduce
+    (they depend on an external, human/LLM-in-the-loop classification of the H4
+    candle) — every backtest number in this file should be read as "assuming
+    Hermes never intervenes," not as a claim that Hermes intervention is
+    irrelevant or rare in production.
+
     Audit P7 "same file" follow-on (2026-09-08): also models daemon.py's Post-SL
     Cooldown (PLAN-008 Phase 2, `_sl_cooldown_until`) — after a genuine STOP_LOSS
     close, new BASE_LONG/BASE_SHORT entries are blocked for `sl_cooldown_candles`
