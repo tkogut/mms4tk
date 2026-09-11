@@ -1427,6 +1427,7 @@ class AddSymbolRequest(BaseModel):
     tma_slope_lookback: int = Field(default=5, description="PLAN-008 Ph3: candles over which TMA slope (pct_change) is measured")
     tma_slope_threshold: float = Field(default=0.002, description="PLAN-008 Ph3: |TMA slope| above which a counter-trend BASE entry is blocked")
     high_vol_base_filter_enabled: bool = Field(default=False, description="Require an extreme sweep-rejection wick for BASE entries when VR > adaptive_vr_high (reuses that threshold, no separate one). Per-symbol, default OFF — a 2026-09-08 backtest found it worsens results in most tested windows; do not enable without re-validating.")
+    htf_directional_gate_enabled: bool = Field(default=False, description="Faza 3.2: force directional_bias LONG_ONLY/SHORT_ONLY from this symbol's H4 TMA-band position (Hermes async-supervision model), on top of any manual override. Per-symbol, default OFF — measured 2026-09-11 on 10 independent 122-day windows: 10/10 improved net PnL (sign test p=0.0020), reduces losses in a strong trend, does not make the strategy net profitable.")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -1482,6 +1483,7 @@ def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
         "tma_slope_lookback": _qualified_int("tma_slope_lookback", 5),
         "tma_slope_threshold": _qualified_float("tma_slope_threshold", 0.002),
         "high_vol_base_filter_enabled": _qualified_bool("high_vol_base_filter_enabled", False),
+        "htf_directional_gate_enabled": _qualified_bool("htf_directional_gate_enabled", False),
         "stale_candles_threshold": _qualified_int("stale_candles_threshold", 12),
         "stale_atr_threshold": _qualified_float("stale_atr_threshold", 0.5),
         "impulse_negation_enabled": _qualified_bool("impulse_negation_enabled", True),
@@ -1529,6 +1531,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "tma_slope_lookback": trend_filter["tma_slope_lookback"],
             "tma_slope_threshold": trend_filter["tma_slope_threshold"],
             "high_vol_base_filter_enabled": trend_filter["high_vol_base_filter_enabled"],
+            "htf_directional_gate_enabled": trend_filter["htf_directional_gate_enabled"],
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -1574,6 +1577,7 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
         "tma_slope_lookback": int(req.tma_slope_lookback),
         "tma_slope_threshold": float(req.tma_slope_threshold),
         "high_vol_base_filter_enabled": bool(req.high_vol_base_filter_enabled),
+        "htf_directional_gate_enabled": bool(req.htf_directional_gate_enabled),
     }
     save_symbols_config(configured_symbols_store)
 
@@ -1592,6 +1596,7 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
                 f"tma_slope_lookback:{formatted_sym}": int(req.tma_slope_lookback),
                 f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
                 f"high_vol_base_filter_enabled:{formatted_sym}": bool(req.high_vol_base_filter_enabled),
+                f"htf_directional_gate_enabled:{formatted_sym}": bool(req.htf_directional_gate_enabled),
                 # Audit P6.1 (2026-09-08): same bug, same fix — these 3 Inactivity
                 # Manager fields were previously written only to
                 # configured_symbols_store/symbols.json, silently resetting to

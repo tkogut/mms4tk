@@ -130,6 +130,17 @@ class IndicatorParams(BaseModel):
     tma_slope_lookback: int = 5
     tma_slope_threshold: float = 0.002
 
+    # ── H4 Directional-Bias Gate (Faza 3.2, "Hermes async supervision" model) ──
+    # Distinct from tma_trend_filter_enabled above (same-interval TMA slope, already
+    # decided): this is a higher-timeframe gate that forces directional_bias
+    # LONG_ONLY/SHORT_ONLY when H4 closes beyond its own TMA band (same test as
+    # HigherTimeframeAnalytics.calculate_higher_tf's h4_tma_position). Measured
+    # 2026-09-11 on 10 independent 122-day windows (BTC/ETH, 730d history): 10/10
+    # windows improved net PnL (sign test p=0.0020), consistent 5/5 on each symbol
+    # independently — task.md, "Faza 3.2". Default OFF, per-symbol like the filter
+    # above; still reduces losses rather than reversing them to profit.
+    htf_directional_gate_enabled: bool = False
+
     # ── High Volatility Base-Entry Filter ──
     # Reuses adaptive_vr_high (no separate threshold) — requires an EXTREME sweep
     # rejection wick for BASE_SHORT/BASE_LONG when VR > adaptive_vr_high, same bar as
@@ -350,7 +361,11 @@ class MMS4SignalEngine:
 
         # Retrieve active strategy profile from state_manager
         profile = state_manager.strategy_profile
-        bias = profile.directional_bias
+        # Faza 3.2: combines the manual (Hermes-controlled) directional_bias with
+        # the optional per-symbol H4 gate -- see get_effective_directional_bias's
+        # docstring. With no `symbol` (pre-Faza-3.2 callers) this returns exactly
+        # `profile.directional_bias`, unchanged.
+        bias = state_manager.get_effective_directional_bias(symbol)
         risk_prof = profile.risk_profile
 
         # Helper to apply directional_bias filtering
