@@ -590,6 +590,126 @@ def test_run_backtest_rejects_unknown_addon_sl_variant():
                          trend_filter_enabled=False, addon_sl_variant="V3")
 
 
+# ── Phase 3-4 (task.md): D1 ATR exhaustion filter — measurement-only, default OFF ──
+# Reuses params.htf_expansion_threshold (2.5, analytics.py) as the reference, not a
+# new number. `_daily_epoch_candles` below builds REAL epoch-ms timestamps (unlike
+# `_flat_candles`'s index-as-timestamp, which would collapse everything into one
+# UTC day) so day boundaries are meaningful.
+
+DAY_MS = 24 * 3_600_000
+
+
+def _daily_epoch_candles(n_days, spike_day=None, spike_hour=5,
+                          spike_high=101.2, spike_low=98.3, start_ts=1_700_000_000_000):
+    """`n_days` full UTC days of flat, quiet hourly candles (open=close=100.0,
+    high=100.5/low=99.5 -> D1 True Range/ATR converges to ~1.0 once warmed up).
+    `spike_day` (0-indexed) gets ONE overextended candle at `spike_hour` whose
+    high/low blow the day's running range past `2.5 x ATR_D1(~1.0)` while staying
+    inside the 2% base SL band (98.0-102.0 for a LONG @ 100.0) so the position
+    survives to be closed by a scripted signal instead of a real stop-out."""
+    start_ts -= start_ts % DAY_MS  # align to a UTC day boundary
+    candles = []
+    ts = start_ts
+    for d in range(n_days):
+        for h in range(24):
+            if d == spike_day and h == spike_hour:
+                c = Candle(timestamp=ts, open=100.0, high=spike_high, low=spike_low, close=100.0, volume=1.0)
+            else:
+                c = Candle(timestamp=ts, open=100.0, high=100.5, low=99.5, close=100.0, volume=1.0)
+            candles.append(c)
+            ts += 3_600_000
+    return candles
+
+
+def test_compute_d1_exhaustion_flags_is_causal_and_resets_next_day():
+    """Pure unit test of the flag builder: never flagged on the very first day (no
+    prior-day ATR reference exists yet), flagged from the exact hour the running
+    day range crosses threshold x ATR_ref onward (not before, not the whole day),
+    and back to unflagged the next day even though ATR_ref is now elevated by the
+    spike (the next day's OWN range is small, so it clears easily)."""
+    params = IndicatorParams()
+    candles = _daily_epoch_candles(n_days=22, spike_day=20, spike_hour=5)
+    flags = be._compute_d1_exhaustion_flags(candles, params)
+    assert len(flags) == len(candles)
+    assert not any(flags[0:24])  # day 0: no reference day exists yet
+    spike_day_flags = flags[20 * 24:21 * 24]
+    assert spike_day_flags[:5] == [False] * 5           # before the spike hour: not exhausted
+    assert all(spike_day_flags[5:])                     # from the spike hour on: exhausted, stays exhausted
+    assert not any(flags[21 * 24:22 * 24])               # the day AFTER: resets, quiet range clears easily
+
+
+def test_compute_d1_exhaustion_flags_empty_input():
+    assert be._compute_d1_exhaustion_flags([], IndicatorParams()) == []
+
+
+def _d1_exhaustion_scenario(monkeypatch, addon_hour, filter_enabled):
+    """BASE_LONG opened the hour before `spike_day` starts; a HIGH_RISK_ADD_LONG is
+    scripted at `addon_hour` on the spike day itself; the position is closed by a
+    BASE_SHORT (TP_AND_FLIP) two hours later so the addon's fate is observable on
+    `addon_applied` without a real stop-out or inactivity exit muddying the result."""
+    params = IndicatorParams()
+    spike_day = 20
+    candles = _daily_epoch_candles(n_days=22, spike_day=spike_day, spike_hour=5)
+    entry_idx = spike_day * 24 - 1     # last hour of the day before the spike day
+    addon_idx = spike_day * 24 + addon_hour
+    close_idx = addon_idx + 2
+    _scripted_engine(monkeypatch, {
+        entry_idx: "BASE_LONG",
+        addon_idx: "HIGH_RISK_ADD_LONG",
+        close_idx: "BASE_SHORT",
+    })
+    trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        d1_exhaustion_filter_enabled=filter_enabled,
+    )
+    closes = [t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]
+    assert len(closes) == 1, "the scripted BASE_SHORT must close the position exactly once"
+    return closes[0]
+
+
+def test_d1_exhaustion_filter_blocks_addon_once_day_range_crosses_threshold(monkeypatch):
+    close = _d1_exhaustion_scenario(monkeypatch, addon_hour=5, filter_enabled=True)  # exhausted hour
+    assert close["addon_applied"] is False
+    assert close["weight"] == pytest.approx(1.0, abs=0.01)  # no addon notional at all
+
+
+def test_d1_exhaustion_filter_disabled_lets_the_same_addon_through(monkeypatch):
+    """Same exact geometry (overextended day, same hour) as the test above — the
+    ONLY difference is `d1_exhaustion_filter_enabled=False` (the default) — proves
+    the block above is caused by the new filter, not some incidental guard."""
+    close = _d1_exhaustion_scenario(monkeypatch, addon_hour=5, filter_enabled=False)
+    assert close["addon_applied"] is True
+    assert close["weight"] == pytest.approx(1.0 + be.ADDON_ALLOCATION / be.BASE_ALLOCATION, abs=0.01)
+
+
+def test_d1_exhaustion_filter_does_not_block_addon_before_threshold_is_crossed(monkeypatch):
+    """Same day, same filter ON, but the addon fires at hour 2 — BEFORE the spike
+    at hour 5 pushes the running range over threshold. Confirms this is a causal,
+    intraday gate (blocks once the day is actually overextended), not a blanket
+    per-calendar-day ban applied retroactively to hours that preceded the spike."""
+    close = _d1_exhaustion_scenario(monkeypatch, addon_hour=2, filter_enabled=True)
+    assert close["addon_applied"] is True
+
+
+def test_d1_exhaustion_filter_never_blocks_base_entries(monkeypatch):
+    """The filter is scoped to HIGH_RISK_ADD only (per task.md: 'blokada puli 30%
+    budżetu na High Risk Add', not the base position) — a fresh BASE_LONG on the
+    overextended day itself must still open normally."""
+    params = IndicatorParams()
+    spike_day = 20
+    candles = _daily_epoch_candles(n_days=22, spike_day=spike_day, spike_hour=5)
+    entry_idx = spike_day * 24 + 10  # well inside the exhausted window (flagged from hour 5)
+    close_idx = entry_idx + 2
+    _scripted_engine(monkeypatch, {entry_idx: "BASE_LONG", close_idx: "BASE_SHORT"})
+    trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        d1_exhaustion_filter_enabled=True,
+    )
+    closes = [t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]
+    assert len(closes) == 1
+    assert closes[0]["weight"] == pytest.approx(1.0, abs=0.01)  # a normal, full-size BASE entry opened
+
+
 # ── Post-SL Cooldown (audit P7 "same file" follow-on, 2026-09-08) ──
 # Mirrors daemon.py's PLAN-008 Phase 2 mechanism (_sl_cooldown_until): after a
 # genuine STOP_LOSS close, new BASE_LONG/BASE_SHORT entries are blocked for
