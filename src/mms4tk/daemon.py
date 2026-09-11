@@ -1070,8 +1070,19 @@ class MMS4Daemon:
                     last_valid_atr = tma_df_closed["atr"].dropna()
                     if len(last_valid_atr) > 0:
                         current_atr = float(last_valid_atr.iloc[-1])
-            if len(candles) >= 20:
-                tma_df_all = TMAIndicator.calculate(candles, ind_params)
+            # Audit Phase 3.1 (2026-09-11): this used to run on the raw `candles` list,
+            # whose last element is the still-forming candle (every OKX/ccxt
+            # fetch_ohlcv call returns it that way — the same reason `closed_candles`
+            # exists two lines above for the ATR calc, and the same discipline
+            # `MMS4SignalEngine.evaluate_signals`/`HigherTimeframeAnalytics.calculate_higher_tf`
+            # enforce). A live-candle TMA repaints intra-candle, so the Midline TP
+            # threshold could shift (and misfire against `candle_high`/`candle_low`
+            # below, previously also read off the unclosed candle) before the bar
+            # that produced it had even closed. Reusing `closed_candles` here matches
+            # the ATR calc immediately above and the backtest engine's own causal,
+            # closed-candle-only precompute of `full_df["tma"]`.
+            if len(closed_candles) >= 20:
+                tma_df_all = TMAIndicator.calculate(closed_candles, ind_params)
                 if not tma_df_all.empty and "tma" in tma_df_all.columns:
                     last_valid_tma = tma_df_all["tma"].dropna()
                     if len(last_valid_tma) > 0:
@@ -1124,8 +1135,10 @@ class MMS4Daemon:
             if active_pos is not None and _pos_contracts(active_pos) > 0 and tma_mid > 0:
                 side_to_close = active_side.lower()
                 existing_contracts = _pos_contracts(active_pos)
-                candle_high = float(getattr(candles[-1], "high", signal.price)) if candles else signal.price
-                candle_low = float(getattr(candles[-1], "low", signal.price)) if candles else signal.price
+                # Same fix as tma_mid above: read the touch check off the last CLOSED
+                # candle, not the still-forming one `candles[-1]` would be.
+                candle_high = float(getattr(closed_candles[-1], "high", signal.price)) if closed_candles else signal.price
+                candle_low = float(getattr(closed_candles[-1], "low", signal.price)) if closed_candles else signal.price
 
                 if side_to_close == "long":
                     midline_hit = (candle_high >= tma_mid or signal.price >= tma_mid) and (active_entry_price <= tma_mid or signal.price > active_entry_price)

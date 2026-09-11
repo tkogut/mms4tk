@@ -275,6 +275,66 @@ def test_midline_tp_reattaches_sl_at_base_entry_price_not_avgpx(tmp_path):
     assert call_kwargs["stop_loss_pct"] == 0.02
 
 
+def test_midline_tp_uses_closed_candle_not_forming_candle_for_trigger(tmp_path):
+    """Audit Phase 3.1 (2026-09-11): daemon.py computed the Midline TP threshold
+    (tma_mid) and the touch check (candle_high/candle_low) off the RAW fetched
+    candle list, whose last element is the still-forming candle — every
+    OKX/ccxt `fetch_ohlcv` call returns it that way, the exact reason
+    `closed_candles = candles[:-1]` exists for the ATR calc two lines above in
+    the same function, and the same discipline `MMS4SignalEngine.evaluate_signals`
+    / `HigherTimeframeAnalytics.calculate_higher_tf` enforce elsewhere. Build a
+    candle history whose CLOSED data does not touch the midline, then append one
+    forming candle with an extreme high that would have (pre-fix) crossed it and
+    fired a partial close before the bar that produced it had even closed."""
+    # Declining-then-flat history so the (lagging) TMA sits above the recent
+    # closes/highs — computed for real via TMAIndicator, not hand-derived.
+    closes = [140.0 - i for i in range(30)] + [110.0] * 12
+    hist_candles = mk_candle_seq([(c, c + 0.3, c - 0.3, c) for c in closes])
+    params = IndicatorParams()
+    df = TMAIndicator.calculate(hist_candles, params)
+    tma_mid_closed = float(df["tma"].iloc[-1])
+    assert hist_candles[-1].high < tma_mid_closed, (
+        "fixture must not touch the midline on closed data alone"
+    )
+
+    # Forming (unclosed) candle appended last, with an extreme high that WOULD
+    # cross tma_mid if it (wrongly) fed the TMA/touch-check computation.
+    spike = Candle(
+        timestamp=hist_candles[-1].timestamp + 900_000,
+        open=110.0, high=tma_mid_closed + 50.0, low=109.0, close=110.0, volume=1.0,
+    )
+    candles = hist_candles + [spike]
+
+    db = LoggerDB(db_path=os.path.join(tmp_path, "midline_closed_candle.db"))
+    db.set_setting("midline_partial_tp_enabled", "true")
+    sm = MMS4StateManager(trading_symbol="ETH/USDC")
+
+    ex = MagicMock(spec=OKXExecutor)
+    ex.fetch_candles = AsyncMock(return_value=candles)
+    entry_price = tma_mid_closed - 5.0  # comfortably below tma_mid: "entry<=tma_mid" always true
+    ex.fetch_positions = AsyncMock(return_value=[
+        position_dict("ETH/USDC", "long", contracts=4.0, entry=entry_price, notional=20.0)
+    ])
+    ex.reduce_position = AsyncMock(return_value={"id": "red_1", "status": "closed"})
+    ex.attach_stop_loss = AsyncMock(return_value={"status": "attached"})
+    ex.reduction_amount = MagicMock(return_value=2.0)
+    ex.calculate_order_amount = MagicMock(return_value=2.0)
+
+    sig = SignalResult(signal_type="NONE", price=entry_price, stop_loss=0.0, leverage=3.0)
+    d = MMS4Daemon(
+        executor=ex,
+        state_manager=sm,
+        signal_engine=StubEngine(sig),
+        logger_db=db,
+        symbol="ETH/USDC",
+    )
+
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+
+    assert res["outcome"] != "MIDLINE_PARTIAL_TP"
+    assert ex.reduce_position.await_count == 0
+
+
 # ── 6. Micro-Position Indivisibility ─────────────────────────────────────
 
 def test_micro_position_indivisibility(tmp_path):
