@@ -309,8 +309,10 @@ class MMS4StateManager:
     def is_high_risk_add_allowed(self) -> bool:
         """
         Check if High Risk Add position is allowed in current state.
-        BASE_MODE (leverage 1.0) -> True
-        SCOUT_MODE (leverage 0.1) -> False
+        BASE_MODE (risk-profile leverage) -> True
+        SCOUT_MODE (reduced position size via SCOUT_SIZE_MULT, not a 0.1x leverage —
+        that mechanism was retired, see the SCOUT_LEVERAGE/SCOUT_SIZE_MULT comment
+        above) -> False
         """
         return self._current_state == MMS4State.BASE_MODE
 

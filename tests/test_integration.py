@@ -44,7 +44,7 @@ def test_scout_mode_blocks_high_risk_add():
 
     assert result.signal_type == "HIGH_RISK_ADD_SHORT"
     assert result.is_allowed is False
-    assert result.reason == "HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)"
+    assert result.reason == "HIGH_RISK_ADD blocked in SCOUT_MODE (reduced position size, not leverage)"
 
 
 def test_take_profit_restores_base_mode_and_enables_high_risk_add():

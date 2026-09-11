@@ -1425,3 +1425,297 @@ sesyjnego, nie skalować alokacji, nie wracać do Midline TP ani high-vol filtra
 cichy fakt do zignorowania). **Nowe, po Fazie 2:** nie traktować dotychczasowego
 odrzucenia filtra trendu (TMA slope) jako ostatecznego — było mierzone tylko na
 niereprezentatywnym 90-dniowym oknie, patrz sanity-check wyżej.
+
+---
+
+## 🔹 Faza 3 (część 1): Audyt wierności SCOUT_MODE i dyscypliny closed-candle (2026-09-11)
+
+Worktree/branch: `chore/phase3-1-scout-mode-audit`. **Zadanie audytowe (read-heavy)**,
+zlecone równolegle do `chore/phase3-4-d1-atr-exhaustion-filter` (filtr D1 ATR
+blokujący HIGH_RISK_ADD) — bo ten filtr zależy od tego, czy `backtest_engine.py`
+poprawnie replikuje istniejącą blokadę SCOUT_MODE→HIGH_RISK_ADD (patrz A4).
+Źródła: `state_manager.py::on_stop_loss_hit`/`on_take_profit_hit`,
+`backtest_engine.py` (maszyna stanów SCOUT_MODE, ~linie 20/149/171-207/272-330),
+`analytics.py` (HIGH_RISK_ADD gating :424-493, closed-candle :307, `use_closed_candles` :694-706),
+`daemon.py` (closed-candle :1066/1282/1424, dedup `_last_candle_ts`/`_last_signal_candle_ts`),
+`.agents/specs/knowledge/Architektura Systemowa mms4tk...md` (§2 H1_VALIDATION, §3 Hermes/ATR_LOOKBACK/SCOUT_MODE).
+
+Rozszerzone w trakcie sesji o trzeci punkt (C), doprecyzowany przez usera:
+dosłowna weryfikacja tezy "SCOUT_MODE zrzuca leverage do 0.1x, powrót do
+BASE_MODE tylko po zamknięciu w pełni zyskownej transakcji netto".
+
+### A) Parytet stanu SCOUT_MODE: backtest_engine.py vs state_manager.py
+
+**A1 — maszyna stanów BASE_MODE/SCOUT_MODE: POTWIERDZONE, wierna.**
+`backtest_engine.run_backtest()` konstruuje prawdziwy `MMS4StateManager` (`sm`,
+`backtest_engine.py:335`, `logger_db=None` — bezpieczne, każde miejsce zapisu w tej
+klasie jest już strzeżone `if self.logger_db is not None`) i woła jego prawdziwe
+`record_trade()`/`on_stop_loss_hit()`/`on_take_profit_hit()` na każdym zamknięciu
+(`close_position()` :365-394, `record_partial()` :396-405) — zero re-implementacji
+logiki przejść stanu w harnessie. Zweryfikowane zdanie po zdaniu:
+- Próg 2% (`sl_percent >= 0.02` w `on_stop_loss_hit`) — harness przekazuje
+  `sl_percent = position.get("sl_pct_override", BASE_SL_PCT)` tylko dla
+  `reason == "STOP_LOSS"` (:381), czyli dokładnie to, co produkcja liczy z
+  `base_entry_price`/`base_sl_pct` po P3 V2 (task.md, sekcja "P3 V2" wyżej) —
+  potwierdzone komentarzem :373-380 i zgodne z `daemon.reconcile_positions`.
+- Powrót do BASE_MODE tylko na PEŁNYM (nie-partial) TP — `_trade_record_flags()`
+  (:146-167) mapuje `STALE_SPLIT_50`/`MIDLINE_PARTIAL_TP` na
+  `is_take_profit=True, is_partial=True` i `record_partial()` (:396-405) woła
+  `record_trade()` z tymi samymi flagami — identyczne z `state_manager.py`'s
+  `record_trade()`/`on_take_profit_hit()`, które explicite NIE resetują stanu przy
+  `is_partial=True` (`state_manager.py:395,419-420`).
+- `relax_scout_mode()`/Hermes webhook: harness nigdy ich nie woła (patrz A3) —
+  ale to nie jest niewierność SAMEJ maszyny stanów opisanej w state_manager.py,
+  to osobne, świadomie nie-modelowane wejście zewnętrzne (patrz A3).
+
+**A2 — sizing scout-entry (`_size_new_entry`, ~linie 170-207): POTWIERDZONE jako
+bezpieczne, udokumentowane uproszczenie, nie kierunkowe zniekształcenie.**
+`_size_new_entry()` liczy `notional_weight = 1.0 / notional_reduction_factor`,
+gdzie `notional_reduction_factor` to WPROST `sm.get_risk_profile_snapshot()`'s
+własna wartość (`base_leverage / (leverage * size_mult)`) — harness nie
+re-implementuje formuły, tylko woła tę samą, którą `state_manager.py` już liczy
+(`get_risk_profile_snapshot`, :187-201). Kontrakty (`BASE_CONTRACTS[symbol] *
+size_mult`) mogą wyjść ułamkowe (np. `4.0 * 0.3 = 1.2`) — udokumentowane wprost w
+komentarzu :187-191 jako świadoma aproksymacja: realne zlecenie zawsze jest
+całkowitą liczbą kontraktów, ale `_stats()` waży PnL przez `notional_weight`
+(NIE przez same kontrakty), więc frakcyjność kontraktów nie wycieka do wyniku —
+tylko NOTIONAL musi być proporcjonalnie poprawny, i jest (zweryfikowane: ta sama
+formuła co produkcja). **Ocena: to jest bezpieczne uproszczenie** — nie zniekształca
+wyników kierunkowo, bo jedyna wielkość, która faktycznie wchodzi do `_stats()`
+(`weight`), jest matematycznie identyczna z tym, co dałaby produkcja przy tej samej
+notional. Audyt nie znalazł tu bugu.
+
+**A3 — ścieżka Hermes H4 webhook / `scout_override` / `directional_bias`:
+POTWIERDZONE — backtest NIE modeluje tej ścieżki, i to było CICHE (nieudokumentowane)
+do tej sesji.** Grep `backtest_engine.py` za `hermes_webhook`/`directional_bias`/
+`scout_override`/`filter_bias` — **zero trafień**. `sm = MMS4StateManager(...)` w
+`run_backtest()` (:335) nie dostaje `hermes_webhook` (zostaje `None` — `on_stop_loss_hit`
+łagodnie pomija emisję webhooka, `state_manager.py:348` `if self.hermes_webhook:`),
+i nigdy nie woła `sm.update_strategy_profile(...)` ani `sm.relax_scout_mode(...)` —
+`StrategyProfile()` zostaje na fabrycznym defaultcie (`scout_override=False`,
+`directional_bias="BOTH"`) przez cały backtest. Skutek: **harness zakłada "brak
+override" bezwzględnie** — SCOUT_MODE zawsze trwa do naturalnego wygaśnięcia
+(pełny TP), nigdy nie zostaje wcześniej zrelaksowany przez SWEEP_WICK (Hermes H4,
+`api.py:838`/`hermes_webhook.py:131-156`), i `directional_bias` nigdy nie filtruje
+sygnałów (MARUBOZU_BREAKOUT ścieżka też nie-modelowana). **To założenie NIE było
+udokumentowane w kodzie ani w `task.md` przed tą sesją** — docstring `run_backtest()`
+opisywał maszynę stanów jako "modeled faithfully" bez zastrzeżenia o Hermes. Naprawione
+w tej sesji (nie jako bug, jako doc-fix): nowy akapit w docstringu `run_backtest()`
+(`backtest_engine.py`, tuż po opisie SCOUT_MODE) explicite nazywa to założenie i
+wyjaśnia, dlaczego harness nie może tej ścieżki zamodelować (zależy od
+zewnętrznej, human/LLM-in-the-loop klasyfikacji świecy H4 — nie jest to
+deterministyczna funkcja OHLCV). **Wniosek: każdy dotychczasowy wynik backtestu w
+tym repo należy czytać jako "przy założeniu że Hermes nigdy nie interweniuje"** —
+nie jako twierdzenie, że interwencja Hermesa jest rzadka lub nieistotna w produkcji.
+
+**A4 — blokada HIGH_RISK_ADD w SCOUT_MODE: POTWIERDZONE, replikowana identycznie
+(podwójna bramka, tak jak produkcja).** `analytics.py` blokuje HIGH_RISK_ADD w
+SCOUT_MODE wewnątrz `evaluate_signals()` (`active_state != MMS4State.BASE_MODE` →
+`is_allowed=False`, :424-433 SHORT / :474-483 LONG) — backtest_engine's główna
+pętla odrzuca każdy `not signal.is_allowed` sygnał (:499 `if not signal.is_allowed
+or trend_blocked: continue`), więc ten sygnał NIGDY nie dociera do sekcji
+addonów. Backtest DODATKOWO powtarza tę samą bramkę explicite przy samym
+wykonaniu addonu (:516 `and sm.get_symbol_state(symbol) == MMS4State.BASE_MODE
+# addons blocked in SCOUT — daemon.py`) — redundantne, ale NIE błędne: to
+dokładnie ta sama podwójna bramka co `daemon.py` (który TAKŻE sprawdza
+`sym_state != MMS4State.BASE_MODE` niezależnie od `analytics.py`'s własnej
+bramki, `daemon.py:1655`, `outcome = "BLOCKED_{signal.signal_type}"`). **Wniosek:
+backtest replikuje blokadę SCOUT_MODE→HIGH_RISK_ADD identycznie z produkcją —
+to NIE podważa wiarygodności backtestu dla równoległego zadania D1 ATR
+(filtr `chore/phase3-4-d1-atr-exhaustion-filter`).** Audyt czysty na tym punkcie.
+
+**Drobne (kosmetyczne) znalezisko przy okazji A4, naprawione:** `reason` string
+zwracany przy tej blokadzie (`analytics.py:431,481`) i docstring
+`state_manager.is_high_risk_add_allowed()` (`state_manager.py:313`) mówiły
+dosłownie *"leverage x0.1"* / *"leverage 0.1"* — to jest STARY, świadomie
+porzucony mechanizm (patrz sekcja C niżej), nie to, co kod dziś robi
+(`SCOUT_LEVERAGE=1.0`, redukcja przez `SCOUT_SIZE_MULT=0.3`). Test
+`tests/test_integration.py::test_scout_mode_blocks_high_risk_add` asertował
+DOSŁOWNIE ten przestarzały string w tej samej funkcji, w której 3 linie wyżej
+poprawnie asertuje `state_mgr.leverage == SCOUT_LEVERAGE` — samo-sprzeczność
+w jednym pliku testowym, prawdopodobne źródło mylnego modelu mentalnego
+opisanego w sekcji C. Naprawione: `reason` → *"HIGH_RISK_ADD blocked in
+SCOUT_MODE (reduced position size, not leverage)"*, docstring poprawiony,
+test i komentarz w `test_daemon.py:106` zaktualizowane. Czysto tekstowe, zero
+zmiany zachowania.
+
+### B) Dyscyplina "closed candle" (ryzyko look-ahead bias)
+
+**B1 — `H1_VALIDATION`/16:05: POTWIERDZONE, NIE ZAIMPLEMENTOWANE — wciąż tylko
+wymaganie z dokumentu architektury.** `grep -rniE "H1_VALIDATION|H1_CLOSE_FILTER|
+16:05|markowanie|liquidity trap|session.?us"` po całym `src/mms4tk/`, `tests/`,
+`task.md`, `docs/` — **zero trafień** poza samym dokumentem architektury.
+Checklist §6 tego dokumentu ma ten punkt jako `- [ ]` (nieodhaczony) —
+"Implementacja zależności `H1_CLOSE_FILTER`..." — spójne z ustaleniem: to
+propozycja, nigdy niezaimplementowana. Nie ma tu rozbieżności backtest≠produkcja,
+bo mechanizmu nie ma W OGÓLE w żadnym z nich.
+
+**B2 — ogólna dyscyplina closed-candle w pipeline sygnałowym: POTWIERDZONE
+przestrzegana, z jednym potwierdzonym wyjątkiem (patrz Bug #1 niżej).**
+`analytics.py:307` (`closed_candles = candles[:-1]`) i `daemon.py:1066/1282/1424`
+(analogicznie, `candles[:-1]`/`candles[-2]`) konsekwentnie odrzucają
+niezamkniętą ostatnią świecę przed każdą decyzją sygnałową, ATR-em i dedup
+znacznikiem czasu (`_last_candle_ts`/`_last_signal_candle_ts`) — potwierdzone
+grepem i czytaniem kodu, w tym jawny komentarz `daemon.py:1281` *"candles[-1] is
+the active (unclosed) candle, candles[-2] is last closed"*. `use_closed_candles=False`
+(`analytics.py:694-706`, param `HigherTimeframeAnalytics.calculate_higher_tf`) —
+**zweryfikowane: wywoływane WYŁĄCZNIE z `tests/audit/audit_math_indicators.py`**
+(read-only, standalone skrypt diagnostyczny, nazwa pliku nie pasuje do
+`test_*.py`/`*_test.py` więc pytest go w ogóle nie zbiera — niekolidujące z
+`-m "not slow"`). Jedyny produkcyjny wywołujący, `api.py:736`, woła bez tego
+parametru (default `True` = closed-candle). **Czysty, bezpieczny debug/inspect
+path — nie używany w pętli produkcyjnej.**
+
+**B3 — off-by-one backtest vs produkcja: ZNALEZIONY I NAPRAWIONY REALNY BUG
+(patrz sekcja "Bug znaleziony i naprawiony" niżej).** Poza tym jednym miejscem,
+offsety są spójne: sygnał w `backtest_engine.py` (`window = candles[:i+2]` →
+`evaluate_signals` robi `closed_candles = window[:-1]` → `curr_c =
+closed_candles[-1] = candles[i]`) odpowiada dokładnie temu, co
+`daemon.py`'s `evaluate_signals(candles,...)` robi na żywych danych (`candles[-1]`
+= świeca w budowie z giełdy, odrzucana identycznie). SL/TP w backteście
+sprawdzane są na TEJ SAMEJ świecy `i`, na której został wygenerowany sygnał w
+poprzedniej iteracji dla otwartej pozycji — brak lookahead. `full_df["tma"]`/
+`tma_slope` w `backtest_engine.py` (komentarz :344-346 "Precompute TMA/slope ONCE
+over the whole closed-candle history... no lookahead") liczone kauzalnie po
+indeksie `i` — zgodne z tym, co `daemon.py` liczy z `closed_candles` dla ATR-u
+(:1066-1072), ale **NIEZGODNE z tym, co `daemon.py` liczyło z `candles` (z
+niezamkniętą świecą) dla `tma_mid` w gałęzi Midline Partial TP** — patrz bug
+niżej. To jest dokładnie wzorzec z Fazy 2 (V0/V2), tylko wewnątrz samej produkcji
+zamiast między backtestem a produkcją: jeden fragment tej samej funkcji
+(`execute_symbol_cycle`) łamał dyscyplinę, którą fragment 6 linii wyżej
+poprawnie egzekwuje.
+
+### C) Weryfikacja tezy: "SCOUT_MODE = leverage 0.1x, powrót po w pełni zyskownej transakcji netto"
+
+**C1 — "SCOUT_MODE zrzuca leverage do 0.1x": OBALONE. To jest przestarzały model
+mentalny odpowiadający ŚWIADOMIE PORZUCONEMU mechanizmowi, nie temu, co kod robi
+dziś.** `state_manager.py:35-56` (komentarz nad `SCOUT_LEVERAGE`/`SCOUT_SIZE_MULT`)
+to wprost historia tej zmiany, zacytowana w kodzie: *"Risk in SCOUT is cut through
+POSITION SIZE, not through leverage. Leverage cannot carry the reduction: OKX only
+accepts integer leverage >= 1, so the old 0.1x was silently clamped to 1x on the
+exchange while the notional it implied ($0.70 at a $10 cap) fell under the
+exchange's minimum order value — the entry was then skipped entirely and the
+symbol could never trade its way back to BASE_MODE."* Dzisiejsze defaulty:
+`SCOUT_LEVERAGE=1.0` (`MMS4_SCOUT_LEVERAGE`/legacy `MMS4_LEVERAGE_SCOUT` env),
+`SCOUT_SIZE_MULT=0.3` (`MMS4_SCOUT_SIZE_MULT`). Efektywna redukcja notional vs
+BASE_MODE (profil MODERATE, leverage 3.0): `SCOUT_SIZE_MULT * SCOUT_LEVERAGE /
+base_leverage = 0.3 * 1.0 / 3.0 ≈ 0.33` per-jednostka-marginesu, ale ponieważ
+BASE_MODE dodatkowo dźwignuje 3x a SCOUT tylko 1x, całkowita redukcja NOTIONAL to
+**10x** (komentarz :51 *"a 10x reduction at ANY capital level"*) — to jest
+najprawdopodobniej źródło mylącego skojarzenia z "0.1x": liczbowo zbieżne (10x
+redukcji ≈ "×0.1" w sensie zagregowanym), ale **mechanicznie to nie jest ustawienie
+leverage=0.1** — leverage w SCOUT_MODE dziś wynosi realnie **1.0x** (wartość
+w pełni legalna na giełdzie), redukcja niesiona jest przez rozmiar pozycji.
+Zweryfikowane też grepem: `SCOUT_LEVERAGE` nigdzie w kodzie nie jest ustawiane na
+0.1 — jedyne trzy miejsca z literałem "0.1"/"leverage x0.1" to STARE STRINGI
+opisowe (`analytics.py:431,481`, `state_manager.py:313`), same w sobie
+przestarzałe i mylące (naprawione w sekcji A4 wyżej) — czyli **teza użytkownika
+o "0.1x" ma realne, konkretne źródło w samym kodzie (stare komentarze/reason
+stringi), nie jest wymyślona znikąd, ale opisuje mechanizm retired, nie
+dzisiejszy.**
+
+**C2 — "powrót do BASE_MODE wyłącznie po zamknięciu w pełni zyskownej transakcji
+netto": CZĘŚCIOWO OBALONE — warunek jest subtelnie inny.** `on_take_profit_hit()`
+(`state_manager.py:362-373`) resetuje SCOUT_MODE→BASE_MODE na PODSTAWIE FLAGI
+`is_take_profit=True` z pełnego (nie-partial) zamknięcia — **funkcja nie
+przyjmuje ani nie sprawdza żadnej wartości PnL, ani gross, ani net.** Flaga
+`is_take_profit` jest przypisywana przez WOŁAJĄCEGO na podstawie MECHANIZMU
+wyjścia (band-touch / "TP_AND_FLIP" — dotknięcie przeciwnej wstęgi TMA), nie na
+podstawie zweryfikowanej rentowności tej konkretnej transakcji:
+- `daemon.py:1459-1466` liczy `pnl_pct` jako surowy, GROSS `(exit-entry)/entry`
+  (bez odjęcia fee/funding) — i sam kod PRZEWIDUJE ujemny wynik (`pnl_str =
+  f"+{...}" if pnl_pct >= 0 else f"{...}"`, formatowanie dla obu znaków) —
+  po czym **bezwarunkowo** woła `record_trade(..., is_take_profit=True)`
+  (`daemon.py:1517`) niezależnie od znaku `pnl_pct`, a TYM BARDZIEJ niezależnie
+  od PnL netto (fee/funding nigdzie tu nieliczone w produkcji — netto istnieje
+  tylko w modelu P2 backtestu).
+- `backtest_engine.py::_trade_record_flags()` (:158-167) replikuje TO SAMO:
+  `"TP_AND_FLIP": dict(is_take_profit=True, ...)` przypisywane bezwarunkowo po
+  samej nazwie exit_reason, bez sprawdzania `pnl_pct` (`close_position()` też
+  nie filtruje po znaku PnL przed wywołaniem `sm.record_trade()`) — **backtest
+  wiernie replikuje TĘ SAMĄ (nie węższą, nie szerszą) definicję.**
+- **Wniosek:** faktyczny warunek to *"pierwsze pełne zamknięcie zaklasyfikowane
+  jako TP_AND_FLIP (dotknięcie przeciwnej wstęgi)"*, NIE *"pierwsze pełne
+  zamknięcie ZWERYFIKOWANE jako netto-zyskowne"*. Te dwa warunki pokrywają się w
+  większości przypadków (dotknięcie przeciwnej wstęgi zwykle oznacza zysk), ale
+  NIE identycznie: transakcja TP_AND_FLIP zamknięta bardzo blisko ceny wejścia
+  (mały ruch, duże koszty) może być netto stratna, a mimo to zresetuje
+  SCOUT_MODE→BASE_MODE, bo klasyfikacja opiera się na TYPIE wyjścia, nie na
+  weryfikacji znaku PnL. To NIE jest bug (kod robi to konsekwentnie identycznie
+  w produkcji i w backteście — audyt nie znalazł tu rozbieżności backtest≠
+  produkcja), ale to jest odrębne od tezy "w pełni zyskowna transakcja netto" —
+  ta ostatnia to niepoprawny model mentalny, poprawiony tu wprost do zapisu.
+
+### 🐛 Bug znaleziony i naprawiony (osobno od reszty audytu, punkt 2 deliverable)
+
+**Lokalizacja:** `daemon.py::execute_symbol_cycle`, gałąź Midline Partial Take-Profit
+(ok. linii 1062-1078 i 1124-1141, PRZED poprawką).
+
+**Opis:** ATR (`current_atr`, linie 1066-1072) liczony był poprawnie z
+`closed_candles = candles[:-1]` — ale **TMA midline (`tma_mid`) liczony był z
+surowego `candles`** (`tma_df_all = TMAIndicator.calculate(candles, ind_params)`),
+czyli WŁĄCZAJĄC niezamkniętą, wciąż formującą się ostatnią świecę zwracaną przez
+`fetch_ohlcv`/OKX (dokładnie ten sam powód, dla którego `closed_candles` istnieje
+2 linie wyżej w TEJ SAMEJ funkcji, i dokładnie ta sama dyscyplina, którą
+`MMS4SignalEngine.evaluate_signals`/`HigherTimeframeAnalytics.calculate_higher_tf`
+egzekwują gdzie indziej). Analogicznie, próg dotyku (`candle_high`/`candle_low`,
+linie 1127-1128 PRZED poprawką) czytany był z `candles[-1]` (świeca w budowie),
+zamiast z tej samej zamkniętej świecy co `signal.price` (pochodzący z
+`closed_candles[-1].close` wewnątrz `evaluate_signals`). Skutek: rolujący TMA
+midline mógł "repaintować" WEWNĄTRZ trwającej świecy (przeciwieństwo idei
+"closed candle" — próg mógł się przesuwać z każdym tickiem zanim świeca się
+zamknęła), a wick na formującej się świecy mógł fałszywie odpalić Midline
+Partial TP przed zamknięciem świecy, która go wygenerowała. `backtest_engine.py`
+(przez konstrukcję — cała historia w fixture jest już zamknięta) liczy `tma_mid`
+kauzalnie wyłącznie z danych domkniętych do indeksu `i` — więc backtest NIGDY nie
+mierzył tego konkretnego zachowania produkcji; nie było więc możliwe wykryć tę
+rozbieżność backtest≠produkcja z samej analizy backtestu, tylko przez bezpośrednie
+czytanie `daemon.py`.
+
+**Status w produkcji: dziś latentny, nie aktywny.** `midline_partial_tp_enabled`
+domyślnie `False` od P9.1 (task.md, Faza 0a) — ale to jest kod GOTOWY do
+aktywacji przez samego operatora (per-symbol `system_settings`), więc bug jest
+realny i czekający, nie hipotetyczny. `run_backtest()`'s `midline_tp_enabled`
+też domyślnie `False`, więc żaden dotychczasowy werdykt backtestu (Midline TP
+6/6 przegrana, task.md Etap 1) nie jest tym dotknięty — ten filtr i tak
+przegrywa niezależnie od tego buga.
+
+**Naprawa:** `tma_df_all` liczone teraz z `closed_candles` (zamiast `candles`);
+`candle_high`/`candle_low` czytane z `closed_candles[-1]` (zamiast `candles[-1]`).
+Zero zmiany interfejsu, zero zmiany innych gałęzi.
+
+**Test regresyjny:** `tests/test_midline_inactivity_tp.py::
+test_midline_tp_uses_closed_candle_not_forming_candle_for_trigger` — buduje
+historię świec, której ZAMKNIĘTE dane nie dotykają midline (zweryfikowane
+programowo przez `TMAIndicator.calculate`, nie liczone ręcznie), dokleja jedną
+"formującą się" świecę z ekstremalnym highem, który PRZED poprawką przekraczał
+próg i fałszywie odpalał `MIDLINE_PARTIAL_TP`. **Zweryfikowane empirycznie w obie
+strony:** test uruchomiony tymczasowo przeciwko kodowi SPRZED poprawki (przez
+chwilowe odłożenie zmian w `daemon.py` na bok i przywrócenie ich zaraz po
+weryfikacji) — **FAILuje bez poprawki** (`AssertionError: assert
+'MIDLINE_PARTIAL_TP' != 'MIDLINE_PARTIAL_TP'`), **PASSuje z poprawką**. Istniejące
+testy w tym pliku niezmienione (używały płaskich, identycznych świec — poprawka
+nie zmienia ich wyniku, bo zamknięta i niezamknięta świeca mają tam identyczne
+wartości).
+
+### Werdykt zbiorczy
+
+| # | Punkt | Werdykt |
+|---|---|---|
+| A1 | Maszyna stanów SCOUT_MODE w harnessie | ✅ potwierdzone, wierne |
+| A2 | Sizing scout-entry (fractional contracts) | ✅ bezpieczne, udokumentowane uproszczenie |
+| A3 | Ścieżka Hermes H4 / scout_override / directional_bias | ⚠️ potwierdzone: NIE modelowana, było ciche → udokumentowane w tej sesji |
+| A4 | HIGH_RISK_ADD blokowany w SCOUT_MODE | ✅ potwierdzone, replikowane identycznie (+ 1 kosmetyczny string naprawiony) |
+| B1 | `H1_VALIDATION`/16:05 | ⚠️ potwierdzone: NIEzaimplementowane, wciąż tylko wymaganie dok. architektury |
+| B2 | Ogólna dyscyplina closed-candle | ✅ przestrzegana (poza Bugiem #1) |
+| B3 | Off-by-one backtest vs produkcja | 🐛 1 REALNY BUG znaleziony i naprawiony (Midline TP `tma_mid`/`candle_high`/`candle_low`) |
+| C1 | "SCOUT_MODE = leverage 0.1x" | ❌ OBALONE — mechanizm retired, dziś `SCOUT_LEVERAGE=1.0` + `SCOUT_SIZE_MULT=0.3` |
+| C2 | "powrót do BASE_MODE = TP netto-zyskowny" | ⚠️ CZĘŚCIOWO OBALONE — warunek to klasyfikacja exit-reason (TP_AND_FLIP), nie weryfikacja PnL netto; backtest replikuje to identycznie (brak rozbieżności) |
+
+**Audyt czysty na:** A1, A2, A4 (poza kosmetyką), B1, B2. **Bug realny znaleziony
+i naprawiony:** B3 (Midline TP closed-candle). **Ustalenia korygujące błędny model
+mentalny (wartościowe, nie "bug"):** A3 (dodano dokumentację), C1, C2.
+
+**Test suite:** `python3 -m pytest -q -m "not slow"` — 344 passed, 4 deselected
+(przed tą sesją) → **345 passed, 4 deselected** (+1 nowy test regresyjny), zero
+regresji.
