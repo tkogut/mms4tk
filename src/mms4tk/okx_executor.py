@@ -282,10 +282,21 @@ class OKXExecutor:
         self,
         symbol: Optional[str] = None,
         timeframe: str = "1m",
-        limit: int = 100
+        limit: int = 100,
+        allow_mock_fallback: bool = True
     ) -> List[Candle]:
         """
         Fetch real live OHLCV candles from OKX public API, with fallback to mock if unreachable.
+
+        `allow_mock_fallback` (default True, preserves prior behavior for every
+        existing caller): when False, a real fetch failure RAISES the underlying
+        exception instead of silently returning deterministic mock candles.
+        Audit Phase 3.2-followup (2026-09-11): callers that gate live trading
+        decisions on the candle content (e.g. `daemon._refresh_htf_directional_gate`)
+        need to be able to tell "OKX is down" apart from "here are 50 real H4
+        candles" -- the mock fallback exists for callers where SOME data (even
+        synthetic) is better than none (e.g. UI/demo paths), not for callers whose
+        own `except Exception` fail-safe depends on a real failure actually raising.
         """
         target_symbol = symbol or os.getenv("MMS4_SYMBOL", os.getenv("MMS4_SYMBOL_FUTURES", "BTC/USDC"))
         symbols_to_try = [target_symbol]
@@ -313,7 +324,10 @@ class OKXExecutor:
             except Exception as e:
                 last_error = e
 
-        logger.error(f"Error fetching candles from OKX for {target_symbol}: {type(last_error).__name__}: {str(last_error)}. Falling back to mock candles.")
+        logger.error(f"Error fetching candles from OKX for {target_symbol}: {type(last_error).__name__}: {str(last_error)}.")
+        if not allow_mock_fallback:
+            raise last_error
+        logger.error(f"Falling back to mock candles for {target_symbol}.")
         return _generate_mock_candles(count=limit)
 
     async def fetch_candles_paginated(
