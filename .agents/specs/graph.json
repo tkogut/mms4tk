@@ -43,6 +43,12 @@
       "label": "notebooklm-sync",
       "type": "System Skill",
       "description": "Skill for synchronization and distillation of expert knowledge from NotebookLM to AGENTS-OS."
+    },
+    {
+      "id": ".agents/specs/knowledge/Architektura Systemowa mms4tk: Przekład Strategii Masterminda na Logikę Agenta (Raport 10.09.2026).md",
+      "label": "Architektura Systemowa Mms4Tk: Przekład Strategii Masterminda Na Logikę Agenta (Raport 10.09.2026)",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Architektura Systemowa Mms4Tk: Przekład Strategii Masterminda Na Logikę Agenta (Raport 10.09.2026)"
     }
   ],
   "edges": [
@@ -75,10 +81,20 @@
       "source": ".agents/skills/notebooklm-sync",
       "target": ".agents/specs/knowledge/kompendium_skilli_open_mercato.md",
       "relation": "synchronizes_to"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/Architektura Systemowa mms4tk: Przekład Strategii Masterminda na Logikę Agenta (Raport 10.09.2026).md",
+      "relation": "governs_knowledge"
+    },
+    {
+      "source": ".agents/skills/notebooklm-sync",
+      "target": ".agents/specs/knowledge/Architektura Systemowa mms4tk: Przekład Strategii Masterminda na Logikę Agenta (Raport 10.09.2026).md",
+      "relation": "synchronizes_to"
     }
   ],
   "metadata": {
-    "last_distillation": "2026-08-29",
+    "last_distillation": "2026-09-11",
     "source": "Inception Engine"
   }
 }
