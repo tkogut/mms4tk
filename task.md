@@ -1425,3 +1425,195 @@ sesyjnego, nie skalować alokacji, nie wracać do Midline TP ani high-vol filtra
 cichy fakt do zignorowania). **Nowe, po Fazie 2:** nie traktować dotychczasowego
 odrzucenia filtra trendu (TMA slope) jako ostatecznego — było mierzone tylko na
 niereprezentatywnym 90-dniowym oknie, patrz sanity-check wyżej.
+
+---
+
+## 🔹 Faza 3 (2026-09-11) — kroczące okna kalibracji TMA/ATR (7d/14d): hipoteza ZMIERZONA i ODRZUCONA
+
+Worktree/branch: `chore/phase3-3-rolling-tma-atr-recalibration`. **Zadanie czysto
+analityczne — zero zmian w `src/`.**
+
+### Zlecenie (dosłowny cytat usera)
+
+"Architektura systemu wspiera adaptację. Zastąpmy statyczny zestaw parametrów
+rolowanym oknem kroczącym. Wprowadźmy kroczącą rekalibrację parametrów TMA/ATR
+co 7-14 dni, wykorzystując przesuwające się w czasie okna testowe, zamiast
+uśredniania jednego zestawu dla całego okresu 610 dni."
+
+Punkt wyjścia: sanity-check głównego znaleziska Fazy 2 (sekcja wyżej) — mediana
+okna ≈ −23% netto na 610 dniach pod jednym statycznym `tma_length=20`/
+`atr_period=14`, w tym BTC_W1 (+64,4% rajd BTC) jako najgorszy reżim dla
+strategii mean-reversion. Pytanie: czy rekalibracja `tma_length`/`atr_period`
+co 7-14 dni to odrabia?
+
+### Metoda (`scripts/rolling_tma_atr_recalibration.py`, dodany w tej sesji)
+
+- **Siatka rekalibracji — dosłowna z zadania, brute-force, nie ATR-derived:**
+  `tma_length ∈ {20,34,50} × atr_period ∈ {10,14,21}` = 9 komórek. Dla każdego
+  okna kalibracji uruchamiany jest prawdziwy `backtest_engine.run_backtest()`
+  na wszystkich 9 komórkach i wybierana ta o najlepszym `total_pnl` netto **na
+  tym samym oknie** (nie train/test — user explicite prosił o rekalibrację "w
+  locie", zastosowaną do sygnałów w tym samym oknie, nie o walidację OOS).
+  Uzasadnienie brute-force zamiast formuły ATR-owej: w kodzie/audycie nie ma
+  domkniętej relacji zmienność-okna → optymalna szerokość wstęgi; wymyślenie
+  takiej formuły tu byłoby drugą, niesprawdzoną hipotezą nałożoną na
+  pierwszą. Ten sam brute-force wzorzec już istnieje w tym repo
+  (`backtest_engine._grid_search_train`, silnik rekalibracji P7).
+- **Trzy ramiona, nie dwa**, bo samo cięcie na małe okna (reset stanu maszyny
+  BASE/SCOUT, Post-SL Cooldown, Single Addon Guard na KAŻDEJ granicy okna) już
+  samo zmienia wynik, niezależnie od rekalibracji:
+  1. **`rolling`** — best-of-9 wybierany PER okno kalibracji (7d lub 14d).
+  2. **`windowed_static`** — komórka (20,14) na TYCH SAMYCH oknach kalibracji
+     (te same resety stanu) — izoluje efekt rekalibracji od efektu samego
+     cięcia. To jest właściwe porównanie ((1) vs (2)), nie (1) vs (3).
+  3. **`continuous_static`** — (20,14) bez cięcia, jak liczyła Faza 2a.
+     **Nie przeliczany automatycznie w tej sesji** (`evaluate_signals()`
+     przelicza TMA/ATR na całym rosnącym oknie przy każdym kroku, więc koszt
+     rośnie szybciej niż liniowo z długością okna — pomiar: 168 świec ≈0,5s,
+     336 świec ≈1,1s, ale 2928 świec (122d, bez cięcia) już >3 minuty na
+     wywołanie; przy 5 oknach x 2 symbole to byłoby rzędu 30+ minut tylko na
+     ten jeden punkt odniesienia). Faza 2a (wyżej w tym dokumencie) **już
+     opublikowała dokładnie tę liczbę** — te same okna 122d, te same ustawienia
+     produkcyjne, `IndicatorParams()` default 20/14 — więc ten skrypt cytuje
+     tamten wynik zamiast go przeliczać (dostępne przez `--include-continuous`
+     dla kogoś, kto chce to zweryfikować samodzielnie).
+- **5 okien testowych = dokładnie te same, co Faza 2a/2b** (122d,
+  `_swap_24m`, BTC_W1..W5/ETH_W1..W5, 2024-09-10..2026-05-13), każde dalej
+  cięte na okna kalibracji 7d (17 x 168 świec, z małą resztą odrzucaną) lub 14d
+  (8 x 336 świec).
+- Ustawienia produkcyjne bez zmian: `engine_mode=ADAPTIVE`, VR 1,6/0,8,
+  `stale_candles_threshold=12`, filtr trendu OFF, `addon_sl_variant` default
+  (V2), netto wg modelu P2 ze skalibrowaną stawką A1.
+
+**Znane ograniczenie metody (in-sample selection bias), zapisane w kodzie
+skryptu z góry, przed uruchomieniem:** wybór najlepszej z 9 komórek NA TYCH
+SAMYCH danych, które ją oceniają, musi dawać liczbę zawyżoną względem
+prawdziwej wartości predykcyjnej — silniej dla krótszych okien i szerszej
+siatki. Mitygacja zaprojektowana z góry: (a) stabilność parametrów między
+oknami (silnik trafiający w prawdziwą strukturę powinien się ustabilizować;
+silnik łapiący szum — nie), (b) `windowed_static` jako kontrola izolująca sam
+efekt cięcia od efektu rekalibracji.
+
+### Wyniki — pełna tabela per okno testowe (netto, `rolling` vs `windowed_static`)
+
+**BTC/USDC (`_swap_24m` proxy), calib_days=7:**
+
+| okno | zakres | rolling | windowed_static | Δ (rolling − static) |
+|---|---|---|---|---|
+| W1 | 2024-09-10..2025-01-07 | +28,35% | −33,15% | +61,49pp |
+| W2 | 2025-01-10..2025-05-09 | +37,68% | −33,16% | +70,84pp |
+| W3 | 2025-05-12..2025-09-08 | +15,03% | −9,65% | +24,68pp |
+| W4 | 2025-09-11..2026-01-08 | +39,33% | −5,70% | +45,03pp |
+| W5 | 2026-01-11..2026-05-10 | +4,72% | −25,63% | +30,35pp |
+| **SUMA** | | **+125,10%** | **−107,29%** | **+232,39pp** |
+
+**BTC/USDC, calib_days=14:**
+
+| okno | zakres | rolling | windowed_static | Δ |
+|---|---|---|---|---|
+| W1 | 2024-09-10..2024-12-31 | +14,80% | −18,98% | +33,77pp |
+| W2 | 2025-01-10..2025-05-02 | +19,51% | −32,09% | +51,60pp |
+| W3 | 2025-05-12..2025-09-01 | +6,05% | −15,72% | +21,77pp |
+| W4 | 2025-09-11..2026-01-01 | +26,33% | −2,76% | +29,09pp |
+| W5 | 2026-01-11..2026-05-03 | +0,65% | −19,51% | +20,16pp |
+| **SUMA** | | **+67,34%** | **−89,05%** | **+156,39pp** |
+
+**ETH/USDC (`_swap_24m` proxy), calib_days=7:**
+
+| okno | zakres | rolling | windowed_static | Δ |
+|---|---|---|---|---|
+| W1 | 2024-09-10..2025-01-07 | +35,35% | −29,63% | +64,98pp |
+| W2 | 2025-01-10..2025-05-09 | +48,41% | −19,10% | +67,50pp |
+| W3 | 2025-05-12..2025-09-08 | +28,27% | −47,84% | +76,11pp |
+| W4 | 2025-09-11..2026-01-08 | +56,91% | −13,94% | +70,85pp |
+| W5 | 2026-01-11..2026-05-10 | +11,89% | −16,80% | +28,69pp |
+| **SUMA** | | **+180,83%** | **−127,30%** | **+308,12pp** |
+
+**ETH/USDC, calib_days=14:**
+
+| okno | zakres | rolling | windowed_static | Δ |
+|---|---|---|---|---|
+| W1 | 2024-09-10..2024-12-31 | +21,56% | −16,25% | +37,81pp |
+| W2 | 2025-01-10..2025-05-02 | +35,85% | −18,35% | +54,20pp |
+| W3 | 2025-05-12..2025-09-01 | +10,16% | −44,33% | +54,48pp |
+| W4 | 2025-09-11..2026-01-01 | +33,05% | −2,87% | +35,92pp |
+| W5 | 2026-01-11..2026-05-03 | +8,21% | −21,33% | +29,54pp |
+| **SUMA** | | **+108,82%** | **−103,12%** | **+211,95pp** |
+
+**Cross-check `windowed_static` vs Faza 2a (`continuous_static`, opublikowane
+wyżej):** Faza 2a (bez cięcia): BTC ADAPTIVE suma = **−104,33%**, ETH ADAPTIVE
+suma = **−113,44%**. `windowed_static` tutaj (to samo (20,14), ale cięte na
+7d/14d): BTC −107,29%/−89,05%, ETH −127,30%/−103,12%. Rząd wielkości i znak się
+zgadzają (rozrzut kilkunastu-dwudziestukilku pp, wytłumaczalny samym efektem
+cięcia — mniej ciągłości stanu maszyny), **więc metodologia jest wiarygodna** —
+to NIE tu wyjaśnia gap +150...+300pp między `rolling` a `windowed_static`
+wyżej. Ten gap pochodzi wyłącznie z kroku rekalibracji.
+
+### Stabilność wybieranych parametrów między oknami
+
+| config | mode combo | udział mode | switch rate (okno→okno) | rozkład (9 komórek) |
+|---|---|---|---|---|
+| BTC 7d (n=85) | (20,21) | 16,5% | **94,0%** | 5–14 na komórkę |
+| BTC 14d (n=40) | (50,21) | 17,5% | **84,6%** | 1–7 na komórkę |
+| ETH 7d (n=85) | (20,10) | 17,6% | **89,3%** | 6–15 na komórkę |
+| ETH 14d (n=40) | (20,10) | 20,0% | **92,3%** | 1–8 na komórkę |
+
+**Test formalny — czy to jest wybór strukturalny, czy szum?** Gdyby silnik co
+okno wybierał komórkę losowo (i.i.d., jednostajnie z 9), teoretyczny switch
+rate (prawdopodobieństwo, że kolejne okno wybierze INNĄ komórkę) wynosi
+dokładnie **8/9 = 88,9%**. Zmierzone switch rate (84,6%–94,0%) **mieszczą się w
+wąskim paśmie wokół tej wartości zerowej**, nie odchylają się w stronę zera
+(co świadczyłoby o stabilizacji). Chi-kwadrat rozkładu wyboru komórek przeciwko
+jednostajnemu (df=8, wartość krytyczna α=0,10 to 13,36): BTC 7d χ²=7,01, BTC
+14d χ²=6,35, ETH 7d χ²=8,71, ETH 14d χ²=9,05 — **żadna konfiguracja nie
+odrzuca hipotezy zerowej "wybór jest jednostajnie losowy"**, nawet przy
+łagodnym progu istotności. Innymi słowy: **wybór parametrów w tym pomiarze
+jest statystycznie nieodróżnialny od rzutu 9-ścienną kostką co okno.**
+
+### Wniosek: hipoteza kroczącej rekalibracji ZMIERZONA i ODRZUCONA
+
+1. **Pozorna przewaga `rolling` (+150 do +308pp względem `windowed_static`,
+   konsekwentnie w KAŻDYM z 20 okien testowych x config) to artefakt
+   in-sample selection bias, nie realna przewaga adaptacyjna.** Dowód nie jest
+   poszlakowy: (a) parametry NIE stabilizują się między oknami — przeciwnie,
+   switch rate jest empirycznie nieodróżnialny od czystego losowania (8/9
+   teoretyczne dla i.i.d.), (b) chi-kwadrat nie odrzuca jednostajności wyboru
+   w żadnej z 4 konfiguracji, (c) `windowed_static` (kontrola izolująca sam
+   efekt cięcia) zgadza się co do rzędu wielkości z niezależnie opublikowaną
+   Faza 2a — więc to nie cięcie na okna generuje ten gap, tylko konkretnie
+   krok "wybierz najlepsze z 9 na tych samych danych".
+2. **To jest dokładnie mechanizm ostrzeżenia zapisanego z góry w dokumentacji
+   skryptu** (`rolling_tma_atr_recalibration.py`, sekcja "Known limitation"):
+   best-of-9 na tym samym, krótkim oknie (9-16 transakcji na okno 7d) musi
+   dawać liczbę zawyżoną nawet przy zerowym realnym efekcie — to jest
+   statystyka rozkładu maksimum z 9 szumowych prób, nie sygnał.
+3. **Nie jest to "brak wystarczających dowodów" — jest to pozytywny dowód
+   przeciwko hipotezie**: gdyby rekalibracja łapała prawdziwą strukturę
+   rynkową (a nie szum), oczekiwalibyśmy switch rate WYRAŹNIE poniżej 8/9 i
+   niejednostajnego rozkładu wyboru (jedna/dwie komórki dominujące w danym
+   reżimie). Zamiast tego dostajemy dokładnie sygnaturę losowego wyboru.
+4. **Status: HIPOTEZA ODRZUCONA.** Nie wdrażać periodycznego joba
+   rekalibracji TMA/ATR w `daemon.py` na podstawie tego pomiaru — surowe
+   liczby "rolling bije static" są realne w tym sensie, że tak wypadł
+   backtest, ale nie są dowodem na przewagę, którą dałoby się odtworzyć
+   prospektywnie (na żywo, bez wiedzy "z przyszłości" o tym oknie).
+5. **Warunek, pod którym temat mógłby wrócić:** rzetelny test wymagałby
+   metodologii OOS (rekalibracja na oknie N, zastosowanie na oknie N+1, jak
+   `backtest_engine.train_test_validate` robi to dla filtra trendu) — ale to
+   jest inne zadanie niż to zlecone tu (user explicite prosił o rekalibrację
+   "w locie", nie o train/test, żeby uniknąć mieszania kategorii — patrz
+   metoda wyżej). Gdyby ktoś chciał to zbadać uczciwie, punktem wyjścia
+   byłoby dokładnie odwrócenie (2)/(3) tego skryptu na architekturę
+   train/test, nie douczanie się na tym samym oknie.
+
+### Odtwarzalność
+
+```bash
+PYTHONPATH=src python3 scripts/rolling_tma_atr_recalibration.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv \
+  --workers 8
+```
+Test jednostkowy (mały wycinek, nie pełny 610-dniowy przebieg):
+`tests/test_rolling_tma_atr_recalibration.py`. Pełny suite po tej sesji:
+zobacz commit historii — sesja nie dotyka `src/`, więc żaden istniejący test
+się nie zmienia.
