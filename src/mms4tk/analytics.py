@@ -428,7 +428,14 @@ class MMS4SignalEngine:
                     stop_loss=round(curr_c.close * 1.01, 6),
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)",
+                    # Audit Phase 3.1 (2026-09-11): SCOUT_MODE no longer cuts leverage to
+                    # 0.1x — that mechanism was retired (see state_manager.py's
+                    # SCOUT_LEVERAGE/SCOUT_SIZE_MULT comment: OKX clamps leverage to
+                    # integers >= 1, so 0.1x silently became 1x while the sizing math
+                    # still assumed a 10x cut, producing a sub-minimum order that never
+                    # executed). Risk is reduced via POSITION SIZE (SCOUT_SIZE_MULT) at
+                    # an exchange-legal leverage (SCOUT_LEVERAGE) instead.
+                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (reduced position size, not leverage)",
                     volatility_ratio=latest_vr
                 )
             else:
@@ -478,7 +485,14 @@ class MMS4SignalEngine:
                     stop_loss=round(curr_c.close * 0.99, 6),
                     leverage=active_leverage,
                     is_allowed=False,
-                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (leverage x0.1)",
+                    # Audit Phase 3.1 (2026-09-11): SCOUT_MODE no longer cuts leverage to
+                    # 0.1x — that mechanism was retired (see state_manager.py's
+                    # SCOUT_LEVERAGE/SCOUT_SIZE_MULT comment: OKX clamps leverage to
+                    # integers >= 1, so 0.1x silently became 1x while the sizing math
+                    # still assumed a 10x cut, producing a sub-minimum order that never
+                    # executed). Risk is reduced via POSITION SIZE (SCOUT_SIZE_MULT) at
+                    # an exchange-legal leverage (SCOUT_LEVERAGE) instead.
+                    reason="HIGH_RISK_ADD blocked in SCOUT_MODE (reduced position size, not leverage)",
                     volatility_ratio=latest_vr
                 )
             else:
