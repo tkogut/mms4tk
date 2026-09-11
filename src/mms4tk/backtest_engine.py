@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from mms4tk.analytics import Candle, IndicatorParams, MMS4SignalEngine, TMAIndicator
+from mms4tk.analytics import Candle, IndicatorParams, MMS4SignalEngine, TMAIndicator, _parse_candle_datetime
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 from mms4tk.logger_db import LoggerDB
 from mms4tk.okx_executor import OKXExecutor
@@ -239,6 +239,101 @@ def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     return dict(win_rate=win_rate, rr=rr, total_pnl=total_pnl, full_closes=full_closes)
 
 
+def _h4_bucket_ids(candles: List[Candle]) -> List[int]:
+    """Sequential H4 bucket id (0, 1, 2, ...) for each H1 candle, grouped on UTC
+    00/04/08/12/16/20 clock boundaries (the standard exchange 4h-candle alignment,
+    which is also what `HigherTimeframeAnalytics.calculate_higher_tf` implicitly
+    relies on when it fetches real 4h candles from the exchange). Purely a function
+    of each candle's own timestamp — causal by construction, no peeking at
+    neighbours."""
+    ids: List[int] = []
+    current_key: Optional[tuple] = None
+    current_id = -1
+    for c in candles:
+        dt = _parse_candle_datetime(c.timestamp)
+        key = (dt.year, dt.month, dt.day, dt.hour // 4)
+        if key != current_key:
+            current_key = key
+            current_id += 1
+        ids.append(current_id)
+    return ids
+
+
+def _build_h4_candles(candles: List[Candle], bucket_ids: List[int]) -> List[Candle]:
+    """Aggregate H1 candles into one 4h OHLC candle per bucket id. A bucket's OHLC is
+    fixed the moment all its member H1 candles are known — a bucket that already
+    ended (every H1 candle before the CURRENT bucket) is therefore a true, final,
+    already-closed 4h candle, regardless of how many more buckets follow it later in
+    this same list. `_htf_directional_bias_series` below only ever reads a bucket
+    strictly BEFORE an H1 candle's own (possibly still-forming) bucket, so building
+    this list once over the whole `candles` array introduces no lookahead."""
+    h4_candles: List[Candle] = []
+    cur_id: Optional[int] = None
+    o = h = l = cl = 0.0
+    ts: Any = None
+    for c, bid in zip(candles, bucket_ids):
+        if bid != cur_id:
+            if cur_id is not None:
+                h4_candles.append(Candle(timestamp=ts, open=o, high=h, low=l, close=cl, volume=0.0))
+            cur_id = bid
+            o, h, l, ts = c.open, c.high, c.low, c.timestamp
+        h = max(h, c.high)
+        l = min(l, c.low)
+        cl = c.close
+    if cur_id is not None:
+        h4_candles.append(Candle(timestamp=ts, open=o, high=h, low=l, close=cl, volume=0.0))
+    return h4_candles
+
+
+def _htf_directional_bias_series(candles: List[Candle], params: IndicatorParams) -> List[str]:
+    """Faza 3.2 (Hermes HTF supervision model): an optional, higher-timeframe
+    directional gate — H1 candles are resampled into 4h bars (`_h4_bucket_ids`/
+    `_build_h4_candles`, causal, UTC-clock-aligned) and run through the SAME
+    `TMAIndicator.calculate` + band-penetration test `HigherTimeframeAnalytics.
+    calculate_higher_tf` uses to derive `h4_tma_position` live (same `params`, so
+    `tma_length`/`atr_period`/`atr_mult` match production's H4 read exactly).
+
+    "ABOVE" (current H4 candle closed beyond the upper H4 band — a strong sustained
+    up-move) forces LONG_ONLY for the H1 candles inside the FOLLOWING H4 bucket;
+    "BELOW" forces SHORT_ONLY; "INSIDE" (or not enough H4 history yet) leaves "BOTH"
+    (no gating). This is a distinct, higher-timeframe hypothesis from the existing,
+    already-decided `tma_trend_filter_enabled` (same-interval TMA slope, threshold
+    0.002, blocks single counter-trend entries) — the two are independent knobs.
+
+    No lookahead: for an H1 candle in bucket `b`, the bias is read off bucket `b-1`
+    — the last H4 bar guaranteed to have fully closed strictly before `b` even
+    started forming. This mirrors `calculate_higher_tf`'s own
+    `use_closed_candles=True` default (which defensively drops what might be a
+    still-forming last exchange-fetched candle) with one whole bucket of extra
+    margin, since here there is no live "still forming" candle to drop — the
+    caution is applied on the bucket boundary itself instead.
+    """
+    bucket_ids = _h4_bucket_ids(candles)
+    h4_candles = _build_h4_candles(candles, bucket_ids)
+    h4_df = TMAIndicator.calculate(h4_candles, params)
+
+    bias: List[str] = []
+    for bid in bucket_ids:
+        closed_idx = bid - 1
+        if closed_idx < 0 or closed_idx >= len(h4_df):
+            bias.append("BOTH")
+            continue
+        tma_v = h4_df["tma"].iloc[closed_idx]
+        upper_v = h4_df["upper_band"].iloc[closed_idx]
+        lower_v = h4_df["lower_band"].iloc[closed_idx]
+        if pd.isna(tma_v) or pd.isna(upper_v) or pd.isna(lower_v):
+            bias.append("BOTH")
+            continue
+        h4_close = h4_candles[closed_idx].close
+        if h4_close > upper_v:
+            bias.append("LONG_ONLY")
+        elif h4_close < lower_v:
+            bias.append("SHORT_ONLY")
+        else:
+            bias.append("BOTH")
+    return bias
+
+
 def run_backtest(
     symbol: str,
     candles: List[Candle],
@@ -251,6 +346,7 @@ def run_backtest(
     midline_tp_fraction: float = 0.50,
     sl_cooldown_candles: int = 3,
     addon_sl_variant: str = "V2",
+    htf_directional_gate_enabled: bool = False,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -329,6 +425,16 @@ def run_backtest(
     (a determinism fix — one position could otherwise get two different SL prices
     depending on which code path attached last — NOT a PnL optimization), and the
     harness had silently kept modeling the retired V0 mechanism.
+
+    Faza 3.2 (2026-09-11): `htf_directional_gate_enabled` (default False, opt-in) —
+    an optional H4 directional gate fed by the same H1 candles, modeling the
+    hypothesis that Hermes' "asynchronous supervision" model could set
+    `directional_bias` automatically from H4 TMA-band position instead of (or
+    alongside) manual API calls. See `_htf_directional_bias_series` for the exact
+    causal mechanism. Distinct from `trend_filter_enabled`/`tma_trend_filter_enabled`
+    (same-interval TMA slope, already evaluated and decided separately) — this is a
+    higher-timeframe, state-level gate that blocks/allows whole classes of entries
+    for a run of H1 candles, not a per-candle slope check.
     """
     if addon_sl_variant not in ("V0", "V1", "V2"):
         raise ValueError(f"addon_sl_variant must be one of V0/V1/V2, got {addon_sl_variant!r}")
@@ -346,6 +452,11 @@ def run_backtest(
     # incrementally per step for faithful entry/HIGH_RISK_ADD/adaptive-VR decisions.
     full_df = TMAIndicator.calculate(candles, params)
     tma_slope = full_df["tma"].pct_change(periods=slope_lookback)
+
+    # Faza 3.2: precompute the whole H4 bias series once (causal, see docstring) —
+    # cheap relative to the per-candle H1 loop below, and avoids recomputing the H4
+    # TMA on every step.
+    htf_bias_series = _htf_directional_bias_series(candles, params) if htf_directional_gate_enabled else None
 
     trades: List[Dict[str, Any]] = []
     position: Optional[Dict[str, Any]] = None
@@ -486,6 +597,9 @@ def run_backtest(
                     record_partial("STALE_SPLIT_50")
                     position["contracts"] = contracts - reduce_amt
                     position["notional_weight"] *= (1.0 - reduced_frac)
+
+        if htf_bias_series is not None:
+            sm.strategy_profile.directional_bias = htf_bias_series[i]
 
         signal = engine.evaluate_signals(window, sm, params=params, symbol=symbol)
         slope_now = tma_slope.iloc[i] if i < len(tma_slope) else float("nan")
