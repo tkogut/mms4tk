@@ -1380,9 +1380,48 @@ retired V0. Pomiar Fazy 2a dostarcza przy okazji mocniejszą przesłankę dla
 okno×tryb — ale **BTC dokładnie tak samo, 9/10**, więc **nie jest to argument
 różnicujący ETH względem BTC**, tylko kolejny dowód na brak edge'a w ogóle.
 
+### 🔎 Sanity-check głównego znaleziska Fazy 2 (2026-09-11, ja sam, nie agent)
+
+Obaj agenci Fazy 2 niezależnie znaleźli to samo: na 610 dniach (`_swap_24m`)
+**każda kombinacja okno×tryb×`base_sl_pct` jest głęboko ujemna** — mediana
+okna ≈ −23%, nie "brak edge'a", tylko realna, duża strata. Zanim to przyjąć
+jako fakt o strategii (a nie artefakt narzędzia/proxy), sprawdziłem sam
+charakter ruchu ceny w najgorszym oknie (BTC W1, `2024-09-10 → 2025-01-10`,
+najgłębsza strata w obu tabelach Fazy 2):
+
+```
+open 57 644.6 -> close 94 780.9  (+64.4% w oknie)
+max close w oknie: 108 254.4
+max intra-window drawdown od rolling peak: tylko 15.1%
+```
+
+To nie przypadek ani błąd danych — to udokumentowany, silny, uporczywy trend
+wzrostowy BTC (rajd po wyborach w USA, szczyt ok. $108-109k na przełomie
+2024/2025). **Strategia jest z konstrukcji mean-reversion** (wejście na
+dotknięciu wstęgi TMA + odrzucenie, zakład na powrót do środka) — to jest
+dokładnie najgorszy możliwy reżim rynkowy dla tego mechanizmu: każde SHORT na
+górnej wstędze zostaje przejechane przez kontynuację trendu i wybite stopem,
+raz za razem. **To nie jest artefakt obliczeniowy — to oczekiwana porażka tej
+konkretnej klasy strategii w silnym trendzie.**
+
+**Konsekwencja strategiczna, ważniejsza niż same tabele A/B i P4:** poprzedni
+raport strategiczny (mierzony na spokojniejszym, 90-dniowym oknie) dawał obraz
+"brak wykazanego edge'a, ale blisko zera" — **to nie jest reprezentatywne dla
+szerszego reżimu rynkowego.** Realny obraz na 24 miesiącach to: strategia
+przeżywa/jest OK w okresach zakresowych (jak to 90-dniowe okno), ale **krwawi
+poważnie w silnych trendach** — a takie okresy zdarzają się regularnie w
+krypto (rajd 2024/2025 to nie wyjątek, to normalna część cyklu). Filtr trendu
+(TMA slope) był już testowany i odrzucony we wcześniejszych sesjach — ale był
+testowany **na tym samym, niereprezentatywnym 90-dniowym oknie**. To pytanie
+zasługuje na ponowne, uczciwe przeliczenie na długiej historii, zanim
+którakolwiek strona (wdrożyć filtr / nie wdrażać) zostanie uznana za
+rozstrzygniętą — nie zrobione w tej sesji, jawnie zapisane jako otwarte.
+
 ### Czego świadomie NIE robić teraz
 
 Nie ruszać progów Inactivity, `engine_mode`, `base_sl_pct`, nie budować filtra
 sesyjnego, nie skalować alokacji, nie wracać do Midline TP ani high-vol filtra
 (dopóki A1 nie odwróci ich werdyktu — jeśli odwróci, to osobny, ważny temat, nie
-cichy fakt do zignorowania).
+cichy fakt do zignorowania). **Nowe, po Fazie 2:** nie traktować dotychczasowego
+odrzucenia filtra trendu (TMA slope) jako ostatecznego — było mierzone tylko na
+niereprezentatywnym 90-dniowym oknie, patrz sanity-check wyżej.
