@@ -1,0 +1,13 @@
+{
+  "conversation_id": "phase3-3-rolling-tma-atr-recalibration",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "scripts/rolling_tma_atr_recalibration.py",
+    "tests/test_rolling_tma_atr_recalibration.py",
+    "task.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-11T14:30:51Z",
+  "notes": "Rolling TMA/ATR recalibration (7d/14d) measured against static default over 610d/5x122d windows (BTC+ETH, _swap_24m). Result: hypothesis REJECTED - apparent rolling advantage (+150..+308pp vs windowed_static control) is in-sample selection-bias artifact, confirmed by parameter-switch-rate statistically indistinguishable from uniform random choice (chi2 df=8 non-significant in all 4 configs; switch rate ~85-94% vs theoretical 8/9=88.9% null). No production code changed (analysis-only)."
+}
