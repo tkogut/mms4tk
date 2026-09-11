@@ -1425,3 +1425,192 @@ sesyjnego, nie skalować alokacji, nie wracać do Midline TP ani high-vol filtra
 cichy fakt do zignorowania). **Nowe, po Fazie 2:** nie traktować dotychczasowego
 odrzucenia filtra trendu (TMA slope) jako ostatecznego — było mierzone tylko na
 niereprezentatywnym 90-dniowym oknie, patrz sanity-check wyżej.
+
+---
+
+## 🔹 Faza 3-4: filtr wyczerpania zasięgu D1 (overextension) blokujący HIGH_RISK_ADD 🔴 ODRZUCONE
+
+Worktree/branch `chore/phase3-4-d1-atr-exhaustion-filter`. Punkt odniesienia:
+`.agents/specs/knowledge/Architektura Systemowa mms4tk...md` sek. 3 (Hermes Agent
+i D1 ATR, `ATR_LOOKBACK` 3-5 dni) oraz audyt P5 (ii): "blokada HIGH_RISK_ADD w
+EXPANSION". Hipoteza usera: strategia mean-reversion krwawi w silnych trendach
+(patrz sanity-check Fazy 2 wyżej — BTC W1, rajd +64%, najgorsza strata); dokładka
+(30% budżetu) wpycha dodatkowe ryzyko kierunkowe w trend, który już zabiera
+pieniądze; `atr_d1_expansion_ratio`/`is_volatility_expansion` (próg
+`htf_expansion_threshold=2.5`, `analytics.py`) już liczy dokładnie to, ale
+**żadna ścieżka egzekucji go nie czyta** — dziś to wyłącznie dana do odczytu dla
+zewnętrznego Hermes Agenta przez `/api/v1/analytics/higher_tf` (P9.4).
+
+### Krok 1: weryfikacja obecnego stanu — POTWIERDZONE, nic dziś tego nie egzekwuje
+
+- `grep HIGH_RISK_ADD daemon.py` → jedyna gałąź wykonania (`execute_symbol_cycle`,
+  ok. linii 1614-1720+) czyta: Post-SL Cooldown, Candle Gate, Single Addon Guard
+  (`_addon_count`), stan maszyny (`BASE_MODE` required), twardy cap marży
+  (`notional_cap_usd`), Portfolio Margin Guard. **Zero odwołań** do
+  `atr_d1_expansion_ratio`, `is_volatility_expansion`, `HigherTimeframeAnalytics`
+  czy `calculate_higher_tf` w całym `daemon.py` — potwierdzone grepem, nie
+  założone.
+- Sprawdzone też pośrednie ścieżki: `risk_profile` (CONSERVATIVE/MODERATE/
+  AGGRESSIVE, `state_manager.py`) wpływa WYŁĄCZNIE na leverage
+  (`_resolve_leverage`/`BASE_LEVERAGE_BY_PROFILE`) — to osobny, ręcznie ustawiany
+  operator/Hermes dial, zero związku z D1 ATR. `api.py`'s `HigherTimeframeResponse`
+  (P9.4) tylko rozszerza pola w odpowiedzi read-only endpointu — nie zmienia
+  żadnej logiki wykonania.
+- **Wniosek: teza z briefu w 100% się potwierdza** — mechanizm istnieje, jest
+  policzony poprawnie, ale jest martwy dla egzekucji.
+
+### Krok 2-3: harness + backtest na 24 mies. historii
+
+Nowy opcjonalny parametr `backtest_engine.run_backtest(...,
+d1_exhaustion_filter_enabled: bool = False)` (default OFF — bez zmiany
+zachowania żadnego istniejącego callera). Nowa funkcja
+`_compute_d1_exhaustion_flags(candles, params)`: **causal, intraday** flaga per
+świeca H1 — dla świecy w dniu D (UTC), `atr_ref` = ATR_D1 policzone z dni ściśle
+przed D (dokładnie ten sam `TMAIndicator.calculate`, ten sam
+`params.htf_expansion_threshold=2.5`, reużyty, nie wymyślony), `running_range` =
+max(high)-min(low) świec dnia D **od początku dnia do bieżącej świecy włącznie**
+(nigdy późniejszych) — bez lookaheadu. `flagged = running_range >= threshold *
+atr_ref`. Gdy flaga True, sygnał `HIGH_RISK_ADD_*` jest **całkowicie pomijany**
+(baza otwiera się normalnie — filtr dotyczy wyłącznie dokładki, zgodnie z
+briefem). Wybrano wariant intraday/przyczynowy zamiast dosłownego "ostatnia
+zamknięta świeca D1" z `calculate_higher_tf` (który jest z natury spóźniony o
+cały dzień) — świadoma decyzja projektowa, udokumentowana w docstringu
+`_compute_d1_exhaustion_flags`, i zweryfikowana niżej jako **niezależna od tego
+wyboru metodologii** (patrz "Kontrola: czy to bug w implementacji?").
+6 nowych testów w `tests/test_backtest_engine.py` (unit na budowniku flag +
+5 na `run_backtest`: blokuje w wyczerpanym oknie, to samo bez filtra przepuszcza,
+przed progiem przepuszcza, baza nigdy nie blokowana).
+
+**Pomiar** (`scripts/d1_exhaustion_filter_analysis.py`, zostawiony w repo):
+5 niezależnych okien 122-dniowych na symbol, `ohlcv_{BTC,ETH}_USDT_1h_swap_24m.csv`
+(730 d proxy) + kontrola na `ohlcv_{BTC,ETH}_USDC_1h_max.csv` (384 d, realny
+USDC, 3 okna/symbol) — ten sam setup co Faza 2a/2b: `engine_mode=ADAPTIVE`, VR
+1.6/0.8, `stale_candles_threshold=12`, trend filter OFF, `addon_sl_variant`
+default (V2), netto ze skalibrowaną `ROUND_TRIP_FEE_PCT=0.0010003` (A1).
+
+##### Tabela główna — 730 d proxy (`_swap_24m`), 10 niezależnych okien
+
+| okno | zakres (UTC) | OFF net | ON net | Δ (ON−OFF) | OFF txn | ON txn | OFF addons | ON addons | OFF SL | ON SL |
+|---|---|---|---|---|---|---|---|---|---|---|
+| BTC_W1 | 2024-09-10..2025-01-10 | −28,84% | −28,84% | **+0,00pp** | 173 | 173 | 32 | 32 | 32 | 32 |
+| BTC_W2 | 2025-01-10..2025-05-12 | −33,43% | −33,43% | +0,00pp | 200 | 200 | 47 | 47 | 47 | 47 |
+| BTC_W3 | 2025-05-12..2025-09-11 | −20,35% | −20,35% | +0,00pp | 211 | 211 | 67 | 67 | 17 | 17 |
+| BTC_W4 | 2025-09-11..2026-01-11 | +1,13% | +1,13% | +0,00pp | 209 | 209 | 60 | 60 | 27 | 27 |
+| BTC_W5 | 2026-01-11..2026-05-13 | −22,83% | −22,83% | +0,00pp | 175 | 175 | 36 | 36 | 30 | 30 |
+| ETH_W1 | 2024-09-10..2025-01-10 | −15,72% | −15,72% | +0,00pp | 227 | 227 | 20 | 20 | 46 | 46 |
+| ETH_W2 | 2025-01-10..2025-05-12 | −14,38% | −14,38% | +0,00pp | 237 | 237 | 20 | 20 | 59 | 59 |
+| ETH_W3 | 2025-05-12..2025-09-11 | −45,09% | −45,09% | +0,00pp | 279 | 279 | 34 | 34 | 49 | 49 |
+| ETH_W4 | 2025-09-11..2026-01-11 | −6,19% | −6,19% | +0,00pp | 243 | 243 | 41 | 41 | 36 | 36 |
+| ETH_W5 | 2026-01-11..2026-05-13 | −32,06% | −32,06% | +0,00pp | 222 | 222 | 27 | 27 | 40 | 40 |
+
+**SUMA: OFF = −217,76% / ON = −217,76% / Δ = +0,00pp. ON bije OFF w 0/10 okien
+(dokładnie tyle samo, co REMIS w 10/10 — nie jedna transakcja się nie zmieniła).**
+
+##### Kontrola — 384 d realny USDC (`_max`), 6 niezależnych okien (nie sumować z tabelą wyżej — korelacja ~0,96, częściowo to samo okno kalendarzowe co Faza 2a)
+
+| okno | zakres (UTC) | OFF net | ON net | Δ (ON−OFF) | OFF txn | ON txn | OFF addons | ON addons |
+|---|---|---|---|---|---|---|---|---|
+| BTC_W1 | 2025-08-22..2025-12-22 | +2,44% | +2,44% | +0,00pp | 252 | 252 | 72 | 72 |
+| BTC_W2 | 2025-12-22..2026-04-23 | −24,03% | −24,03% | +0,00pp | 208 | 208 | 49 | 49 |
+| BTC_W3 | 2026-04-23..2026-08-23 | −3,33% | −3,33% | +0,00pp | 230 | 230 | 71 | 71 |
+| ETH_W1 | 2025-08-22..2025-12-22 | −6,35% | −6,35% | +0,00pp | 297 | 297 | 44 | 44 |
+| ETH_W2 | 2025-12-22..2026-04-23 | −26,78% | −26,78% | +0,00pp | 245 | 245 | 29 | 29 |
+| ETH_W3 | 2026-04-23..2026-08-23 | +0,10% | +0,10% | +0,00pp | 257 | 257 | 65 | 65 |
+
+**SUMA: OFF = −57,95% / ON = −57,95% / Δ = +0,00pp. ON bije OFF w 0/6 okien.**
+
+**Across wszystkich 16 niezależnych okien (10 + 6): ON == OFF bit-for-bit w
+16/16 — nie "słaby efekt", tylko dokładnie zero. `total_pnl`, `rr`, liczba
+transakcji, liczba dokładek, liczba SL-exitów: identyczne co do 4. miejsca po
+przecinku w KAŻDYM oknie.**
+
+### BTC_W1 (rajd +64%, najgorsza strata Fazy 2) — sprawdzone dokładnie, jak zlecono
+
+To okno miało dostać szczególną uwagę, bo brief zakładał, że tu filtr zadziała
+najmocniej. Zmierzone wprost:
+
+- `_compute_d1_exhaustion_flags` flaguje **27 z 2928 godzin (0,9%)**, rozrzucone
+  na **6 z 122 dni kalendarzowych (4,9%)** — nie "regularnie", tylko rzadko,
+  nawet w najsilniejszym trendzie w całym zbiorze 24 mies.
+- Wszystkie 5 okien BTC i 5 okien ETH pokazują ten sam rząd wielkości: **2-9
+  flagowanych dni na 122 (1,6-7,4%)** — BTC_W1 nie jest wyjątkiem, jest w
+  środku stawki.
+- Ze 160 surowych świec-kandydatów na sygnał `HIGH_RISK_ADD_*` w tym oknie
+  (zanim odsieje je Single Addon Guard/stan maszyny), tylko **3 pokrywają się**
+  z którąkolwiek z 27 flagowanych godzin — i żadna z tych 3 nie jest tą
+  KONKRETNĄ świecą, na której realnie zapada pierwsza (i jedyna, licząc Single
+  Addon Guard) dokładka dla którejkolwiek z 32 pozycji, które faktycznie dostały
+  addon w tym oknie. Stąd `ON addons == OFF addons == 32` dokładnie.
+
+### Kontrola: czy to bug w implementacji, czy realna własność danych?
+
+Zanim przyjąć zero jako wynik, sprawdzone niezależnie DWIE rzeczy:
+
+1. **Czy flaga w ogóle kiedykolwiek jest True?** Tak — zweryfikowane wprost
+   (27/11/15/11/23 godzin BTC W1-W5, 10/57/7/8/13 godzin ETH W1-W5) — budowniczy
+   flag nie jest martwym kodem, po prostu warunek jest rzadki.
+2. **Czy to artefakt WYBORU metodologii (intraday/przyczynowa vs dosłowna
+   "ostatnia zamknięta świeca D1" z `calculate_higher_tf`)?** Sprawdzone przez
+   przeliczenie DOKŁADNIE tej drugiej, produkcyjnej metody (pełny zakres dnia
+   D1 vs ATR liczone na tej samej serii, identyczny kod `TMAIndicator.calculate`)
+   na BTC_W1: **3 z 123 dni (2,4%)** przekraczają próg 2,5 (max ratio 3,70,
+   mediana 0,95, średnia 1,04) — **ten sam rząd wielkości** co metoda
+   przyczynowa użyta w backteście. Obie metodologie zgadzają się: EXPANSION
+   (≥2,5×ATR_D1) to zdarzenie rzadkie (~2-5% dni), niezależnie od tego, którą z
+   dwóch rozsądnych definicji się użyje. **To nie jest bug w implementacji —
+   to realna własność danych i samego progu.**
+
+**Mechanizm, dlaczego hipoteza z briefu ("dzienny zasięg w silnym trendzie
+regularnie przekracza 2,5×ATR_D1") nie trzyma się empirycznie:** ATR_D1 jest
+miarą kroczącą — w trwałym, jednostajnym trendzie wzrostowym ATR **rośnie razem
+z nim**, doganiając podniesioną zmienność w ciągu kilkunastu dni. Próg 2,5×ATR_D1
+łapie **nagłe, jednodniowe szoki zmienności** (pojedynczy gwałtowny dzień na tle
+poprzedzającego, spokojniejszego okresu), a nie **utrzymujący się, jednostajny
+trend** — a to drugie jest dokładnie tym, czym jest BTC_W1 (rajd +64% rozłożony
+na 122 dni, nie kilka szokowych sesji). Dwie różne rzeczy, ten sam próg nie łapie
+tej drugiej.
+
+### 🔴 WERDYKT: ODRZUCONE — NIE wdrożone do `daemon.py`
+
+- **Efekt: dokładnie zero, nie "słaby" ani "niejednoznaczny"** — 0/16 okien z
+  jakąkolwiek zmianą PnL, R:R, liczby transakcji czy dokładek; identyczność
+  bit-for-bit w każdym oknie. To silniejszy, bardziej jednoznaczny null-result
+  niż jakikolwiek wcześniej odrzucony filtr w tym dokumencie (Midline TP miał
+  chociaż jakiś, choć przegrywający, efekt na PnL — ten filtr nie ma żadnego).
+- **Przyczyna zidentyfikowana, nie tylko zaobserwowana:** próg
+  `htf_expansion_threshold=2,5` (reużyty z audytu/`analytics.py`, zgodnie z
+  poleceniem — nie wymyślony na potrzeby tego zadania) flaguje ~2-7% dni nawet
+  w najsilniejszym trendzie 24-mies. historii, bo ATR_D1 sam adaptuje się do
+  podniesionej zmienności trendu. W połączeniu z Single Addon Guard (dokładka
+  raz na pozycję) prawdopodobieństwo, że ten JEDEN moment akurat wypadnie na
+  jeden z tych rzadkich dni, jest bliskie zeru — i empirycznie wyszło zero.
+- **To NIE unieważnia diagnozy usera** ("dokładka wpycha ryzyko kierunkowe w
+  trend, który już zabiera pieniądze" — prawdziwe, patrz Faza 2 sanity-check) —
+  unieważnia tylko **ten konkretny, konserwatywny próg** (2,5×ATR_D1) jako
+  narzędzie do złapania tego zjawiska. Próg zaprojektowany do łapania szoków
+  zmienności nie jest tym samym narzędziem co próg do łapania trwałego trendu
+  kierunkowego (to byłby raczej sygnał typu TMA-slope/kierunkowy, już zbadany i
+  odrzucony w PLAN-008 Phase 3 na starym, niereprezentatywnym oknie — patrz
+  sanity-check Fazy 2, "to pytanie zasługuje na ponowne uczciwe przeliczenie na
+  długiej historii" — to osobny, nierozpoczęty temat, nie ten ticket).
+- **Zostawione jako zmierzona, odrzucona hipoteza** — dokładnie jak P4 wariant
+  #2 i P6.2: `d1_exhaustion_filter_enabled` zostaje w `backtest_engine.py` jako
+  opcjonalny, **default `False`**, wyłącznie do odtwarzalności tego pomiaru;
+  **`daemon.py` NIE dostaje żadnej nowej gałęzi/guarda** — `HIGH_RISK_ADD` nadal
+  egzekwuje się dokładnie tak, jak przed tą sesją. Nikt nie powinien proponować
+  ponownie "wdrożyć D1 ATR exhaustion filter przy progu 2,5" bez nowego dowodu
+  (inny próg, inny mechanizm — np. wprost kierunkowy/trend-based, nie
+  zmienność-based).
+
+### Odtworzenie
+
+```bash
+PYTHONPATH=src python3 scripts/d1_exhaustion_filter_analysis.py --window-days 122 \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv
+PYTHONPATH=src python3 scripts/d1_exhaustion_filter_analysis.py --window-days 122 \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv
+```
+
+6 nowych testów w `tests/test_backtest_engine.py` (`test_compute_d1_exhaustion_flags_*`,
+`test_d1_exhaustion_filter_*`). Pełny suite: **350 passed, 4 deselected**
+(`-m "not slow"`).
