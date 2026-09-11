@@ -40,9 +40,16 @@ shipping a 1.5% stop to production would do today, so it is modeled, not removed
 
 Usage:
 
+    # the headline measurement: 5 independent 122d windows on the 730d proxy
     PYTHONPATH=src python3 scripts/sl_grid_analysis.py \
         --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv \
         --window-days 122
+
+    # the V0-vs-V2 isolation on the ORIGINAL 90d fixture the first grid used:
+    # --window-days 90 == that report's "full", --window-days 45 == its H1/H2.
+    # With --variant V0 this reproduces the original table cell for cell.
+    PYTHONPATH=src python3 scripts/sl_grid_analysis.py --variant V0 --window-days 45 \
+        --fixtures ohlcv_BTC_USDC_1h.csv ohlcv_ETH_USDC_1h.csv
 """
 
 from __future__ import annotations
@@ -77,18 +84,18 @@ def load_fixture(name: str) -> List[Candle]:
                 for r in csv.DictReader(f)]
 
 
-def _cell(args: Tuple[str, str, int, int, float]) -> Dict[str, Any]:
+def _cell(args: Tuple[str, str, int, int, float, str]) -> Dict[str, Any]:
     """One (fixture, symbol, window, sl) backtest. Runs in its own process, so the
     `BASE_SL_PCT` patch cannot leak into any other cell."""
-    fixture, symbol, w, per_window, sl = args
+    fixture, symbol, w, per_window, sl, variant = args
     candles = load_fixture(fixture)[w * per_window:(w + 1) * per_window]
     params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.6, adaptive_vr_low=0.8)
     be.BASE_SL_PCT = sl
     trades = be.run_backtest(symbol, candles, params, stale_candles_threshold=12,
-                             trend_filter_enabled=False)
+                             trend_filter_enabled=False, addon_sl_variant=variant)
     stats = be._stats(trades)
     return {
-        "fixture": fixture, "symbol": symbol, "window": w, "sl": sl,
+        "fixture": fixture, "symbol": symbol, "window": w, "sl": sl, "variant": variant,
         "total_pnl": stats["total_pnl"], "rr": stats["rr"],
         "trades": len(trades), "full_closes": stats["full_closes"],
         "sl_exits": sum(1 for t in trades if t["exit_reason"] == "STOP_LOSS"),
@@ -105,19 +112,23 @@ def main() -> None:
     ap.add_argument("--window-days", type=int, default=122)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--csv-out", default=None, help="write the raw per-cell rows here")
+    ap.add_argument("--variant", choices=("V0", "V1", "V2"), default="V2",
+                    help="addon_sl_variant; V2 is production (and run_backtest's default). "
+                         "V0 reproduces the retired pre-P3 mechanism the original P4 grid "
+                         "was measured under.")
     args = ap.parse_args()
 
     per_window = args.window_days * 24
-    jobs: List[Tuple[str, str, int, int, float]] = []
+    jobs: List[Tuple[str, str, int, int, float, str]] = []
     for fixture in args.fixtures:
         symbol = "ETH/USDC" if "ETH" in fixture.upper() else "BTC/USDC"
         n_windows = len(load_fixture(fixture)) // per_window
         for w in range(n_windows):
             for sl in GRID:
-                jobs.append((fixture, symbol, w, per_window, sl))
+                jobs.append((fixture, symbol, w, per_window, sl, args.variant))
 
     print(f"{len(jobs)} cells (window={args.window_days}d = {per_window} candles), "
-          f"variant=V2 (default), fee={be.ROUND_TRIP_FEE_PCT}", flush=True)
+          f"variant={args.variant}, fee={be.ROUND_TRIP_FEE_PCT}", flush=True)
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         rows = list(ex.map(_cell, jobs))
 
