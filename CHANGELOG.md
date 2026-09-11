@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.45.0] - 2026-09-11
+
+### 🎯 Faza 3 Zakończona (Optymalizacje & Bugfixy)
+- 🐛 **Bugfix (3.1)**: Midline TP w `daemon.py` używa teraz `closed_candles` (zamiast `candles[-1]`) aby zapobiec triggerowaniu częściowego zamknięcia na podstawie repaintującej się świecy.
+- ✨ **Feature (3.2)**: Opcjonalny `htf_directional_gate_enabled` (domyślnie OFF) pozwala na filtrowanie wejść na bazie trendu z 4H (H4 TMA position). Architektura bezpieczna dla `asyncio` (per-symbol dict).
+- 🔬 **Skrypty Analityczne (3.3 & 3.4)**: Dodano narzędzia do rolling TMA/ATR recalibration oraz D1 ATR exhaustion (opt-in dla backtestu). Obie hipotezy zostały zmierzone i formalnie odrzucone.
+
 ## 🚀 [0.44.6] - 2026-09-11
 
 ### 🎯 Backtest Harness: Default Now Matches Live Production (P3 V2)
