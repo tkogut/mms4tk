@@ -542,7 +542,9 @@ P4 wariant #2, P6.2 wciąż nie zaczęte — patrz niżej):
 - **A/B `engine_mode` CLASSIC-vs-ADAPTIVE** (nigdy nie testowane, efekt 5.8× na
   BTC_full wg usera) — nie zbadane. Produkcja potwierdzona jako `ADAPTIVE`.
 - **P4 wariant #2** (poprawiony: BTC przypięty na 2.0%, siatka tylko na ETH) —
-  nie zaczęte.
+  **nieaktualne**: zmierzone i zamknięte w Etapie 5 (siatka na obu symbolach),
+  a następnie **przeliczone na 730 dniach pod V2** (2026-09-11) — patrz Etap 5,
+  sekcja „P4 wariant #2 PRZELICZONY NA DŁUGIEJ HISTORII POD V2".
 - **P6.2** — nie zaczęte.
 - Endpoint `/api/v1/trade/high_risk_add` nadal poza spójnością V2 — patrz wyżej.
 
@@ -1014,6 +1016,13 @@ zmian względem baseline'u, bo sesja nie dotyka `src/` ani testów.
 
 #### ✅ ZAMKNIĘTE — P4 wariant #2 (SL per-symbol): hipoteza SFALSYFIKOWANA
 
+> ⚠️ **Ta tabela jest liczona pod wycofanym wariantem V0 i na jednym 90-dniowym
+> oknie.** Przeliczona 2026-09-11 na 730 dniach pod produkcyjnym V2 — decyzja
+> (`2.0%` zostaje) się utrzymuje, ale **uzasadnienie poniżej („monotonicznie
+> szkodzi w obu połowach OOS") zostało obalone jako artefakt V0**. Nie cytować
+> tego akapitu bez sekcji „P4 wariant #2 PRZELICZONY NA DŁUGIEJ HISTORII POD V2"
+> niżej.
+
 Siatka `base_sl_pct` ∈ {1.5, 2.0, 2.5, 3.0, 3.5}%, netto, 2 połowy OOS + full:
 
 | SL% | BTC full | ETH H1 | ETH H2 | **ETH full** | ETH SL-exits |
@@ -1034,6 +1043,245 @@ wzorzec co Midline TP: sensowna arytmetyka, empirycznie szkodliwa. Na BTC 2,0-2,
 to płaskowyż bez wyraźnej przewagi. **Status: ODRZUCONE. `base_sl_pct=2.0%`
 zostaje niezmienione dla obu symboli. Wariant #3 (`SL=k·ATR`) tym bardziej nie ma
 podstaw i nie jest rekomendowany.**
+
+#### 🔁 P4 wariant #2 PRZELICZONY NA DŁUGIEJ HISTORII POD V2 (2026-09-11) — decyzja `2.0%` ZOSTAJE, ale jej ÓWCZESNE UZASADNIENIE JEST OBALONE
+
+Worktree/branch: `chore/phase2b-p4-sl-grid-long-history`. Skrypt:
+`scripts/sl_grid_analysis.py` (zostawiony w repo — w przeciwieństwie do
+jednorazowej kalibracji A1 ten pomiar jest w 100% odtwarzalny, bo wszystkie
+fixture'y są w repo).
+
+**Dlaczego tabela wyżej wymagała przeliczenia — dwa niezależne powody:**
+1. Była liczona pod `addon_sl_variant="V0"` (default harnessu do 2026-09-11),
+   czyli pod **wycofanym** mechanizmem SL sprzed P3 (kompozyt 1,25% od avgPx).
+   Produkcja realizuje dziś **V2** i harness domyślnie liczy V2 (patrz „P1
+   ZAMKNIĘTE FORMALNIE").
+2. Była liczona na JEDNYM 90-dniowym fixture'cie pociętym na 2 połowy OOS
+   (~±20 pp CI). Dostępne są teraz `ohlcv_{BTC,ETH}_USDT_1h_swap_24m.csv`
+   (730 d, **proxy** USDT-swap — OKX nie ma 24 mies. historii dla USDC) oraz
+   `ohlcv_{BTC,ETH}_USDC_1h_max.csv` (384 d, realne USDC).
+
+**Uwaga koncepcyjna — zmienia się, CO ta siatka mierzy:** pod V2 dokładka nie ma
+własnego SL, więc `base_sl_pct` jest **jedynym SL w całym systemie**. Stara
+siatka mierzyła kompromis między dwoma progami (baza 2% vs kompozyt 1,25% po
+dokładce); nowa mierzy jedną, wspólną zmienną decyzyjną.
+
+**Konfiguracja pomiaru:** `engine_mode=ADAPTIVE`, VR 1.6/0.8,
+`stale_candles_threshold=12`, trend filter off, `addon_sl_variant` = default
+(V2), netto wg modelu P2 ze **skalibrowaną** stawką `ROUND_TRIP_FEE_PCT =
+0.0010003` (A1) + funding 0,01%/8 świec. 5 kolejnych, **nienachodzących** okien
+122-dniowych na symbol (122 d = wzorzec z `fixture_power_analysis.py`;
+730/122 = 5,98 → 5 pełnych okien), 173-279 transakcji na komórkę, 50 komórek.
+`base_sl_pct` **nie jest** parametrem `run_backtest()` — to modułowa stała
+`backtest_engine.BASE_SL_PCT`, czytana w locie zarówno przez sam check SL, jak i
+przez przypisanie `sl_pct_override` w gałęzi V2; siatka podmienia ją per proces
+roboczy (jeden proces na komórkę → zero przecieków między komórkami).
+
+##### Tabela: netto (`total_pnl`) per okno — BTC (proxy `_swap_24m`)
+
+| SL% | W1 09-24→01-25 | W2 →05-25 | W3 →09-25 | W4 →01-26 | W5 →05-26 | SUMA | SL-exits | txn |
+|---|---|---|---|---|---|---|---|---|
+| 1,5 | −44,55% | −38,22% | −21,55% | −12,18% | −53,55% | −170,05% | 217 | 1268 |
+| **2,0 (dziś)** | **−28,84%** | **−33,43%** | −20,35% | **+1,13%** | −22,83% | **−104,33%** | 153 | 968 |
+| 2,5 | −38,67% | −40,46% | **−17,85%** | −0,14% | **−16,79%** | −113,92% | 115 | 977 |
+| 3,0 | −38,33% | −42,01% | −22,60% | −9,65% | −18,24% | −130,83% | 94 | 985 |
+| 3,5 | −42,79% | −46,66% | −30,64% | −13,66% | −23,45% | −157,21% | 81 | 980 |
+
+##### Tabela: netto per okno — ETH (proxy `_swap_24m`)
+
+| SL% | W1 09-24→01-25 | W2 →05-25 | W3 →09-25 | W4 →01-26 | W5 →05-26 | SUMA | SL-exits | txn |
+|---|---|---|---|---|---|---|---|---|
+| 1,5 | −42,94% | −46,40% | −79,04% | **+8,04%** | −36,88% | −197,22% | 307 | 1180 |
+| **2,0 (dziś)** | **−15,72%** | −14,38% | −45,09% | −6,19% | **−32,06%** | −113,44% | 230 | 1208 |
+| 2,5 | −24,61% | −19,28% | −36,11% | +1,81% | −38,68% | −116,88% | 184 | 1198 |
+| 3,0 | −33,68% | **+10,97%** | −31,30% | −1,23% | −35,62% | **−90,85%** | 147 | 1186 |
+| 3,5 | −29,20% | +1,85% | **−23,85%** | −13,42% | −44,89% | −109,50% | 133 | 1171 |
+
+(Pogrubione = najlepsza wartość SL w danym oknie. Zakresy dat okien: W1
+2024-09-10..2025-01-10, W2 ..2025-05-12, W3 ..2025-09-11, W4 ..2026-01-11,
+W5 2026-01-11..2026-05-13.)
+
+##### Tabela: R:R per okno (ta sama siatka)
+
+| SL% | BTC W1..W5 | średnia BTC | ETH W1..W5 | średnia ETH |
+|---|---|---|---|---|
+| 1,5 | 1,027 / 1,007 / 1,198 / 1,337 / 0,868 | **1,087** | 1,056 / 1,434 / 1,042 / 1,419 / 1,179 | **1,226** |
+| 2,0 | 0,827 / 0,720 / 1,073 / 1,367 / 0,661 | 0,930 | 0,753 / 0,941 / 0,757 / 1,063 / 0,532 | 0,809 |
+| 2,5 | 0,741 / 0,657 / 1,035 / 1,298 / 0,767 | 0,900 | 0,814 / 0,832 / 0,805 / 1,010 / 0,532 | 0,798 |
+| 3,0 | 0,735 / 0,616 / 0,979 / 1,186 / 0,810 | 0,865 | 0,686 / 1,258 / 0,786 / 0,948 / 0,627 | 0,861 |
+| 3,5 | 0,714 / 0,535 / 0,855 / 1,110 / 0,735 | 0,790 | 0,672 / 1,120 / 0,948 / 0,811 / 0,555 | 0,821 |
+
+##### Test kierunku okno-po-oknie (10 niezależnych komórek = 2 symbole × 5 okien)
+
+To jest dokładnie ten test, który poprzednio odróżnił „realny efekt" od szumu —
+tyle że na 10 komórkach zamiast 2 połówek:
+
+| porównanie (netto) | wygrywa z 2,0% w |
+|---|---|
+| 1,5% vs 2,0% | **1/10** komórek |
+| 2,5% vs 2,0% | 4/10 |
+| 3,0% vs 2,0% | 4/10 |
+| 3,5% vs 2,0% | 2/10 |
+
+- **Najlepsza wartość SL w komórce:** 2,0% → **5/10**, 2,5% → 2/10, 1,5%/3,0%/3,5%
+  → po 1/10. Ranking 2,0% w komórce: 1. miejsce ×5, 2. ×1, 3. ×2, 4. ×2,
+  **ostatnie miejsce ani razu**.
+- **Monotoniczność poszerzania (2,0→2,5→3,0→3,5):** monotonicznie GORZEJ w
+  **2/10** komórek, monotonicznie LEPIEJ w **1/10**, brak monotoniczności w 7/10.
+- **Dokładna teza starego raportu („każde poszerzenie gorsze od 2,0%"):**
+  prawdziwa w **5/10** komórek — czyli rzut monetą, nie efekt.
+- **Na samym ETH (5 okien):** poszerzanie szkodzi w komplecie tylko w W1 i W5,
+  a w W2 i W3 **pomaga mocno** (3,0%: +25,35 pp w W2; 3,5%: +21,24 pp w W3).
+  Suma po ETH faworyzuje nawet 3,0% (−90,85% vs −113,44%), ale ta suma stoi na
+  dwóch oknach z sześciu — **to nie jest sygnał, to rozrzut**.
+
+##### Stare vs nowe liczby — co się utrzymało, a co nie
+
+| teza ze starego raportu (V0, 1 okno 90 d) | status na 730 d pod V2 |
+|---|---|
+| „Na ETH poszerzanie SL **monotonicznie** pogarsza wynik w OBU połowach OOS" | **NIE POTWIERDZONE.** Monotoniczne pogorszenie w 2/10 komórek (ETH: 0/5 pełnej monotoniczności, kierunek „wszystko szersze gorsze" tylko w 2/5). Efekt **niepowtarzalny.** |
+| „Mechanizm: szerszy stop nie zamienia SL w `TP_AND_FLIP`, tylko utrzymuje przegrane dłużej" | **NIEROZSTRZYGNIĘTE.** Liczba SL-exitów faktycznie spada monotonicznie (BTC 217→81, ETH 307→133), ale wynik netto nie podąża monotonicznie za tym spadkiem w żadnym z symboli. |
+| „Na BTC 2,0-2,5% to płaskowyż" | **POTWIERDZONE.** 2,0% i 2,5% to 1. lub 2. miejsce w 5/5 okien BTC; różnica sumaryczna 9,6 pp na 5 okien przy rozrzucie międzyokiennym rzędu 30-50 pp. |
+| „`base_sl_pct=2.0%` zostaje" | **UTRZYMANE**, ale z innego powodu: nie dlatego, że poszerzanie szkodzi (nie szkodzi konsekwentnie), tylko dlatego, że **żadna alternatywa nie wygrywa w większości niezależnych okien**, a 2,0% ma najlepszy profil rankingowy (5×1. miejsce, 0× ostatnie). |
+| „Wariant #3 (`SL=k·ATR`) nie ma podstaw" | **NIEZMIENIONE** — nic w tym pomiarze nie daje mu podstawy, ale też nie jest tu testowany. |
+
+**Poziomy bezwzględne nie są porównywalne ze starą tabelą** (stare ETH_full
+−7,95% vs nowe okna −15..−45%): inne okno (122 d vs 90 d), inny instrument
+(proxy USDT-swap vs USDC), inny reżim rynkowy (2024-09..2026-05 vs
+2026-05..2026-08) i inny wariant SL. Porównywalny jest wyłącznie **kierunek**
+wewnątrz tego samego pomiaru.
+
+##### Efekt uboczny wart zapisania: 1,5% jest jednoznacznie złe, a R:R o tym kłamie
+
+`base_sl_pct=1,5%` przegrywa z 2,0% w **9/10** komórek netto, ale **wygrywa
+R:R w 9/10** — bo ciaśniejszy stop obcina średnią stratę (mianownik R:R), przy
+czym robi to kosztem znacznie większej liczby stop-outów (BTC 153→217, ETH
+230→307). To jest bezpośredni dowód, dlaczego bramka „R:R **i** total_pnl"
+z P1 była dobrym pomysłem, i ostrzeżenie przed optymalizowaniem samego R:R.
+
+**Znane sprzężenie, świadomie zostawione jako produkcyjnie wierne:**
+`state_manager.on_stop_loss_hit` wchodzi w SCOUT_MODE dopiero przy
+`sl_percent >= 0.02` (twardy literał). Przy `base_sl_pct=1,5%` **żaden**
+stop-out nie może wejść w SCOUT_MODE, więc wiersz 1,5% różni się od reszty
+siatki czymś więcej niż dystansem stopu (SCOUT blokuje też dokładki — na BTC W1
+80 transakcji z dokładką przy 1,5% vs 32 przy 2,0%). Dokładnie to zrobiłoby
+wdrożenie 1,5% na produkcję dzisiaj, więc jest zamodelowane, a nie usunięte —
+ale wiersz 1,5% **nie jest** czystym eksperymentem „tylko dystans stopu".
+
+##### 🔬 Izolacja przyczyny: to był artefakt V0, nie mała próbka
+
+Żeby rozdzielić dwa możliwe wyjaśnienia rozbieżności („stary wynik był szumem
+jednego okna" vs „stary wynik był prawdziwy, ale dla wycofanego mechanizmu"),
+ta sama siatka została puszczona **na tym samym starym 90-dniowym fixture'cie**
+(`ohlcv_{BTC,ETH}_USDC_1h.csv`, te same okna: full / H1 / H2), raz pod **V0**,
+raz pod **V2** — zmienna jest wyłącznie wariant SL.
+
+**Walidacja metody:** kolumna V0 **odtwarza starą tabelę co do drugiego miejsca
+po przecinku** (BTC full: −3,09 / +0,80 / +2,50 / +1,44 / +0,52 vs opublikowane
+−3,08 / +0,81 / +2,50 / +1,44 / +0,52; ETH full: −12,63 / −7,95 / −13,90 /
+−14,74 / −16,37 — identyczne; kolumna ETH SL-exits 37/26/24/23/20 — identyczna).
+Nowy skrypt liczy więc dokładnie to samo, co poprzednia sesja; różnice niżej
+**nie są** różnicą narzędzia.
+
+| ETH/USDC, 90 d | V0 full | **V2 full** | V0 H1 | **V2 H1** | V0 H2 | **V2 H2** |
+|---|---|---|---|---|---|---|
+| 1,5 | −12,63% | −11,05% | +1,16% | +3,63% | −13,22% | −14,10% |
+| **2,0** | **−7,95%** | **−1,24%** | **−6,74%** | **−0,02%** | **−3,09%** | **−3,09%** |
+| 2,5 | −13,90% | −11,07% | −8,96% | −2,76% | −7,28% | −10,64% |
+| 3,0 | −14,74% | **−5,17%** | −10,41% | **−0,85%** | −7,11% | −7,11% |
+| 3,5 | −16,37% | −7,11% | −10,51% | −2,72% | −9,09% | −7,62% |
+
+- Pod **V0** monotoniczne pogorszenie przy poszerzaniu jest widoczne w obu
+  połowach (to jest dokładnie ten wzorzec, na którym oparto stary werdykt).
+- Pod **V2**, na **tych samych świecach**, monotoniczność **znika w obu
+  połowach** (H1: 3,0% lepsze od 2,5%; H2: 3,5% lepsze od 2,5% i od 3,0%;
+  full: 3,0% lepsze od 2,5%).
+- **Wniosek:** teza „poszerzanie SL na ETH monotonicznie szkodzi" była
+  **własnością wycofanego mechanizmu V0**, a nie własnością strategii. Stary
+  werdykt nie był „szumem" w sensie losowym — był poprawnym pomiarem
+  **nieistniejącej dziś konfiguracji**. To ten sam rodzaj błędu, który P1
+  nazwał wprost: harness mierzył retired V0.
+- Przy okazji: pod V2 na tym jednym 90-dniowym oknie BTC wygląda, jakby
+  poszerzanie **pomagało** (3,5% → +12,79% vs 2,0% → +4,14%, SL-exity 18→7).
+  Na 730 dniach ten efekt **nie replikuje się w ogóle** (3,5% jest najgorsze w
+  5/5 okien BTC) — modelowy przykład, dlaczego pojedyncze okno nie może być
+  podstawą decyzji o parametrze.
+
+##### Kontrole odporności (dwa niezależne przecięcia tych samych/innych danych)
+
+1. **Okna 121 d → 6 okien na symbol (12 komórek), ten sam fixture proxy.**
+   Dodaje najświeższy kawałek historii, który siatka 122-dniowa obcina
+   (W6 = 2026-05-08..2026-09-06). Werdykt bez zmian: 2,0% jest najlepsze w
+   **5/12** komórek i **ani razu ostatnie**; żadna alternatywa nie bije 2,0% w
+   więcej niż **4/12** komórek (1,5%: 3/12, 2,5%: 4/12, 3,0%: 4/12, 3,5%: 3/12);
+   monotoniczne pogorszenie przy poszerzaniu w **2/12**, monotoniczna poprawa w
+   1/12; teza „każde szersze gorsze" prawdziwa w 6/12. Sumy: BTC 2,0% = −111,27%
+   (najlepsza), ETH 3,0% = −102,41% vs 2,0% = −123,63% (ten sam, niepowtarzalny
+   po oknach obraz co przy 122 d).
+2. **Realne USDC (`_max`, 384 d, 3 okna 122-dniowe na symbol), nie proxy.**
+   Sprawdza, czy wynik nie jest artefaktem serii USDT-swap:
+
+   | SL% | BTC W1 | BTC W2 | BTC W3 | ETH W1 | ETH W2 | ETH W3 |
+   |---|---|---|---|---|---|---|
+   | 1,5 | −19,42% | −46,91% | −14,22% | −18,07% | −70,78% | −1,41% |
+   | **2,0** | **+2,44%** | **−24,03%** | −3,33% | −6,35% | **−26,78%** | +0,10% |
+   | 2,5 | −0,31% | −28,47% | −0,37% | +18,10% | −29,51% | −2,66% |
+   | 3,0 | −6,49% | −29,13% | +0,88% | **+25,20%** | −37,70% | **+1,93%** |
+   | 3,5 | −8,39% | −35,51% | **+6,76%** | +18,55% | −45,30% | −0,86% |
+
+   (okna: W1 2025-08-22..2025-12-22, W2 ..2026-04-23, W3 ..2026-08-23)
+   Ten sam obraz: 2,0% najlepsze w 3/6 komórek i ani razu ostatnie, ale w
+   BTC W3 i ETH W1/W3 wygrywa coś szerszego. **Kierunek nie jest powtarzalny
+   także na realnym instrumencie** — więc to nie jest artefakt proxy.
+   1,5% znów przegrywa w **6/6** komórek netto.
+
+##### 🟢 WERDYKT (2026-09-11)
+
+- **`base_sl_pct = 2,0%` ZOSTAJE, dla obu symboli** — ale **uzasadnienie się
+  zmienia** i stare zdanie z tabeli wyżej nie może być dalej cytowane:
+  poszerzanie SL **nie** szkodzi monotonicznie ani konsekwentnie; ono po prostu
+  **nie wykazuje powtarzalnej przewagi** (najlepiej 4/12 okien). Utrzymujemy
+  status quo z braku dowodu na zmianę, a nie z powodu dowodu przeciw zmianie.
+- **Falsyfikacja hipotezy P4 („szerszy SL na ETH poprawi wynik") POZOSTAJE w
+  mocy** — nadal nie ma podstawy, żeby poszerzać ETH. Ale jej ówczesne
+  uzasadnienie („monotonicznie szkodzi w obu połowach OOS") jest **obalone
+  jako artefakt V0** i tak należy je odtąd opisywać.
+- **Zacieśnianie do 1,5% jest jednoznacznie szkodliwe** — jedyny naprawdę
+  powtarzalny wynik tej siatki (przegrywa 9/10 na 122 d, 9/12 na 121 d, 6/6 na
+  realnym USDC), mimo że poprawia R:R. To jest wynik mocniejszy niż cokolwiek,
+  co dała stara tabela.
+- **Wariant #3 (`SL=k·ATR`)** — nadal nie testowany i nadal bez podstawy w tych
+  danych; ale argument „skoro poszerzanie szkodzi monotonicznie, to ATR-owy SL
+  tym bardziej nie ma sensu" **przestał być prawdziwy** i nie wolno go używać
+  jako powodu.
+- **Czego ten pomiar NIE mówi:** nie mówi, że strategia zarabia. Wszystkie sumy
+  po 5-6 oknach są głęboko ujemne na obu symbolach przy każdej wartości SL
+  (BTC −104..−170%, ETH −91..−197% na 730 d) — to potwierdza główny wniosek
+  raportu strategicznego („brak wykazanego edge'a, koszty ≈ gross") na 8×
+  większej próbce, i jednocześnie pokazuje, że **strojenie samego `base_sl_pct`
+  nie jest dźwignią, która to odwróci**.
+
+##### Odtworzenie (wszystkie dane w repo, zero zależności zewnętrznych)
+
+```bash
+# pomiar główny (5 okien 122 d x 2 symbole x 5 wartosci SL = 50 komorek, ~15 min)
+PYTHONPATH=src python3 scripts/sl_grid_analysis.py --window-days 122 \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv
+# kontrola 1: 6 okien 121 d (dokłada najświeższy fragment historii)
+PYTHONPATH=src python3 scripts/sl_grid_analysis.py --window-days 121 \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv
+# kontrola 2: realne USDC, 3 okna 122 d
+PYTHONPATH=src python3 scripts/sl_grid_analysis.py --window-days 122 \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv
+# izolacja V0 vs V2 na STARYM fixture'cie (--window-days 90 = "full", 45 = H1/H2)
+PYTHONPATH=src python3 scripts/sl_grid_analysis.py --window-days 45 --variant V0 \
+  --fixtures ohlcv_BTC_USDC_1h.csv ohlcv_ETH_USDC_1h.csv
+PYTHONPATH=src python3 scripts/sl_grid_analysis.py --window-days 45 --variant V2 \
+  --fixtures ohlcv_BTC_USDC_1h.csv ohlcv_ETH_USDC_1h.csv
+```
+
+Zero zmian w `src/` — to sesja pomiarowa, nie zmiana kodu produkcyjnego.
+Pełny suite po tej sesji: **344 passed, 4 deselected** (`-m "not slow"`).
 
 #### ✅ ZAMKNIĘTE — P6.2 (dobór progów Inactivity): efekt zerowy
 
