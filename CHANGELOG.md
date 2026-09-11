@@ -4,6 +4,37 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.44.6] - 2026-09-11
+
+### 🎯 Backtest Harness: Default Now Matches Live Production (P3 V2)
+- 🔎 **Root cause**: `run_backtest()`'s `addon_sl_variant` parameter (added for P1)
+  still defaulted to `"V0"` — the addon-composite-SL mechanism production used
+  *before* P3 V2 shipped (v0.44.4). Every backtest computed since P3 shipped —
+  the P4 `base_sl_pct` grid, the `engine_mode` CLASSIC-vs-ADAPTIVE comparison, the
+  P6.2 Inactivity ablation — silently modeled a retired mechanism instead of what
+  production actually runs today.
+- 🔧 **Fix**: default changed to `"V2"` (base SL pinned to `base_entry_price`,
+  addon gets no independent SL) — verified 1:1 against all three production call
+  sites (`reconcile_positions`, the Self-Healing SL Guard, the Midline-TP
+  re-attach) plus the HIGH_RISK_ADD execution branch. No formula fix was needed;
+  only the default was stale. `"V0"`/`"V1"` kept for the historical P1 comparison.
+- 📊 **Measured impact (not cosmetic)**: net PnL on the 6 standard windows moves
+  materially under the corrected default — e.g. BTC_full +0.80%→+4.14%, ETH_full
+  −7.95%→−1.24%. Every absolute figure in the strategic report's tables (A/B
+  `engine_mode`, P4 grid, P6.2 ablation, the "no demonstrated edge" conclusion)
+  was computed under the retired V0 mechanism and needs recomputation under V2 —
+  tracked as follow-up work, not done in this release.
+- ✅ **P1 formally closed**: the original "V0 vs V1 vs V2" gate never passed (no
+  variant cleared 5/6) and is now moot — production changed for an independent
+  reason (execution determinism, P3 V2), not because a backtest verdict decided
+  it. Documented explicitly in `task.md` to prevent this being misread later as
+  "V2 won the PnL gate."
+- 🧪 P2 regression re-run under the new default: no verdict flipped (Midline TP
+  still 6/6 loss, high-vol filter still wins in exactly BTC_H2/ETH_H2). Full
+  suite: **344/344 PASS** (fast) + 4/4 slow tests (independently re-verified).
+
+---
+
 ## 🚀 [0.44.5] - 2026-09-10
 
 ### 📊 Sesja A1+A2: Fee Calibration from Production + Epoch-Scoped KPIs

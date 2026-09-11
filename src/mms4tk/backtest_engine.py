@@ -117,10 +117,14 @@ MIN_FULL_CLOSES_HALF = 30  # below this, a half-window config's stats are too no
 # so an operator's .env change to the live values is picked up here too.
 BASE_ALLOCATION = 0.70
 ADDON_ALLOCATION = 0.30
-ADDON_SL_PCT = 0.0125  # V0 (current production): tighter COMPOSITE stop-loss for the whole position once an addon exists
+ADDON_SL_PCT = 0.0125  # V0 (PRE-P3 production, superseded 2026-09-10): tighter COMPOSITE stop-loss for the whole position once an addon exists
 # Audit P1 (2026-09-08): V1 candidate — composite SL widened to 2.0% of the averaged
 # (avgPx) entry, reading the spec's "max 3% na całość" as ~2% on the blended
 # position. See run_backtest's `addon_sl_variant` param for V0/V1/V2 semantics.
+# NOTE (2026-09-11): neither constant is on the default path any more — P3 V2 shipped
+# to production (v0.44.4+) and `addon_sl_variant` now defaults to "V2", where the
+# addon gets NO separate SL at all. V0/V1 are kept only so the P1 analysis harness
+# can still reproduce the historical comparison.
 ADDON_SL_PCT_V1 = 0.02
 
 # Real base-entry contract size per symbol at the CURRENT allocation, from
@@ -246,7 +250,7 @@ def run_backtest(
     midline_tp_enabled: bool = False,
     midline_tp_fraction: float = 0.50,
     sl_cooldown_candles: int = 3,
-    addon_sl_variant: str = "V0",
+    addon_sl_variant: str = "V2",
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -291,24 +295,40 @@ def run_backtest(
     addon fires at most once per position (Single Addon Guard, keyed on the
     position, never reset by the entry-price shift — matching `logger_db.py`'s
     `get_addon_count` design), blocked entirely in SCOUT_MODE, sized at
-    ADDON_ALLOCATION/BASE_ALLOCATION (30/70 by default) of a full base entry, using
-    a tighter COMPOSITE stop-loss for the whole position (`ADDON_SL_PCT`) and an
-    explicit weighted-average entry-price approximation of OKX's own `avgPx` merge
-    (production has no in-code equivalent — it relies on the exchange).
+    ADDON_ALLOCATION/BASE_ALLOCATION (30/70 by default) of a full base entry, with
+    an explicit weighted-average entry-price approximation of OKX's own `avgPx` merge
+    (production has no in-code equivalent — it relies on the exchange). How the SL
+    behaves across that fill is selected by `addon_sl_variant`, below.
 
     Audit P1 (2026-09-08): `addon_sl_variant` selects how the SL is recomputed once
     an addon fills, mirroring the analysis harness the audit asked for (same 6
-    windows as Midline TP: BTC/ETH x H1/H2/full). Current production behavior IS a
-    variant here (V0), not a separate code path — this is deliberate, so V0 stays
-    provably identical to what production does today rather than drifting from it.
-      - "V0" (current production): composite `ADDON_SL_PCT` (1.25%) from the
-        averaged (avgPx) entry.
-      - "V1": composite `ADDON_SL_PCT_V1` (2.0%) from the averaged entry — same
-        mechanism as V0, wider threshold.
-      - "V2": the base leg's SL stays pegged to the ORIGINAL base entry price
-        (`base_entry_price`, never touched by the addon average) at `BASE_SL_PCT`
-        (2%) — the addon itself gets no separate SL. Closest to the spec's stated
-        intent ("SL 2% bazy służy dalej jako bufor").
+    windows as Midline TP: BTC/ETH x H1/H2/full). Production behavior IS a variant
+    here, not a separate code path — deliberately, so the default stays provably
+    identical to what production does rather than drifting from it.
+      - "V2" (DEFAULT since 2026-09-11 — this is what production does today, P3 V2,
+        shipped v0.44.4+): the SL is pegged to the ORIGINAL base entry price
+        (`base_entry_price`, pinned at entry and never touched by the addon average)
+        at `BASE_SL_PCT` (2%); the addon leg gets NO separate SL of its own.
+        Mirrors production 1:1 — see `daemon.reconcile_positions` (classifies the
+        stop-out off `base_entry_price` * `base_sl_pct`), the Self-Healing SL Guard
+        (re-attaches at `_base_entry_price(...)`, never live avgPx), the Midline-TP
+        SL re-attach (same anchor) and the HIGH_RISK_ADD branch (calls
+        `execute_order(..., stop_loss_pct=0.0, ...)`, leaving the existing
+        `closeFraction="1"` base algo — which already covers the ENLARGED position —
+        untouched). The trigger price itself is `okx_executor._compute_sl_trigger_price`'s
+        formula: `ref * (1 - pct)` long, `ref * (1 + pct)` short, with
+        `ref = base_entry_price` and `pct = base_sl_pct`.
+      - "V0" (PRE-P3 production, historical): composite `ADDON_SL_PCT` (1.25%) from
+        the averaged (avgPx) entry. This is what production did until 2026-09-10 and
+        what EVERY backtest run before 2026-09-11 measured. Kept only so the P1
+        analysis (`test_p1_addon_sl_gate_analysis`) remains reproducible.
+      - "V1" (never shipped): composite `ADDON_SL_PCT_V1` (2.0%) from the averaged
+        entry — same mechanism as V0, wider threshold.
+
+    Default changed V0 -> V2 on 2026-09-11: production was re-architected by P3 V2
+    (a determinism fix — one position could otherwise get two different SL prices
+    depending on which code path attached last — NOT a PnL optimization), and the
+    harness had silently kept modeling the retired V0 mechanism.
     """
     if addon_sl_variant not in ("V0", "V1", "V2"):
         raise ValueError(f"addon_sl_variant must be one of V0/V1/V2, got {addon_sl_variant!r}")
@@ -350,10 +370,14 @@ def run_backtest(
         weight = position["notional_weight"]
         pnl_pct = (exit_price - entry) / entry if side == "long" else (entry - exit_price) / entry
         flags = _trade_record_flags(reason)
-        # A composite (addon) SL is TIGHTER (1.25% < 2%) — since on_stop_loss_hit's
-        # own SCOUT_MODE-entry check requires sl_percent >= 0.02, an addon-affected
-        # stop-loss correctly does NOT trigger SCOUT_MODE, matching production
-        # (daemon.py passes the addon-position's real, tighter sl_pct too).
+        # Under the default V2 this is always BASE_SL_PCT (2%) — addon or not — so
+        # on_stop_loss_hit's own `sl_percent >= 0.02` SCOUT_MODE/Hermes-H4 gate fires
+        # for addon-carrying positions too, matching production exactly
+        # (daemon.reconcile_positions derives sl_percent from base_entry_price, not
+        # avgPx, precisely so that gate stops silently never firing).
+        # Under the legacy V0/V1 variants the composite override is passed instead
+        # (1.25% < 2% for V0 => no SCOUT_MODE transition), reproducing pre-P3
+        # production for the historical P1 comparison.
         sl_percent = position.get("sl_pct_override", BASE_SL_PCT) if reason == "STOP_LOSS" else 0.0
         sm.record_trade(
             trade_id=f"{symbol}-{idx}", symbol=symbol, side=side,
@@ -388,10 +412,12 @@ def run_backtest(
             side = position["side"]
             entry = position["entry_price"]
             sl_pct = position.get("sl_pct_override", BASE_SL_PCT)
-            # V2 (addon_sl_variant): SL stays pegged to the ORIGINAL base entry
-            # price, never the addon-averaged one — see run_backtest's docstring.
-            # V0/V1 (and any position that never took an addon) use the normal
-            # averaged `entry_price`, unchanged from before P1.
+            # V2 (the default, = live production since P3 V2): SL stays pegged to the
+            # ORIGINAL base entry price, never the addon-averaged one — same anchor
+            # and same formula as `okx_executor._compute_sl_trigger_price` called with
+            # `daemon._base_entry_price(...)` and `daemon.base_sl_pct`.
+            # Legacy V0/V1 (and any position that never took an addon, where the two
+            # prices are equal anyway) use the averaged `entry_price`.
             sl_basis_price = position["base_entry_price"] if position.get("sl_price_basis") == "base_entry" else entry
             sl_price = sl_basis_price * (1 - sl_pct) if side == "long" else sl_basis_price * (1 + sl_pct)
             sl_hit = (curr_c.low <= sl_price) if side == "long" else (curr_c.high >= sl_price)
@@ -426,11 +452,14 @@ def run_backtest(
                             record_partial("MIDLINE_PARTIAL_TP")
                             position["contracts"] = contracts - reduce_amt
                             position["notional_weight"] *= (1.0 - reduced_frac)
-                            # Hard SL stays at its original entry-relative price on the
-                            # remainder — the real implementation re-attaches the SAME
-                            # 2% SL, never break-even. `sl_price` above is already
-                            # computed from `entry`, unchanged, so no further action
-                            # needed here — this comment documents that it's deliberate.
+                            # Hard SL stays at its original price on the remainder —
+                            # the real implementation re-attaches the SAME 2% SL at the
+                            # SAME anchor (`daemon.py`'s Midline-TP re-attach uses
+                            # `_base_entry_price(...)` under P3 V2), never break-even.
+                            # `sl_price` above is already computed from that same basis
+                            # (`base_entry_price` under the default V2, `entry` under
+                            # legacy V0/V1), unchanged, so no further action is needed
+                            # here — this comment documents that it's deliberate.
 
             atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
             action = im.update_and_check(
@@ -507,14 +536,15 @@ def run_backtest(
                 # recomputed for the WHOLE position once an addon exists — see
                 # run_backtest's docstring for V0/V1/V2 semantics. The addon
                 # signal's own hardcoded 1% SL (analytics.py) is deliberately
-                # ignored in all three variants, since production overrides it at
-                # execution time too.
-                if addon_sl_variant == "V2":
+                # ignored in all three variants, exactly as production does: the
+                # pre-P3 paths overrode it at execution time, and P3 V2 attaches no
+                # addon SL at all (`execute_order(..., stop_loss_pct=0.0, ...)`).
+                if addon_sl_variant == "V2":  # default — live production (P3 V2)
                     position["sl_pct_override"] = BASE_SL_PCT
                     position["sl_price_basis"] = "base_entry"
-                elif addon_sl_variant == "V1":
+                elif addon_sl_variant == "V1":  # never shipped
                     position["sl_pct_override"] = ADDON_SL_PCT_V1
-                else:  # V0 — current production behavior
+                else:  # V0 — pre-P3 production, historical comparison only
                     position["sl_pct_override"] = ADDON_SL_PCT
                 # Inactivity tracker is NOT re-tracked at the new averaged entry —
                 # a documented, lower-distortion approximation (re-tracking would
