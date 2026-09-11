@@ -137,6 +137,8 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 
 ## 🔹 Etap 2: P1 — Odseparować SL dokładki od SL bazy 🔴 PRIORYTET NAJWYŻSZY
 
+### ✅ ZAMKNIĘTE 2026-09-11 (patrz „P1 ZAMKNIĘTE FORMALNIE" na końcu tej sekcji) — historia niżej zostaje jako zapis, ale bramka „V0 vs V1 vs V2" jest nieaktualna
+
 ### ⚠️ HARNESS DONE, WNIOSEK SKORYGOWANY po niezależnej recenzji (76e79d3, 4dd327e, f0a9e9f, `f8c9867`)
 - **Plik:** `src/mms4tk/backtest_engine.py`
 - **Dowód:** audyt §1.1+§1.2 — `closeFraction="1"` + kasowanie poprzednich algo + `entry_price = cena dokładki` = de facto stop BE ~0.5% na całej pozycji przy ~70% pozycji. Narusza "Żelazną Regułę" ze spec.
@@ -153,10 +155,85 @@ warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0 → Etap 6 = P8.
 - Wynik zablokowany testem regresyjnym `test_p1_addon_sl_gate_analysis` (`@pytest.mark.slow`, przemianowany z `..._v0_stays_...` — nazwa też była nieuprawniona).
 - **5 nowych testów** (nie 9, jak błędnie podano wcześniej — poprawiono). Pełny suite: **312/312 PASS**.
 
+### ✅ P1 ZAMKNIĘTE FORMALNIE (2026-09-11, worktree `chore/harness-v2-default-and-p1-closure`)
+
+**Powód zamknięcia: produkcja została zmieniona niezależnie (P3 V2), nie dlatego że
+któryś wariant „wygrał" w sensie audytowym.** To rozróżnienie jest istotne i nie
+wolno go później zgubić:
+
+- Pierwotna bramka P1 („V1 albo V2 musi bić V0 na R:R **i** total_pnl netto w ≥5/6
+  okien") **nigdy nie została przeszła** — V1 = 3/6, V2 = 3/6 strict. Ta bramka jest
+  dziś **nieaktualna/zdezaktualizowana**, bo pytanie, na które odpowiadała („czy
+  warto zmienić produkcyjny mechanizm SL dokładki na podstawie wyniku PnL"),
+  przestało istnieć: P3 V2 (2026-09-10, v0.44.4+) zmieniło ten mechanizm z **innego,
+  niezależnego powodu — determinizmu egzekucji** (ta sama pozycja mogła dostać dwie
+  różne ceny SL zależnie od tego, która ścieżka kodu attachowała ostatnia), a **nie**
+  optymalizacji PnL. Żaden wynik backtestu nie był podstawą tej decyzji i nie wolno
+  go retroaktywnie tak przedstawiać.
+- Wariant, który produkcja realizuje po P3, to dokładnie to, co harness nazywa
+  **V2**. Zweryfikowane 1:1 przeciwko trzem produkcyjnym miejscom (`daemon.py`:
+  `reconcile_positions` — klasyfikacja od `base_entry_price * base_sl_pct`;
+  Self-Healing SL Guard — re-attach przez `_base_entry_price(...)`, nigdy żywe avgPx;
+  re-attach po Midline TP — ta sama kotwica; gałąź HIGH_RISK_ADD — `execute_order(...,
+  stop_loss_pct=0.0, ...)`, czyli dokładka bez własnego SL, bo istniejące algo ma
+  `closeFraction="1"`). Formuła ceny triggera to ta sama
+  `okx_executor._compute_sl_trigger_price` (`ref*(1−pct)` long / `ref*(1+pct)` short).
+  **Rozbieżności nie było — harness V2 zgadzał się z produkcją co do formuły,
+  kotwicy i zakresu (cała pozycja).** Poprawki wymagał wyłącznie **domyślny wariant**
+  (patrz niżej), nie sama implementacja V2.
+- **Zmieniony domyślny `addon_sl_variant`: `"V0"` → `"V2"`** w `run_backtest()`
+  (`src/mms4tk/backtest_engine.py`). Do 2026-09-11 harness domyślnie modelował
+  mechanizm, którego produkcja **już nie używa** — czyli P4 (siatka SL), A/B
+  `engine_mode`, cała ablacja z Etapu 5 i sama bramka P1 mierzyły retired V0.
+  Kierunek problemu z P1 się odwrócił: audyt mówił „przywrócenie zapisanej
+  specyfikacji, którą implementacja cicho porzuciła" — teraz to **harness musiał
+  dogonić produkcję**.
+- **Wpływ defaultu, zmierzony naprawdę** (6 okien, produkcyjne VR 1.6/0.8, netto,
+  bez filtra trendu — baseline identyczny jak w tabelach Etapu 5):
+
+  | okno | V0 total_pnl | V2 total_pnl | V0 R:R | V2 R:R | V0 SL-exits | V2 SL-exits | dokładki |
+  |---|---|---|---|---|---|---|---|
+  | BTC_H1 | −1,84% | **+0,62%** | 1,3234 | 1,3984 | 13 | 11 | 17 |
+  | BTC_H2 | +4,62% | +3,64% | 1,3331 | 1,5656 | 8 | 6 | 30 |
+  | BTC_full | +0,80% | **+4,14%** | 1,2630 | 1,4770 | 22 | 18 | 46 |
+  | ETH_H1 | −6,74% | **−0,02%** | 1,3120 | 1,2892 | 17 | 15 | 12 |
+  | ETH_H2 | −3,09% | −3,09% | 0,7343 | 0,7343 | 9 | 9 | 16 |
+  | ETH_full | −7,95% | **−1,24%** | 1,0339 | 1,0962 | 26 | 24 | 28 |
+
+  Efekt **nie jest kosmetyczny**: szerszy, przypięty SL zdejmuje 2-4 stop-outy na
+  okno i przesuwa netto o kilka pp. **Konsekwencja do zapisania wprost:** liczby w
+  tabelach Etapu 5 (A/B `engine_mode`, siatka P4 `base_sl_pct`, ablacja P6.2) są
+  liczone pod V0 i **nie odpowiadają dzisiejszej produkcji**. Nie unieważnia to
+  automatycznie ich werdyktów (wszystkie trzy były „brak sygnału / odrzucone",
+  a kierunki są mierzone wewnątrz tego samego wariantu), ale **każde ich ponowne
+  użycie jako liczby bezwzględnej wymaga przeliczenia pod V2** — w szczególności
+  konkluzja „strategia nie ma dziś wykazanego edge'a" była mierzona na retired
+  mechanizmie SL. Przeliczenie całej ablacji = osobne zlecenie, nie ta sesja.
+- **Werdykty regresyjne pod nowym defaultem: ŻADEN SIĘ NIE ODWRÓCIŁ.**
+  `test_p2_midline_tp_still_loses_all_6_windows_net_of_fees` (Midline TP nadal
+  przegrywa 6/6) i `test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees`
+  (high-vol filter nadal bije baseline dokładnie w `BTC_H2` + `ETH_H2`) — oba PASS
+  po zmianie defaultu, bez modyfikacji asercji. Silnik rekalibracji (P7,
+  `train_test_validate`/`run_calibration_job`/`_grid_search_train`) korzysta teraz z
+  V2 we wszystkich wywołaniach `run_backtest()` bez jawnego wariantu; regresja
+  `test_real_btc_90day_data_does_not_validate_with_small_grid` nadal NIE zwraca
+  `VALIDATED`.
+- `test_p1_addon_sl_gate_analysis` (`@pytest.mark.slow`) **zostaje bez zmian** —
+  woła wszystkie trzy warianty jawnie, więc jest odporny na zmianę defaultu i nadal
+  lockuje historyczne liczby bramki (V1 3/6, V2 3/6 strict; 5/6 i 4/6 pnl-only).
+  Jego znaczenie zmienia się z „bramki decyzyjnej" na **zapis historyczny**.
+- Testy: `test_addon_uses_tighter_composite_sl` przepisany na parę (default **nie**
+  zacieśnia SL / jawne `V0` zacieśnia), plus 2 nowe: default ≡ jawne `"V2"`
+  bit-w-bit oraz zgodność ceny triggera z produkcyjną
+  `OKXExecutor._compute_sl_trigger_price(side, base_entry_price, base_sl_pct)` (LONG
+  i SHORT, przeciwko zaimportowanej funkcji produkcyjnej, nie skopiowanemu
+  literałowi).
+
 **Stan wg audytu §5, po zmergowaniu P1/P4-krok-0/P6.1 (ten dokument, poniżej):**
-Etap 0 (P9+P7), Etap 1 (P2), Etap 2 (P1 — wynik "V0 zostaje", eskalacja do
-właściciela strategii, patrz PR #28), Etap 3 (P4 krok 0 + P6.1) — **wszystkie
-zamknięte**. Dalej: Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0
+Etap 0 (P9+P7), Etap 1 (P2), Etap 2 (P1 — **zamknięte formalnie 2026-09-11**:
+harness domyślnie modeluje teraz produkcyjne V2, pierwotna bramka
+"V0 zostaje"/eskalacja z PR #28 jest zdezaktualizowana przez P3, nie rozstrzygnięta),
+Etap 3 (P4 krok 0 + P6.1) — **wszystkie zamknięte**. Dalej: Etap 4 = warunkowe (P3/P4#2/P6.2) → Etap 5 = P5 krok 0
 (logowanie `volatility_zone`) → Etap 6 = P8 (analiza sesyjna). Żaden z Etapu 4+ nie
 został jeszcze zlecony.
 
