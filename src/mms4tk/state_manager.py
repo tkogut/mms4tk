@@ -125,6 +125,13 @@ class MMS4StateManager:
             self.trading_symbol: initial_state
         }
 
+        # Faza 3.2: per-symbol H4 directional-bias gate override, distinct from the
+        # single global (Hermes-controlled) `_strategy_profile.directional_bias`.
+        # Multiple symbols run concurrently (asyncio.gather in
+        # execute_multi_symbol_cycle), so a live HTF gate MUST NOT mutate the shared
+        # global field directly -- see get_effective_directional_bias below.
+        self._symbol_htf_bias: Dict[str, str] = {}
+
         if self.logger_db is not None:
             saved = self.logger_db.get_latest_state()
             if saved and "state" in saved and saved["state"]:
@@ -240,6 +247,42 @@ class MMS4StateManager:
                 reason=profile.reason
             )
         return self._strategy_profile
+
+    def get_symbol_htf_bias(self, symbol: str) -> str:
+        """Faza 3.2: the H4 directional-bias gate's current reading for `symbol`
+        ("BOTH" | "LONG_ONLY" | "SHORT_ONLY"), set by daemon.py's live H4 fetch when
+        `htf_directional_gate_enabled` is on for that symbol. Defaults to "BOTH"
+        (no gating) for any symbol the gate has never evaluated -- same fail-open
+        default as a disabled gate."""
+        return self._symbol_htf_bias.get(symbol, "BOTH")
+
+    def set_symbol_htf_bias(self, symbol: str, bias: str) -> None:
+        """Update the per-symbol HTF gate reading. Deliberately NOT persisted to
+        logger_db (unlike update_strategy_profile) -- this is a fast-moving,
+        re-derived-every-cycle signal, not an operator decision worth an audit
+        trail entry, and never touches the account-wide
+        `_strategy_profile.directional_bias` field."""
+        self._symbol_htf_bias[symbol] = bias
+
+    def get_effective_directional_bias(self, symbol: Optional[str] = None) -> str:
+        """Faza 3.2: the directional_bias `evaluate_signals` should actually gate
+        on for `symbol` -- combines the single global, Hermes-controlled manual
+        override (`strategy_profile.directional_bias`) with the optional per-symbol
+        automatic H4 gate (`_symbol_htf_bias`).
+
+        Precedence: a manual override (anything other than the "BOTH"/no-opinion
+        default) ALWAYS wins over the automatic gate -- an operator or Hermes
+        explicitly setting LONG_ONLY/SHORT_ONLY/FLAT must never be silently
+        overridden by an automatic H4 read. Only when the manual field is at its
+        neutral default does the per-symbol HTF gate (if any) take effect. With no
+        `symbol` (existing single-symbol callers/tests), or when the gate has never
+        set anything for this symbol, this returns exactly what
+        `strategy_profile.directional_bias` alone would have -- zero behavior
+        change for every caller that predates Faza 3.2."""
+        manual = self._strategy_profile.directional_bias
+        if manual != "BOTH" or symbol is None:
+            return manual
+        return self.get_symbol_htf_bias(symbol)
 
     def relax_scout_mode(self, symbol: Optional[str] = None) -> bool:
         """

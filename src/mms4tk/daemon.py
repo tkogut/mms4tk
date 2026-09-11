@@ -9,7 +9,7 @@ from mms4tk.state_manager import (
     MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION,
 )
 from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional, is_maintenance_locked
-from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams
+from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams, HigherTimeframeAnalytics
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 
@@ -760,9 +760,49 @@ class MMS4Daemon:
             tma_slope_lookback=_sym_int("tma_slope_lookback", defaults.tma_slope_lookback),
             tma_slope_threshold=_sym_float("tma_slope_threshold", defaults.tma_slope_threshold),
             high_vol_base_filter_enabled=_sym_bool("high_vol_base_filter_enabled", defaults.high_vol_base_filter_enabled),
+            htf_directional_gate_enabled=_sym_bool("htf_directional_gate_enabled", defaults.htf_directional_gate_enabled),
             midline_partial_tp_enabled=_sym_bool("midline_partial_tp_enabled", defaults.midline_partial_tp_enabled),
             midline_tp_fraction=_sym_float("midline_tp_fraction", defaults.midline_tp_fraction),
         )
+
+    async def _refresh_htf_directional_gate(self, symbol: str, params: IndicatorParams) -> None:
+        """Faza 3.2 (task.md): when `htf_directional_gate_enabled` is on for
+        `symbol`, fetch real H4 candles and update this symbol's automatic HTF
+        bias reading (`state_manager.set_symbol_htf_bias`) -- "ABOVE" (H4 close
+        beyond its own upper TMA band) -> LONG_ONLY, "BELOW" -> SHORT_ONLY,
+        "INSIDE" -> BOTH. Mirrors exactly the causal H4-bucket bias
+        `backtest_engine._htf_directional_bias_series` was measured with (same
+        `HigherTimeframeAnalytics.calculate_higher_tf`, same `params`), except this
+        reads real exchange candles instead of resampling H1 ones.
+
+        Writes ONLY the per-symbol `_symbol_htf_bias` entry -- never touches the
+        shared global `strategy_profile.directional_bias` (see
+        `MMS4StateManager.get_effective_directional_bias`), so concurrent
+        multi-symbol cycles (`execute_multi_symbol_cycle`'s `asyncio.gather`)
+        cannot race on this. A manual Hermes override (anything but the neutral
+        "BOTH" default) still always wins over this automatic reading -- enforced
+        in `get_effective_directional_bias`, not here.
+
+        Disabled (the default) is a no-op: does not fetch, does not touch the
+        per-symbol reading (stays at its "BOTH" default). A fetch failure logs and
+        leaves the previous reading in place rather than resetting it -- a
+        transient API error should not suddenly unblock a gate that was actively
+        blocking counter-trend entries.
+        """
+        if not params.htf_directional_gate_enabled:
+            return
+        try:
+            candles_h4 = await self.executor.fetch_candles(symbol=symbol, timeframe="4h", limit=50)
+        except Exception as e:
+            logger.warning(f"HTF directional gate: failed to fetch H4 candles for {symbol}: {e}")
+            return
+        try:
+            position = HigherTimeframeAnalytics.calculate_higher_tf(candles_h4, [], params)["h4_tma_position"]
+        except Exception as e:
+            logger.warning(f"HTF directional gate: failed to evaluate H4 TMA position for {symbol}: {e}")
+            return
+        bias = {"ABOVE": "LONG_ONLY", "BELOW": "SHORT_ONLY"}.get(position, "BOTH")
+        self.state_manager.set_symbol_htf_bias(symbol, bias)
 
     def _get_inactivity_overrides(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Build the per-symbol Inactivity Manager config override dict from live
@@ -884,8 +924,15 @@ class MMS4Daemon:
         # Pass the symbol so gating uses THIS symbol's state, not the primary symbol's,
         # and pass live SQLite-backed params so UI-configured engine_mode/adaptive_vr_*
         # actually reach signal evaluation (PLAN-008 Phase 1).
+        ind_params = self._get_indicator_params(target_symbol)
+
+        # Faza 3.2: refresh this symbol's automatic H4 directional-bias reading
+        # before evaluating signals -- no-op when the gate is disabled for this
+        # symbol (the default).
+        await self._refresh_htf_directional_gate(target_symbol, ind_params)
+
         signal: SignalResult = self.signal_engine.evaluate_signals(
-            candles, self.state_manager, params=self._get_indicator_params(target_symbol), symbol=target_symbol
+            candles, self.state_manager, params=ind_params, symbol=target_symbol
         )
         if target_symbol == self.symbol:
             self.last_signal = signal
