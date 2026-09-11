@@ -868,6 +868,150 @@ całkowicie w szumie przy obecnej ilości danych. **Status: zamknięte jako
 "zmierzone, brak rozstrzygającego sygnału". Produkcja zostaje na `ADAPTIVE`.**
 Do ponownego sprawdzenia dopiero po Etapie 5/A3 (długa historia), nie wcześniej.
 
+> ⚠️ **Powyższa tabela jest liczona pod retired `addon_sl_variant="V0"`** (harness
+> przełączył default na produkcyjne V2 dopiero 2026-09-11, patrz Etap 2 / „P1
+> ZAMKNIĘTE FORMALNIE") **i na JEDNYM 90-dniowym oknie.** Przeliczenie pod V2 na
+> 24-miesięcznej historii: sekcja „Faza 2a" bezpośrednio niżej. Werdykt się **nie
+> zmienia**, ale liczby bezwzględne z tej tabeli są nieaktualne — nie cytować ich
+> jako dzisiejszego stanu.
+
+#### 🔁 FAZA 2a (2026-09-11) — A/B `engine_mode` przeliczone: 24 mies. historii, mechanizm SL V2
+
+Worktree/branch `chore/phase2a-engine-mode-long-history`. **Zadanie czysto
+analityczne — zero zmian w `src/`.** Powód przeliczenia: obie przesłanki
+poprzedniego pomiaru upadły. (a) Tamta tabela mierzyła `addon_sl_variant="V0"`,
+mechanizm SL wycofany z produkcji przez P3 V2 (2026-09-10); harness domyślnie
+liczy dziś V2. (b) Tamten pomiar to 6 okien wykrojonych z JEDNEGO 90-dniowego
+fixture'a (~±20 pp CI), a od sesji A3 są fixture'y 730-dniowe.
+
+**Konfiguracja pomiaru** (`scripts/ab_engine_mode_analysis.py`, dodany w tej sesji):
+- Fixture główny: `ohlcv_{BTC,ETH}_USDT_1h_swap_24m.csv` — 17 520 świec, 730 d.
+  **To PROXY (`BTC/USDT:USDT`, `ETH/USDT:USDT`, swap USDT), nie instrument
+  produkcyjny** — jedyna seria na OKX z realną 24-mies. głębokością (A3: korelacja
+  zwrotów 1h 0,9614 / 0,9648, mediana |spread| 0,055% / 0,064%).
+- Podział na okna: **5 kolejnych, nienachodzących okien po 122 d** na symbol —
+  dokładnie ten sam mechanizm i ten sam default `--window-days` co
+  `scripts/fixture_power_analysis.py`, czyli granulacja poprzedniego raportu
+  strategicznego. `17520 // (122·24) = 5`; **ostatnie ~120 d (2026-05-13 ..
+  2026-09-10) nie tworzy pełnego okna i NIE jest objęte tą tabelą** — ten ogon
+  pokrywa dodatkowy check na `_max` niżej.
+- Parametry: produkcyjne VR **1,6/0,8**, `stale_candles_threshold=12`, filtr trendu
+  OFF, reszta defaultów. **`addon_sl_variant` celowo NIE podawany** — skrypt
+  korzysta z defaultu `run_backtest()`, czyli **V2**.
+- PnL **netto**, model P2 ze stawką skalibrowaną z produkcji w A1
+  (`ROUND_TRIP_FEE_PCT = 0.0010003`) + funding 0,01%/8 świec.
+- `total_pnl` to, jak w każdej tabeli w tym dokumencie, **suma ważonych zwrotów
+  procentowych per transakcja, nie krzywa equity ze składaniem** — przy ~200-300
+  transakcjach na okno liczby rzędu −30% to ≈ −0,12%/transakcję.
+
+**Wyniki — 10 niezależnych okien 122-dniowych (`_swap_24m`, V2, netto):**
+
+| okno | zakres (UTC) | CLASSIC | ADAPTIVE | Δ (C−A) pp | C R:R | A R:R | txn C→A | SL C→A |
+|---|---|---|---|---|---|---|---|---|
+| BTC_W1 | 2024-09-10..2025-01-10 | −33,91% | −28,84% | **−5,08** | 0,7967 | 0,8274 | 187→173 | 35→32 |
+| BTC_W2 | 2025-01-10..2025-05-12 | −27,50% | −33,43% | **+5,93** | 0,8190 | 0,7204 | 212→200 | 48→47 |
+| BTC_W3 | 2025-05-12..2025-09-11 | −21,84% | −20,35% | **−1,48** | 1,1038 | 1,0727 | 220→211 | 17→17 |
+| BTC_W4 | 2025-09-11..2026-01-11 | −8,91% | +1,13% | **−10,04** | 1,1755 | 1,3668 | 212→209 | 30→27 |
+| BTC_W5 | 2026-01-11..2026-05-13 | −24,23% | −22,83% | **−1,40** | 0,7003 | 0,6609 | 185→175 | 31→30 |
+| ETH_W1 | 2024-09-10..2025-01-10 | −17,60% | −15,72% | **−1,88** | 0,8720 | 0,7531 | 243→227 | 48→46 |
+| ETH_W2 | 2025-01-10..2025-05-12 | −18,20% | −14,38% | **−3,82** | 0,9595 | 0,9408 | 255→237 | 64→59 |
+| ETH_W3 | 2025-05-12..2025-09-11 | −38,02% | −45,09% | **+7,07** | 0,9885 | 0,7570 | 298→279 | 53→49 |
+| ETH_W4 | 2025-09-11..2026-01-11 | +0,76% | −6,19% | **+6,95** | 1,1771 | 1,0631 | 255→243 | 38→36 |
+| ETH_W5 | 2026-01-11..2026-05-13 | −23,23% | −32,06% | **+8,83** | 0,8264 | 0,5318 | 241→222 | 40→40 |
+
+**Test istotności (dokładny dwustronny test znaków + t na różnicach parowanych):**
+
+| populacja | C>A na netto | p (znaki) | mean Δ netto | t | C>A na R:R | p (znaki) | mean Δ R:R | t |
+|---|---|---|---|---|---|---|---|---|
+| BTC (n=5) | **1/5** | 0,3750 | −2,41 pp | −0,92 | 3/5 | 1,0000 | −0,011 | −0,21 |
+| ETH (n=5) | 3/5 | 1,0000 | +3,43 pp | +1,32 | **5/5** | 0,0625 | +0,156 | +3,21 |
+| **BTC+ETH (n=10)** | **4/10** | **0,7539** | **+0,51 pp** | **+0,26** | **8/10** | 0,1094 | +0,073 | +1,69 |
+
+Pooled (suma okien): BTC CLASSIC −116,39% vs ADAPTIVE −104,33%; ETH CLASSIC
+−96,29% vs ADAPTIVE −113,44%. Różnica mechaniczna: ADAPTIVE blokuje **5,7% wejść**
+(2308→2176 txn) i **5,2% stop-outów** (404→383) — potwierdza „~6%" z poprzedniego
+raportu na 3,3× większej próbce.
+
+**Dodatkowy check na realnym USDC (`ohlcv_{BTC,ETH}_USDC_1h_max.csv`, 384 d, 3 okna
+122 d na symbol, ten sam setup):**
+
+| okno | zakres (UTC) | CLASSIC | ADAPTIVE | Δ (C−A) pp | C R:R | A R:R | txn C→A | SL C→A |
+|---|---|---|---|---|---|---|---|---|
+| BTC_W1 | 2025-08-22..2025-12-22 | +1,64% | +2,44% | −0,80 | 1,3845 | 1,3596 | 288→252 | 28→27 |
+| BTC_W2 | 2025-12-22..2026-04-23 | −26,37% | −24,03% | −2,34 | 0,8193 | 0,7588 | 228→208 | 36→34 |
+| BTC_W3 | 2026-04-23..2026-08-23 | +1,72% | −3,33% | +5,05 | 1,5730 | 1,4495 | 240→230 | 21→21 |
+| ETH_W1 | 2025-08-22..2025-12-22 | +8,82% | −6,35% | +15,17 | 1,4765 | 1,1416 | 331→297 | 39→37 |
+| ETH_W2 | 2025-12-22..2026-04-23 | −22,28% | −26,78% | +4,51 | 0,9478 | 0,8296 | 290→245 | 47→48 |
+| ETH_W3 | 2026-04-23..2026-08-23 | +0,75% | +0,10% | +0,64 | 1,4659 | 1,3260 | 272→257 | 30→29 |
+
+BTC+ETH (n=6): netto **4/6** (p = 0,6875, mean Δ +3,71 pp, t = +1,43); R:R **6/6**
+(p = 0,0312, mean Δ +0,134, t = +3,04). **Te 6 okien NIE są niezależne od 10
+powyżej** — pokrywają się w czasie z `_swap_24m` W4/W5 i to skorelowany instrument
+(ρ ≈ 0,96), więc **nie wolno ich sumować do „14/16"** jako niezależnych prób.
+Jedyny fragment, którego `_swap_24m` w ogóle nie obejmuje, to `_max` W3
+(2026-04-23..2026-08-23).
+
+#### Werdykt Fazy 2a: **werdykt „brak sygnału, ADAPTIVE zostaje" UTRZYMUJE SIĘ**
+
+1. **Na netto — nic się nie zmieniło, i to mocniej niż wcześniej.** 4/10 okien na
+   korzyść CLASSIC (p = 0,75), mean Δ **+0,51 pp przy sd 6,30 pp** — rozrzut jest
+   **12× większy niż efekt**. To nie jest „za mało danych, żeby wykryć" — to jest
+   pomiar zgodny z zerem przy 3,3× większej próbce niż poprzednio.
+2. **Liczba „5,8× na BTC_full" jest ostatecznie rozbrojona.** Nie tylko była
+   artefaktem dzielenia dwóch liczb bliskich zeru — na 24 mies. historii **znak na
+   BTC się odwraca**: CLASSIC wygrywa tylko w 1/5 okien BTC, pooled przegrywa o
+   12,06 pp. Gdyby przełączyć produkcję na CLASSIC w oparciu o tamtą liczbę, na
+   BTC byłby to wybór gorszej strony.
+3. **Kierunki są sprzeczne między symbolami** (BTC → ADAPTIVE, ETH → CLASSIC) —
+   klasyczna sygnatura braku efektu, nie efektu zależnego od symbolu: żadne z tych
+   per-symbolowych przechyleń nie jest istotne (p = 0,375 i p = 1,0).
+4. **JEDNA rzecz faktycznie się zmieniła: R:R stwardniało kierunkowo na ETH.**
+   Poprzednio „5/6 na R:R, kierunkowo spójne, ale w szumie"; teraz na ETH **5/5
+   (`_swap_24m`) + 3/3 (`_max`) = 8/8 okien**, mean Δ R:R +0,156, t = +3,21.
+   Na BTC tego nie ma (3/5, t = −0,21). **To NIE jest sygnał do przełączenia trybu**
+   i nie wolno go tak przedstawiać, z dwóch powodów:
+   - **Nie konwertuje się na pieniądze.** ETH netto to dalej 3/5 (p = 1,0), a na
+     BTC R:R jest neutralne. R:R jest ilorazem ŚREDNICH MAGNITUD (`avg_win/avg_loss`),
+     nieczułym na liczbę transakcji — mix transakcji może go podnieść bez wnoszenia
+     złotówki.
+   - **Różnica jest zdominowana przez przesunięcie całej ścieżki, nie przez wartość
+     odfiltrowanych wejść.** Zdekomponowane na ETH_W5 (największa ΔR:R = +0,295):
+     CLASSIC ma 241 transakcji, ADAPTIVE 222, ale tylko **28 transakcji CLASSIC-a
+     nie ma odpowiednika** w ADAPTIVE (klucz: `exit_idx`/`exit_reason`/`side`) i
+     wnoszą one **+3,76 pp z +8,83 pp** całej różnicy. Pozostałe ~5 pp pochodzi z
+     transakcji o tym samym kluczu, które mają inne ceny wejścia/wagi — czyli z
+     tego, że zablokowanie jednego wejścia przesuwa cały późniejszy ciąg (maszyna
+     stanów, SCOUT_MODE, Post-SL Cooldown, Single Addon Guard). `avg_loss` rośnie
+     wtedy z 1,0709% (C) na 1,2032% (A) na transakcjach, których filtr w ogóle nie
+     dotknął. **Efektu nie da się przypisać selektywności filtra** — a jeśli nie
+     da się go przypisać mechanizmowi, to nie jest podstawą do zmiany produkcji.
+5. **Uboczne, ważniejsze niż sam A/B:** na 610 dniach proxy `_swap_24m` **oba tryby
+   są głęboko ujemne** — mediana okna ≈ −23%, czyli **≈ −0,12 %/transakcję**, przy
+   koszcie round-trip 0,10% + funding. Poprzedni werdykt Etapu 5 („strategia nie ma
+   dziś wykazanego edge'a, koszty ≈ zysk brutto") był postawiony na jednym,
+   nietypowo łagodnym oknie i **na dłuższej historii się nie łagodzi, tylko
+   zaostrza**. Dwa okna bliskie zeru (`_max` W1/W3) to wyjątek, nie reguła. Tego
+   nie zmieni żaden wybór `engine_mode` — różnica C−A (±5 pp) jest o rząd
+   wielkości mniejsza niż sama strata (−23 pp).
+
+**Status: A/B `engine_mode` ZAMKNIĘTE PONOWNIE, tym razem pod produkcyjnym
+mechanizmem SL i na 24-mies. historii. Produkcja zostaje na `ADAPTIVE`. Nie
+otwierać tego ticketu po raz trzeci bez nowego mechanizmu do zbadania** — sam
+przyrost danych już nie pomoże, bo efekt jest zgodny z zerem, a nie „za mały, żeby
+go wykryć". Zastrzeżenie, które trzeba trzymać przy tym werdykcie: główna seria to
+proxy USDT-swap, a 4 ostatnie miesiące (2026-05-13..2026-09-10) są objęte tylko
+przez `_max` W3.
+
+**Odtworzenie:**
+```bash
+PYTHONPATH=src python3 scripts/ab_engine_mode_analysis.py --window-days 122 \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv
+PYTHONPATH=src python3 scripts/ab_engine_mode_analysis.py --window-days 122 \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv
+```
+Pełny suite po tej sesji: **344 passed, 4 deselected** (`-m "not slow"`) — bez
+zmian względem baseline'u, bo sesja nie dotyka `src/` ani testów.
+
 #### ✅ ZAMKNIĘTE — P4 wariant #2 (SL per-symbol): hipoteza SFALSYFIKOWANA
 
 Siatka `base_sl_pct` ∈ {1.5, 2.0, 2.5, 3.0, 3.5}%, netto, 2 połowy OOS + full:
@@ -976,6 +1120,17 @@ Po przeglądzie A1-A3 (przez nadrzędną sesję, nie automatycznie) — Sesja B:
 zawieszenie ETH (warunkowane wynikiem A3), PoC egzekucji maker-first (z twardą
 bramką rollbacku: fill-rate &lt;80% = natychmiastowy powrót do `market`), powtórka
 całej ablacji na długiej historii ze skalibrowaną stawką z A1.
+
+**Postęp „powtórki ablacji na długiej historii":** pierwszy ticket z tej listy —
+A/B `engine_mode` — jest **przeliczony i zamknięty ponownie** (Faza 2a, sekcja
+w Etapie 5 wyżej): 10 niezależnych okien 122 d na 24-mies. historii, pod
+produkcyjnym V2, ze stawką z A1. Werdykt się nie odwrócił. Pozostają do
+przeliczenia pod V2/długą historią: P4 wariant #2 (siatka `base_sl_pct`) i P6.2
+(progi Inactivity) — oba zamknięte dotąd wyłącznie na 90-dniowym oknie pod
+retired V0. Pomiar Fazy 2a dostarcza przy okazji mocniejszą przesłankę dla
+„zawieszenia ETH": na `_swap_24m` ETH jest ujemne w 9/10 kombinacjach
+okno×tryb — ale **BTC dokładnie tak samo, 9/10**, więc **nie jest to argument
+różnicujący ETH względem BTC**, tylko kolejny dowód na brak edge'a w ogóle.
 
 ### Czego świadomie NIE robić teraz
 
