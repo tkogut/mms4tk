@@ -2433,9 +2433,127 @@ Stąd ta sekcja + `HANDOFF.md`, aktualizowane na bieżąco, nie tylko na końcu.
       worktree `.claude/worktrees/agent-ab159cf9eb4b3dc4e` (Builder, model Sonnet)
 - [x] Krok 0: bramka MFE — wynik: **PASS** (patrz niżej)
 - [x] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik: **ODRZUCONY** (patrz niżej)
-- [ ] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik
-- [ ] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu
-- [ ] `task.md` finalna sekcja + `HANDOFF.md` status=completed
+- [x] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik: **NIEJEDNOZNACZNY** (patrz niżej)
+- [x] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu — **żaden kandydat nie
+      wdrożony do `daemon.py`** (patrz "Werdykt końcowy" niżej)
+- [x] `task.md` finalna sekcja + `HANDOFF.md` status=completed
+
+### Werdykt końcowy (obaj kandydaci)
+
+| kandydat | wynik | wdrożone do `daemon.py`? |
+|---|---|---|
+| #2 D1 Range Target | 🔴 ODRZUCONY (0/4 k×fixture-set) | NIE |
+| #1 Protected Stage-1 | 🟡 NIEJEDNOZNACZNY (BREAKEVEN/INVALIDATION PASS na głównym gridzie, FAIL na kontroli realnych danych) | NIE |
+
+Żaden kandydat nie trafia do produkcji z tej sesji. Kod obu (parametry
+`run_backtest()`, wszystkie default OFF/False) zostaje w `backtest_engine.py`
+wyłącznie do odtwarzalności pomiarów — zero zmiany zachowania dla istniejących
+wywołań, potwierdzone pełnym suite (patrz niżej). Dokument Masterminda po tej
+sesji: gap-analysis (wyżej) + te dwa zmierzone kandydaci wyczerpuje realistyczne,
+nigdy-nieprzetestowane pomysły z tego źródła — kolejny krok, jeśli user
+zdecyduje kontynuować profitability workstream, to przeliczenie egzekucji
+maker-first na 24-mies. danych (patrz "Rekomendacja" wyżej) albo zebranie
+dłuższej realnej historii USDC, żeby rozstrzygnąć rozbieżność kandydata #1.
+
+### Kandydat #1: Protected Stage-1 — WYNIK: 🟡 NIEJEDNOZNACZNY (główny grid PASS, kontrola NIE potwierdza)
+
+**Implementacja** (`backtest_engine.py`): `midline_tp_remainder_mode`
+(`NONE`/`BREAKEVEN`/`INVALIDATION`, default `NONE` — bit-for-bit dzisiejsze
+zachowanie) + `midline_tp_full_exit` (wariant 4, default `False`). BREAKEVEN
+realizowany przez istniejący mechanizm `sl_pct_override`/`sl_price_basis` z
+UJEMNYM pct (`-ROUND_TRIP_FEE_PCT`) — algebraicznie przesuwa SL na korzystną
+stronę `base_entry_price` o dokładnie bufor kosztu round-trip, symetrycznie dla
+long/short (wyprowadzenie w docstringu `run_backtest`). INVALIDATION zamraża
+poziom midline W MOMENCIE partiala (`midline_invalidation_price`) i zamyka
+resztę na pierwszym zamknięciu świecy z powrotem po przeciwnej stronie tego
+zamrożonego poziomu — świadomie NIE goni ruchomej TMA (patrz uzasadnienie w
+docstringu). 12 nowych testów jednostkowych (walidacja trybu, NONE/BREAKEVEN/
+INVALIDATION/FULL_EXIT, każdy z osobnym scenariuszem).
+
+**Metoda** (`scripts/protected_stage1_analysis.py`): 5 wariantów × 5×122d okien
+× 2 symbole (10 komórek głównych, `_swap_24m`) + kontrola 5 wariantów × 3×122d
+× 2 symbole (6 komórek, `_USDC_1h_max`). Warianty (2)/(3)/(4) gate'owane
+względem (1) UNPROTECTED (dzisiejsze zachowanie, NIE względem (0) OFF) —
+zgodnie ze specyfikacją. Ten sam setup produkcyjny co reszta sesji.
+
+**Wynik — siatka główna (10 komórek, `_swap_24m`), netto vs UNPROTECTED(1):**
+
+| wariant | BTC dodatnich (mean Δ) | ETH dodatnich (mean Δ) | sign-test p | bramka (≥4/5 osobno) |
+|---|---|---|---|---|
+| (2) BREAKEVEN | 5/5 (+3,02pp) | 5/5 (+5,64pp) | 0,0625/0,0625 | **PASS** |
+| (3) INVALIDATION | 4/5 (+1,64pp) | 5/5 (+5,87pp) | 0,3750/0,0625 | **PASS** |
+| (4) FULL_EXIT | 0/5 (−6,64pp) | 3/5 (−3,95pp) | 0,0625/1,0000 | FAIL |
+
+**Wynik — kontrola (6 komórek, `_USDC_1h_max`, realne dane), netto vs UNPROTECTED(1):**
+
+| wariant | BTC dodatnich (mean Δ) | ETH dodatnich (mean Δ) | bramka (≥3/3 osobno) |
+|---|---|---|---|
+| (2) BREAKEVEN | 2/3 (−0,69pp) | 2/3 (+2,50pp) | FAIL (BTC prawie płasko-ujemny) |
+| (3) INVALIDATION | 0/3 (−2,44pp) | 2/3 (+2,56pp) | FAIL (BTC wyraźnie ujemny) |
+| (4) FULL_EXIT | 0/3 (−15,94pp) | 0/3 (−12,06pp) | FAIL (zdecydowanie) |
+
+**Interpretacja — dlaczego "niejednoznaczny", nie czyste PASS ani czyste REJECT:**
+
+1. **FULL_EXIT (wariant 4) jest jednoznacznie odrzucony** — przegrywa na OBU
+   zestawach, dla obu symboli, z dużym marginesem (do −16pp na kontroli). 100%
+   wyjście na midline ucina zbyt dużo potencjału `TP_AND_FLIP` bez kompensaty.
+   Mechanizm identyczny jak przy odrzuceniu kandydata #2: wąski cel/wczesne
+   wyjście ogranicza właśnie te przypadki, gdzie naturalny bieg pozycji dawałby
+   więcej.
+2. **BREAKEVEN (wariant 2) i INVALIDATION (wariant 3) obie przechodzą
+   FORMALNĄ bramkę zdefiniowaną w zadaniu** (≥8/10 na głównym gridzie 10
+   komórek, spójnie ≥4/5 osobno na BTC i ETH) — i to nie marginalnie: BREAKEVEN
+   10/10, INVALIDATION 9/10, obie z konsekwentnym kierunkiem znaku w niemal
+   każdym oknie.
+3. **Ale kontrola na realnych danych USDC (`_max`, 384 dni, nie proxy) TEGO NIE
+   POTWIERDZA** — ani jedna, ani druga nie osiąga nawet 2/3 spójnie na obu
+   symbolach. BREAKEVEN na BTC kontrolnym jest praktycznie płaski (mean
+   −0,69pp na 3 oknach — nieodróżnialne od szumu przy tak małej próbie), ale
+   INVALIDATION na BTC kontrolnym jest WYRAŹNIE ujemna (0/3, mean −2,44pp) —
+   silniejszy sygnał przeciw niż przy BREAKEVEN.
+4. **To NIE jest ten sam wzorzec co Faza 3.3 (rolling recalibration)** — tam
+   kontrola (`windowed_static`) była SPÓJNA z niezależną Fazą 2a, ujawniając że
+   POZORNA przewaga rolling to w 100% artefakt in-sample selection (dowód:
+   switch rate nieodróżnialny od losowego). Tutaj nie ma mechanizmu selection
+   bias — BREAKEVEN/INVALIDATION to ustalone z góry reguły, nie wybór
+   najlepszej z N opcji. Rozbieżność główny-grid/kontrola tutaj wygląda raczej
+   na **zwykłą niepewność małej próby** (3 okna/symbol na kontroli to bardzo
+   mało — jedno "niewygodne" okno wystarczy, by odwrócić 3/3 w 2/3 albo 0/3) niż
+   na dowód, że mechanizm jest fałszywy — ale to WCIĄŻ oznacza, że nie mamy
+   niezależnego potwierdzenia na realnych danych, więc nie można uczciwie
+   ogłosić czystego zwycięstwa.
+5. **BREAKEVEN jest wyraźnie LEPIEJ wspierany niż INVALIDATION** między tymi
+   dwoma: silniejszy/bardziej spójny sygnał na głównym gridzie (10/10 vs 9/10,
+   większe średnie delty), i na kontroli jego jedyna "porażka" (BTC) jest
+   praktycznie płaska (blisko zera), podczas gdy INVALIDATION na kontrolnym
+   BTC ma wyraźnie ujemny, nie tylko "niepewny" sygnał.
+
+**Werdykt: NIEJEDNOZNACZNY / WARUNKOWY, nie czyste PASS.** Zgodnie z regułą tej
+sesji (żaden pozytywny wynik nie trafia do `daemon.py` bez jednoznacznego,
+odpornego dowodu — patrz precedens Fazy 3.2 H4 gate) i mimo że BREAKEVEN
+formalnie przechodzi bramkę zdefiniowaną w zadaniu na głównym gridzie:
+- **`midline_tp_remainder_mode`/`midline_tp_full_exit` zostają w
+  `backtest_engine.py`, kod gotowy, ale WSZYSTKIE flagi default OFF** —
+  identycznie jak przy Fazie 3.2.
+- **NIE wdrożone do `daemon.py`** — rozbieżność z kontrolą na realnych danych
+  jest zbyt istotna, by rekomendować flip domyślnej wartości bez dalszej
+  walidacji na dłuższej realnej historii USDC (dziś tylko 384 dni/3 okna na
+  symbol — zbyt mało, by rozstrzygnąć czy rozbieżność to szum czy realny efekt).
+- **Rekomendacja na przyszłość**: jeśli/gdy pojawi się więcej realnej historii
+  USDC (>=5-6 niezależnych okien 122d, tak jak proxy), powtórzyć dokładnie ten
+  sam skrypt (`protected_stage1_analysis.py --control`) na szerszej kontroli —
+  to rozstrzygnie, czy BTC-kontrola-płaska jest szumem małej próby czy realną
+  granicą efektu. Do tego czasu: BREAKEVEN jest najlepiej wspieranym z 3
+  zmierzonych wariantów, ale nie na tyle, by przełamać "nie deployuj bez
+  jednoznacznego dowodu".
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/protected_stage1_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --window-days 122
+PYTHONPATH=src python3 scripts/protected_stage1_analysis.py \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv --window-days 122 --control
+```
 
 ### Kandydat #2: D1 Range Target — WYNIK: 🔴 ODRZUCONY (0/4 kombinacji k×fixture-set przechodzi bramkę)
 
