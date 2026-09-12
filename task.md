@@ -2361,3 +2361,77 @@ PYTHONPATH=src python3 scripts/d1_exhaustion_filter_analysis.py --window-days 12
 6 nowych testów w `tests/test_backtest_engine.py` (`test_compute_d1_exhaustion_flags_*`,
 `test_d1_exhaustion_filter_*`). Pełny suite: **350 passed, 4 deselected**
 (`-m "not slow"`).
+
+---
+
+## 🔹 Faza 4 (2026-09-12) — analiza strategiczna dokumentu Masterminda: 2 nowe kandydaty do przetestowania
+
+> **⚠️ CHECKPOINT AKTYWNY — zobacz `HANDOFF.md` w korzeniu repo dla aktualnego
+> stanu przekazania między agentami.** Ta sekcja jest aktualizowana na bieżąco;
+> `HANDOFF.md` to krótki, zawsze-aktualny wskaźnik "gdzie jesteśmy teraz", ten
+> plik to pełny log decyzji i wyników.
+
+### Zlecenie i gap-analysis (Opus, 2026-09-12) — DONE
+
+User poprosił o strategiczną analizę: co realnie można zrobić żeby poprawić
+strategię, w oparciu o `.agents/specs/knowledge/Architektura Systemowa mms4tk:
+Przekład Strategii Masterminda na Logikę Agenta (Raport 10.09.2026).md`.
+
+**Wniosek**: dokument w większości już wyczerpany jako źródło nowych dźwigni
+zyskowności (3 mechanizmy niemierzalne/niewdrażalne rozsądnie: blokada 16:05
+bez definicji "anomalii", dosłowna 5-minutowa Double Retest Protection wymaga
+nowych danych i dwu-timeframe'owego silnika, Iron Execution nie jest dźwignią
+PnL — strata −23%/okno jest w pełni odtwarzalna w backteście bez operatora).
+Self-Healing SL Guard (`daemon.py:1038-1074`) ma realny, ale osobny deficyt
+poprawnościowy: sprawdza WYŁĄCZNIE istnienie zlecenia algo SL, nigdy jego ceny
+triggera — ręcznie przesunięty SL nigdy nie zostanie wykryty ani cofnięty.
+Osobny, mały ticket hardeningowy, nie strategia.
+
+**2 realne, nigdy nieprzetestowane kandydaty znalezione:**
+
+1. **Protected Stage-1** — shipowany Midline Partial TP (PLAN-009, dziś
+   `midline_partial_tp_enabled=False`, odrzucony 6/6 w starym backteście)
+   księguje 50% na midline TMA, ale zostawia resztę na PEŁNYM 2% ryzyku —
+   dokument Masterminda przewiduje zabezpieczenie reszty na Break Even po
+   partialu. To nigdy nie było przetestowane (stary 6/6 testował TYLKO wariant
+   bez ochrony reszty). Warianty do zmierzenia: (0) OFF baseline, (1) 50%
+   partial bez ochrony [= kontrola, stary 6/6 przeliczony na 24-mies./V2 po raz
+   pierwszy], (2) 50% + BE na reszcie, (3) 50% + inwalidacja na zamknięciu
+   świecy poza midline, (4) 100% wyjście na midline.
+2. **D1 Range Target** — system dziś nie ma ŻADNEGO celu cenowego poza pełną
+   przeciwną wstęgą TMA (`TP_AND_FLIP`). Dokument Masterminda definiuje
+   `ATR_LOOKBACK` (3-5 dni, default 4, nigdy niezaimplementowany parametr) do
+   wyznaczenia wielodniowego zasięgu D1 jako Stage-2 celu. **Bramka krok-0
+   OBOWIĄZKOWA przed siatką**: studium MFE (max favorable excursion) na
+   istniejących fixture'ach — jeśli populacja wyjść przez Inactivity Manager
+   (~75% zdarzeń) nie pokazuje MFE istotnie powyżej 0,10% round-tripu, kandydat
+   umiera od razu, zero dalszego ryzyka. `ATR_LOOKBACK` MUSI zostać zafiksowany
+   a priori (=4, wartość z dokumentu) — NIE dobierany siatką, żeby uniknąć
+   dokładnie tego selection bias co Faza 3.3 (rolling recalibration, odrzucona).
+
+**Rekomendacja**: jeden przebieg (MFE gate → jeśli przechodzi, siatka kandydata
+#2 z ustalonym a priori `ATR_LOOKBACK=4` → siatka kandydata #1, 5 ramion × 10
+okien + kontrola USDC), bramka akceptacji **≥8/10 okien dodatnich, spójnie
+osobno na BTC i ETH** (standard Fazy 2b/3.2). Jeśli oba wyjdą null — uczciwy
+wniosek: dokument Masterminda wyczerpany, następne źródło pomysłów to
+egzekucja maker-first (`task.md` linia ~1362, ale **UWAGA**: liczba "+0,81% →
++7,31%" tam zacytowana jest ze STAREGO 90-dniowego fixture'u, sprzed korekty
+V2/długiej historii Fazy 2 — mechanizm nadal wart uwagi, liczba wymaga
+przeliczenia na 24-mies. danych zanim się jej zaufa).
+
+### User: zatwierdzone do przetestowania (2026-09-12)
+
+User poprosił o backtest obu kandydatów, z naciskiem na **trwałe
+checkpointowanie w plikach** (nie tylko w kontekście rozmowy) — z uwagi na
+ryzyko przerwania sesji przez tygodniowy limit, tak żeby inny agent
+("Antigravity"/Coordinator) mógł dokładnie wiedzieć, na czym się skończyło.
+Stąd ta sekcja + `HANDOFF.md`, aktualizowane na bieżąco, nie tylko na końcu.
+
+### Status wykonania — aktualizowany na bieżąco
+
+- [ ] Dispatch agenta do backtestu (branch, worktree — uzupełnić po starcie)
+- [ ] Krok 0: bramka MFE — wynik
+- [ ] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik
+- [ ] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik
+- [ ] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu
+- [ ] `task.md` finalna sekcja + `HANDOFF.md` status=completed
