@@ -2735,7 +2735,7 @@ teoretycznego sufitu oszczędności, nie gwarantowany wynik.
 
 ### Status wykonania
 
-- [ ] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
+- [x] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
 - [ ] Parametr w `backtest_engine.py` (domyślnie bez zmian)
 - [ ] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
 - [ ] Wpis wyniku do `task.md` + `HANDOFF.md`
@@ -2743,3 +2743,64 @@ teoretycznego sufitu oszczędności, nie gwarantowany wynik.
       9+1 hipotez, wynik końcowy, akceptacja natury strategii, poprawiony opis
       SCOUT_MODE)
 - [ ] Testy + handshake
+
+### Krok 1 — weryfikacja stawki maker/taker OKX (wynik)
+
+**W repo brak udokumentowanego schedule'u opłat OKX per-instrument.** Sprawdzone:
+`.agents/specs/knowledge/okx-api-guide.md` (215 linii), `raw_notes/okx-api-guide.md`
+(211 linii) — `grep -i "fee\|maker\|taker"` na obu: **zero trafień**, żaden z nich
+nie zawiera tabeli opłat. `docs/` zawiera tylko rozproszone wzmianki o taker fee
+(`docs/AUDIT_MMS4_2026-08-16.md:392`, `docs/REKOMENDACJE_KONFIGURACJA_2026-08-16.md:139`,
+`docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md:128,212`,
+`docs/STRATEGY_AND_ALGORITHM.md:186`) — wszystkie cytują ~0,05% taker per noga,
+zero z nich podaje stawkę maker.
+
+**Źródło użyte (jawnie, zgodnie z wymogiem)**: publiczny, standardowy schedule
+opłat OKX dla kontraktów perpetual swap na poziomie regularnym/VIP0 (brak
+statusu VIP), zweryfikowany przez `WebSearch` + `WebFetch` w tej sesji
+(2026-09-12):
+
+- OKX Trading Fee Rules FAQ (`okx.com/en-us/help/trading-fee-rules-faq`) —
+  potwierdza istnienie tabeli tierów wg wolumenu/aktywów, ale nie podaje same
+  liczb w treści dostępnej fetcherowi (strona wymaga JS do wyświetlenia tabeli).
+- Zewnętrzne, niezależne zestawienie (bitdegree.org, "OKX Fees in 2026: Full
+  Breakdown"): *"Futures fees begin at 0.02% for maker orders and 0.05% for
+  taker orders for regular users."*
+- Potwierdzone drugim, niezależnym agregatem w wynikach wyszukiwania: *"OKX
+  charges 0.02% maker and 0.05% taker on USDT perpetuals at the regular tier."*
+
+**Stawka użyta**: `MAKER_FEE_PCT = 0.02%` per noga, `TAKER_FEE_PCT = 0.05%` per
+noga (regularny tier/VIP0, bez wolumenowych zniżek VIP — zgodnie z produkcją,
+która nie deklaruje statusu VIP). To dokładnie potwierdza już istniejącą w
+`backtest_engine.py` stałą `TAKER_FEE_PCT = 0.0005` (linia 55, opisana jako
+"OKX taker fee per leg, the exchange's published schedule figure") — nowe
+źródło z tej sesji zgadza się co do promila z tym, co już było w kodzie.
+
+Ten sam schedule nie rozróżnia osobno instrumentu USDC- vs USDT-margined
+perpetual swap w publicznie dostępnych fragmentach — OKX stosuje tiery opłat
+wg wolumenu/aktywów jednolicie w obrębie klasy instrumentu (perpetual swap),
+nie osobno per waluta marginu; brak dowodu na odwrotne twierdzenie w żadnym z
+sprawdzonych źródeł.
+
+**Przeliczenie round-trip maker, zachowując metodologię A1 (Sesja A1,
+`backtest_engine.py:57-88`)**: A1 zmierzyło na produkcyjnych `closed_trades`
+`ROUND_TRIP_FEE_PCT = 0.0010003`, co POTWIERDZIŁO (nie zastąpiło) założenie
+`TAKER_FEE_PCT × 2 = 0.0010`, z rozbieżnością +0,03% relative. Żeby nie
+"wymyślać nowej liczby w oderwaniu" (wymóg zadania), stawka maker jest
+przeliczona przez TĘ SAMĄ kalibrację proporcjonalną:
+
+```
+calibration_ratio = ROUND_TRIP_FEE_PCT / (2 × TAKER_FEE_PCT)
+                  = 0.0010003 / 0.0010 = 1.0003
+
+MAKER_ROUND_TRIP_FEE_PCT = 2 × MAKER_FEE_PCT × calibration_ratio
+                         = 2 × 0.0002 × 1.0003
+                         = 0.00040012
+```
+
+**Wynik: `MAKER_ROUND_TRIP_FEE_PCT = 0.00040012`** (obie nogi maker/`postOnly`),
+vs `ROUND_TRIP_FEE_PCT = 0.0010003` (obie nogi taker, dzisiejszy baseline) —
+maker round-trip to **39,99%** kosztu taker (redukcja kosztu fee o ~60%, przy
+tej samej, niezmienionej od A1 metodologii kalibracji; `funding_pct` jest
+osobnym mechanizmem — OKX funding rate nie zależy od maker/taker statusu
+zlecenia i pozostaje niezmieniony w obu wariantach).
