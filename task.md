@@ -2737,7 +2737,7 @@ teoretycznego sufitu oszczędności, nie gwarantowany wynik.
 
 - [x] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
 - [x] Parametr w `backtest_engine.py` (domyślnie bez zmian)
-- [ ] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
+- [x] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
 - [ ] Wpis wyniku do `task.md` + `HANDOFF.md`
 - [ ] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
       9+1 hipotez, wynik końcowy, akceptacja natury strategii, poprawiony opis
@@ -2825,3 +2825,85 @@ Partial TP, STALE_SPLIT_50). Domyślnie `None` → `fee_pct` = modułowa stała
 
 Pełny `pytest -q -m "not slow"`: **409 passed, 4 deselected** (było 404 przed
 tą sesją — dokładnie +5 nowych testów, zero regresji).
+
+### Krok 3 — przeliczenie 24-mies. maker vs taker (wynik)
+
+Metodologia identyczna jak Faza 2a/2b/3.2/4: `run_backtest()` z produkcyjnymi
+ustawieniami (`engine_mode=ADAPTIVE`, VR 1,6/0,8, `stale_candles_threshold=12`,
+`trend_filter_enabled=False`, `addon_sl_variant` domyślne V2), TA SAMA
+populacja transakcji (entries/exits/sygnały niezmienione), jedyna różnica —
+`round_trip_fee_pct_override`: `None` (TAKER, dzisiejszy baseline
+`ROUND_TRIP_FEE_PCT=0,0010003`) vs `MAKER_ROUND_TRIP_FEE_PCT=0,00040012`
+(Krok 1). Skrypt: `scripts/maker_first_fee_analysis.py`.
+
+**⚠️ ZASTRZEŻENIE (wymagane, nie do pominięcia)**: kolumna MAKER zakłada
+**100% wypełnień jako maker (`postOnly`)** — NIE modeluje ryzyka
+niewypełnienia zlecenia w realnej egzekucji (fill-rate). To jest **teoretyczny
+sufit oszczędności kosztu, nie gwarantowany, wdrożony wynik**.
+`okx_executor.py`/`execute_order` NIE zostały zmienione — to wyłącznie pomiar
+w harnessie backtestowym.
+
+#### Proxy — 24 mies. (`_swap_24m`, 5+5 nienachodzących okien 122d)
+
+| okno | zakres (UTC) | TAKER (baseline) | MAKER | Δ (MAKER−TAKER) pp | txn |
+|---|---|---|---|---|---|
+| proxy_BTC_W1 | 2024-09-10..2025-01-10 | −28,84% | −24,59% | +4,24 | 173 |
+| proxy_BTC_W2 | 2025-01-10..2025-05-12 | −33,43% | −27,56% | +5,87 | 200 |
+| proxy_BTC_W3 | 2025-05-12..2025-09-11 | −20,35% | −13,09% | +7,27 | 211 |
+| proxy_BTC_W4 | 2025-09-11..2026-01-11 | +1,13% | +8,28% | +7,16 | 209 |
+| proxy_BTC_W5 | 2026-01-11..2026-05-13 | −22,83% | −18,33% | +4,50 | 175 |
+| proxy_ETH_W1 | 2024-09-10..2025-01-10 | −15,72% | −12,62% | +3,10 | 227 |
+| proxy_ETH_W2 | 2025-01-10..2025-05-12 | −14,38% | −10,92% | +3,46 | 237 |
+| proxy_ETH_W3 | 2025-05-12..2025-09-11 | −45,09% | −40,30% | +4,79 | 279 |
+| proxy_ETH_W4 | 2025-09-11..2026-01-11 | −6,19% | −1,08% | +5,11 | 243 |
+| proxy_ETH_W5 | 2026-01-11..2026-05-13 | −32,06% | −28,21% | +3,85 | 222 |
+
+- BTC (n=5): MAKER>TAKER **5/5** (p=0,0625), mean Δ +5,81 pp, sd 1,42 pp.
+  Pooled: TAKER −104,33% vs MAKER −75,28% (Δ **+29,04 pp**).
+- ETH (n=5): MAKER>TAKER **5/5** (p=0,0625), mean Δ +4,06 pp, sd 0,86 pp.
+  Pooled: TAKER −113,44% vs MAKER −93,14% (Δ **+20,30 pp**).
+- BTC+ETH (n=10): MAKER>TAKER **10/10** (p=0,0020), mean Δ +4,93 pp, sd
+  1,44 pp. Pooled: TAKER **−217,76%** vs MAKER **−168,42%** (Δ **+49,35 pp**).
+
+#### Kontrola — 384 d realne dane USDC (`_max`, 3+3 okien 122d)
+
+| okno | zakres (UTC) | TAKER (baseline) | MAKER | Δ (MAKER−TAKER) pp | txn |
+|---|---|---|---|---|---|
+| control_BTC_W1 | 2025-08-22..2025-12-22 | +2,44% | +11,27% | +8,83 | 252 |
+| control_BTC_W2 | 2025-12-22..2026-04-23 | −24,03% | −17,88% | +6,15 | 208 |
+| control_BTC_W3 | 2026-04-23..2026-08-23 | −3,33% | +4,67% | +8,01 | 230 |
+| control_ETH_W1 | 2025-08-22..2025-12-22 | −6,35% | +0,09% | +6,44 | 297 |
+| control_ETH_W2 | 2025-12-22..2026-04-23 | −26,78% | −22,56% | +4,22 | 245 |
+| control_ETH_W3 | 2026-04-23..2026-08-23 | +0,10% | +7,37% | +7,27 | 257 |
+
+- BTC (n=3): MAKER>TAKER **3/3** (p=0,2500), mean Δ +7,66 pp, sd 1,37 pp.
+  Pooled: TAKER −24,92% vs MAKER −1,93% (Δ **+22,99 pp**).
+- ETH (n=3): MAKER>TAKER **3/3** (p=0,2500), mean Δ +5,97 pp, sd 1,57 pp.
+  Pooled: TAKER −33,03% vs MAKER −15,10% (Δ **+17,92 pp**).
+- BTC+ETH (n=6): MAKER>TAKER **6/6** (p=0,0312), mean Δ +6,82 pp, sd
+  1,61 pp. Pooled: TAKER **−57,95%** vs MAKER **−17,04%** (Δ **+40,92 pp**).
+
+#### Interpretacja
+
+1. **Kierunek jest jednoznaczny i w 100% spójny**: 16/16 okien (10 proxy + 6
+   kontrola) ma MAKER > TAKER netto, oba zestawy statystycznie istotne (proxy
+   p=0,0020; kontrola p=0,0312 mimo mniejszej próby n=6). To silniejszy,
+   czystszy sygnał niż jakikolwiek filtr sygnałowy przetestowany w tym
+   workstreamie (patrz tabela zbiorcza w sekcji zamknięcia niżej) — bo to
+   deterministyczna arytmetyka kosztu, nie hipoteza rynkowa.
+2. **Wielkość efektu jest realna, ale NIE odwraca głównego wniosku**: pooled
+   proxy pozostaje głęboko ujemny nawet pod MAKER (−168,42% na 10 okien) —
+   redukcja kosztu fee o ~60% zdejmuje ~+49 pp z ~−218 pp straty, to
+   proporcja rzędu 23%, nie odwrócenie znaku. Na kontroli (realne, świeższe
+   384 dni) efekt jest silniejszy względnie (pooled −57,95%→−17,04%,
+   redukcja ~71% straty) i **4 z 6 okien kontrolnych faktycznie zmieniają
+   znak na dodatni pod MAKER** (control_BTC_W1, control_BTC_W3,
+   control_ETH_W1, control_ETH_W3) — ale to wciąż nie jest spójna,
+   samodzielna rentowność: 2/6 okien kontrolnych zostają wyraźnie ujemne
+   (control_BTC_W2 −17,88%, control_ETH_W2 −22,56%), i cały efekt jest
+   warunkowany zastrzeżeniem o 100% fill-rate.
+3. **Ten test POTWIERDZA, a nie obala, główny wniosek Etapu 5** ("strategia
+   nie ma dziś wykazanego edge'a") — najsilniejsza, najbardziej deterministyczna
+   dźwignia dostępna w projekcie (koszt egzekucji, nie sygnał) redukuje stratę
+   o dziesiątki punktów procentowych, ale jej NIE odwraca. Brak sygnałowego
+   edge'a pozostaje głównym ograniczeniem, nie koszt transakcyjny.

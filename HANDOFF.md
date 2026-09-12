@@ -35,8 +35,11 @@ zamiast taker na 24-mies. danych pod V2, potem formalnie zamknąć workstream
       `backtest_engine.py::run_backtest()` (domyślnie `None`, zero zmiany
       zachowania) + 5 testów jednostkowych. Pełny `pytest -q -m "not slow"`:
       409 passed, 4 deselected (było 404, +5 nowych, zero regresji).
-- [ ] Krok 3: przeliczenie 24-mies. (5+5 proxy USDT + kontrola USDC), tabela
-      per okno, baseline taker vs maker.
+- [x] Krok 3: przeliczenie 24-mies. (5+5 proxy USDT + kontrola USDC 3+3),
+      tabela per okno, baseline taker vs maker. Wynik: **16/16 okien
+      MAKER>TAKER** (proxy p=0,0020, kontrola p=0,0312), ale pooled proxy
+      pozostaje głęboko ujemny nawet pod MAKER (−168,42%/10 okien) — redukuje
+      stratę, nie odwraca jej. Pełna tabela: `task.md`/Faza 5/"Krok 3 — wynik".
 - [ ] Krok 4: formalne domknięcie Profitability Workstream w `task.md`
       (tabela 10 hipotez, 3 decyzje architektoniczne z poprawionym opisem
       SCOUT_MODE, jawne stwierdzenie zamknięcia).
