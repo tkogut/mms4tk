@@ -10,7 +10,11 @@
 - **Conversation ID**: `faza5-maker-first-execution`
 - **Role**: Builder
 - **Timestamp**: 2026-09-12T20:00:00Z
-- **Status**: `in_progress`
+- **Status**: `completed` — wszystkie 4 kroki zrobione i zacommitowane, pełny
+  pytest PASS, handshake wygenerowany
+  (`.agents/swarm/faza5-maker-first-execution_builder_handshake.json`). Branch
+  `chore/faza5-maker-first-execution`, **nie pushnięty, nie PR, nie
+  zmergowany** (zgodnie z instrukcją usera).
 
 ## Current Task
 Ostatni test Profitability Workstream: przeliczyć egzekucję maker (`postOnly`)
@@ -45,8 +49,9 @@ zamiast taker na 24-mies. danych pod V2, potem formalnie zamknąć workstream
       liczeniu "9" w sekcji zamknięcia], 3 decyzje architektoniczne z
       poprawionym opisem SCOUT_MODE, jawne stwierdzenie formalnego
       zamknięcia workstreamu).
-- [ ] Pełny `pytest -q -m "not slow"` + handshake
-      (`--conversation-id faza5-maker-first-execution`)
+- [x] Pełny `pytest -q -m "not slow"`: **409 passed, 4 deselected**. Handshake
+      wygenerowany (`--conversation-id faza5-maker-first-execution`,
+      `--status SUCCESS`).
 
 ## State Snapshot
 ### Files Modified (na branchu `chore/faza5-maker-first-execution`)

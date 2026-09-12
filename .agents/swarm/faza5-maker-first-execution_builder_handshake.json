@@ -1,0 +1,15 @@
+{
+  "conversation_id": "faza5-maker-first-execution",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/backtest_engine.py",
+    "tests/test_backtest_engine.py",
+    "scripts/maker_first_fee_analysis.py",
+    "task.md",
+    "HANDOFF.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-12T17:58:28Z",
+  "notes": "Faza 5 maker-first: OKX maker/taker fee schedule verified (WebSearch/WebFetch, 0.02%/0.05% VIP0), round_trip_fee_pct_override added to run_backtest (default None, zero behavior change, 5 new tests), 24-month proxy+control re-measurement (16/16 windows MAKER>TAKER, does not flip overall verdict to profitable), Profitability Workstream formally closed (9-hypothesis summary table + corrected SCOUT_MODE description). Full pytest -q -m 'not slow': 409 passed, 4 deselected."
+}
