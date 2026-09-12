@@ -2,10 +2,10 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
-[![React Dashboard](https://img.shields.io/badge/React--UI-v0.33.1-blue.svg)](ui_dashboard/src/App.jsx)
+[![React Dashboard](https://img.shields.io/badge/React--UI-Vite-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.33.1](https://img.shields.io/badge/Version-0.33.1-emerald.svg)](VERSION)
+[![Version: 0.45.0](https://img.shields.io/badge/Version-0.45.0-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -15,13 +15,36 @@ combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React da
 (`ui_dashboard`), and an autonomous LLM strategic supervisor
 ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
 
-> **v0.33.1 features the SQLite Single Source of Truth (SSOT)**, **Hybrid Adaptive Engine**, and **Portfolio Margin Guard Presets**.
-> All runtime strategy, risk parameters, and symbol allocations are persisted directly in SQLite (`logs.db`),
-> guaranteeing immunity against container rebuilds and `.env` clobbering.
-> The execution engine dynamically computes the Volatility Ratio ($VR$) to filter out high-risk addons
-> during violent breakout expansions, mandates Sweep Rejection wicks during compression, blocks shorting
-> during the US Open institutional liquidity window (13:30–14:30 UTC), and caps total portfolio margin
-> with interactive 1-click presets (`MAX OKX`, `SUMA PAR`).
+All runtime strategy, risk parameters, and symbol allocations are persisted directly in SQLite
+(`logs.db`), guaranteeing immunity against container rebuilds and `.env` clobbering. The execution
+engine dynamically computes the Volatility Ratio ($VR$) to filter out high-risk addons during violent
+breakout expansions, mandates Sweep Rejection wicks during compression, blocks shorting during the US
+Open institutional liquidity window (13:30–14:30 UTC), and caps total portfolio margin with
+interactive 1-click presets (`MAX OKX`, `SUMA PAR`).
+
+---
+
+## 🚦 Current Development Status (v0.45.0, 2026-09-12)
+
+**Live on production** (OKX X-Perp, `BTC/USDC` + `ETH/USDC`). "Faza 3" (hardening + optimization
+workstream) is merged to `main` — see `task.md` for the full chronological decision log and
+`CHANGELOG.md` for a per-version summary.
+
+| Area | Status |
+|---|---|
+| Core engine, SSOT, Portfolio Margin Guard, Midline TP / Inactivity Manager | Stable, in production |
+| P3 V2 stop-loss SSOT (base-entry-pinned SL, no separate addon SL) | Shipped, production default |
+| SCOUT_MODE risk reduction (position size, not leverage) | Shipped, production default |
+| Backtest harness ↔ production parity (`addon_sl_variant="V2"` default) | Fixed (was silently defaulting to pre-P3 `"V0"`) |
+| H4 directional-bias gate (`htf_directional_gate_enabled`) | Implemented, **default OFF** — strongest measured signal to date (10/10 independent windows improved, sign test p=0.0020), reduces trend-regime losses ~25-30% without making the strategy net-profitable. Enabling it per symbol is a deliberate operational decision. |
+| Rolling TMA/ATR recalibration (7-14d) | Measured and **rejected** — apparent gains are in-sample selection bias (chi-square test confirms parameter choice is statistically indistinguishable from random) |
+| D1 ATR exhaustion filter (blocks `HIGH_RISK_ADD`) | Measured and **rejected** — the 2.5×ATR_D1 trigger almost never fires even in strong trends, zero measurable effect across 16 independent windows |
+| HTF gate fetch fail-safe fix | One open, unmerged branch (`chore/phase3-2-htf-fetch-failsafe-fix`) — fixes a dead fail-safe found by post-merge code review |
+
+**Known limitation, not a bug**: this is a mean-reversion strategy, structurally vulnerable to
+sustained trends. A 24-month backtest (`task.md`, "Faza 2") found a median independent-window net
+result of ≈ −23%, with the single worst window matching a real, well-documented +64% BTC rally. The
+H4 directional gate above is the most promising lever measured so far against this limitation.
 
 ---
 
