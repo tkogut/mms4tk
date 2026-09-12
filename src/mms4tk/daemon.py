@@ -788,11 +788,23 @@ class MMS4Daemon:
         leaves the previous reading in place rather than resetting it -- a
         transient API error should not suddenly unblock a gate that was actively
         blocking counter-trend entries.
+
+        Audit Phase 3.2-followup (2026-09-11, real bug found and fixed):
+        `fetch_candles` itself NEVER raises by default -- on a real OKX outage it
+        silently returns deterministic (and mildly upward-drifting) mock candles
+        instead, which used to make the `except Exception` below unreachable for
+        the one scenario it exists to guard: a live gate would compute
+        `h4_tma_position` from fabricated data and could flip a symbol's real
+        `directional_bias` on fake market structure instead of freezing the last
+        known-good reading. `allow_mock_fallback=False` makes a real failure
+        actually raise here, so this handler's fail-safe is no longer dead code.
         """
         if not params.htf_directional_gate_enabled:
             return
         try:
-            candles_h4 = await self.executor.fetch_candles(symbol=symbol, timeframe="4h", limit=50)
+            candles_h4 = await self.executor.fetch_candles(
+                symbol=symbol, timeframe="4h", limit=50, allow_mock_fallback=False
+            )
         except Exception as e:
             logger.warning(f"HTF directional gate: failed to fetch H4 candles for {symbol}: {e}")
             return
