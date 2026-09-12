@@ -31,9 +31,10 @@ zamiast taker na 24-mies. danych pod V2, potem formalnie zamknąć workstream
       `MAKER_ROUND_TRIP_FEE_PCT = 0.00040012`, przeliczone tą samą kalibracją
       proporcjonalną co A1 (`ROUND_TRIP_FEE_PCT/2×TAKER_FEE_PCT` ratio).
       Pełne wyprowadzenie: `task.md`/Faza 5/"Krok 1 — wynik".
-- [ ] Krok 2: opcjonalny `round_trip_fee_pct_override` param w
+- [x] Krok 2: opcjonalny `round_trip_fee_pct_override` param w
       `backtest_engine.py::run_backtest()` (domyślnie `None`, zero zmiany
-      zachowania) + testy jednostkowe.
+      zachowania) + 5 testów jednostkowych. Pełny `pytest -q -m "not slow"`:
+      409 passed, 4 deselected (było 404, +5 nowych, zero regresji).
 - [ ] Krok 3: przeliczenie 24-mies. (5+5 proxy USDT + kontrola USDC), tabela
       per okno, baseline taker vs maker.
 - [ ] Krok 4: formalne domknięcie Profitability Workstream w `task.md`

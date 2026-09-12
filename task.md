@@ -2736,7 +2736,7 @@ teoretycznego sufitu oszczędności, nie gwarantowany wynik.
 ### Status wykonania
 
 - [x] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
-- [ ] Parametr w `backtest_engine.py` (domyślnie bez zmian)
+- [x] Parametr w `backtest_engine.py` (domyślnie bez zmian)
 - [ ] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
 - [ ] Wpis wyniku do `task.md` + `HANDOFF.md`
 - [ ] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
@@ -2804,3 +2804,24 @@ maker round-trip to **39,99%** kosztu taker (redukcja kosztu fee o ~60%, przy
 tej samej, niezmienionej od A1 metodologii kalibracji; `funding_pct` jest
 osobnym mechanizmem — OKX funding rate nie zależy od maker/taker statusu
 zlecenia i pozostaje niezmieniony w obu wariantach).
+
+### Krok 2 — parametr w `backtest_engine.py` (wynik)
+
+Dodano `round_trip_fee_pct_override: Optional[float] = None` do
+`run_backtest()` i `fee_pct_override: Optional[float] = None` do
+`_round_trip_cost_pct()` (`src/mms4tk/backtest_engine.py`) — przekazywany do
+wszystkich 3 miejsc wywołania `_round_trip_cost_pct()` (close, Midline
+Partial TP, STALE_SPLIT_50). Domyślnie `None` → `fee_pct` = modułowa stała
+`ROUND_TRIP_FEE_PCT`, zero zmiany zachowania. Dodano stałą
+`MAKER_ROUND_TRIP_FEE_PCT = 0.00040012` (wyprowadzoną w Kroku 1) obok
+`ROUND_TRIP_FEE_PCT`, używaną wyłącznie przez opt-in override.
+
+5 nowych testów w `tests/test_backtest_engine.py`:
+- `test_round_trip_cost_pct_override_none_is_identical_to_no_override`
+- `test_round_trip_cost_pct_override_replaces_fee_pct_only`
+- `test_maker_round_trip_fee_pct_matches_a1_calibration_ratio`
+- `test_run_backtest_without_override_is_unchanged` (a) brak override = identyczny wynik jak dziś
+- `test_run_backtest_override_changes_fee_and_stats_cost` (b) override faktycznie zmienia koszt w `_stats()`
+
+Pełny `pytest -q -m "not slow"`: **409 passed, 4 deselected** (było 404 przed
+tą sesją — dokładnie +5 nowych testów, zero regresji).
