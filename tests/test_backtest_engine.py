@@ -1235,3 +1235,180 @@ def test_run_calibration_job_never_touches_system_settings(tmp_path, monkeypatch
 
 async def _async_return(value):
     return value
+
+
+# ── Faza 4 candidate #2: D1 Range Target (task.md) ──
+# `D1_RANGE_LOOKBACK_DAYS` is fixed a priori (=4, from the Mastermind document) —
+# not exercised as a variable here, exactly per the candidate's own spec (only
+# `k` is grid-searched, never the lookback).
+
+def _variable_range_daily_candles(n_days, start_ts=1_700_000_000_000):
+    """`n_days` of flat-close (100.0) hourly candles whose DAILY high/low range
+    grows by 2 each day (day d: high=100+(d+1), low=100-(d+1) => range=2*(d+1)),
+    so `_compute_d1_range_ref_series`'s rolling max-high/min-low window can be
+    hand-verified against a known day-by-day sequence."""
+    start_ts -= start_ts % DAY_MS
+    candles = []
+    ts = start_ts
+    for d in range(n_days):
+        hi, lo = 100.0 + (d + 1), 100.0 - (d + 1)
+        for _h in range(24):
+            candles.append(Candle(timestamp=ts, open=100.0, high=hi, low=lo, close=100.0, volume=1.0))
+            ts += 3_600_000
+    return candles
+
+
+def test_compute_d1_range_ref_series_is_causal_rolling_window():
+    candles = _variable_range_daily_candles(n_days=6)
+    refs = be._compute_d1_range_ref_series(candles, lookback_days=4)
+    assert len(refs) == len(candles)
+    assert all(r is None for r in refs[:4 * 24])  # first 4 days: not enough prior history
+    # day 4 (0-indexed): window = days 0-3 -> high max=104 (day3), low min=96 (day3) -> ref=8
+    assert all(r == pytest.approx(8.0) for r in refs[4 * 24:5 * 24])
+    # day 5: window = days 1-4 -> high max=105 (day4), low min=95 (day4) -> ref=10
+    assert all(r == pytest.approx(10.0) for r in refs[5 * 24:6 * 24])
+
+
+def test_compute_d1_range_ref_series_empty_input():
+    assert be._compute_d1_range_ref_series([]) == []
+
+
+def test_d1_range_target_disabled_by_default_produces_no_target_exits():
+    candles = _daily_epoch_candles(n_days=10)
+    params = IndicatorParams()
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                              trend_filter_enabled=False)
+    assert not any(t["exit_reason"] == "D1_RANGE_TP" for t in trades)
+
+
+def test_d1_range_target_closes_position_at_frozen_entry_time_target(monkeypatch):
+    """A LONG position gets a hard TP at `base_entry_price + k*D1_range_ref`,
+    frozen from the D1_range_ref as of the ENTRY candle. Quiet flat days
+    (`_daily_epoch_candles`, no spike) give a constant D1_range_ref=1.0 (each
+    day's own high 100.5 - low 99.5); k=0.5 places the target exactly at the
+    quiet candles' own high (100.5), so it fires deterministically on the very
+    next candle after entry, without needing a scripted price spike."""
+    params = IndicatorParams()
+    candles = _daily_epoch_candles(n_days=10)
+    entry_idx = 5 * 24  # day 5: 5 fully-closed prior days exist (>=4 required)
+    _scripted_engine(monkeypatch, {entry_idx: "BASE_LONG"})
+    trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        d1_range_target_enabled=True, d1_range_target_k=0.5,
+    )
+    target_closes = [t for t in trades if t["exit_reason"] == "D1_RANGE_TP"]
+    assert len(target_closes) == 1
+    assert target_closes[0]["exit_price"] == pytest.approx(100.5)  # 100.0 + 0.5*1.0
+    assert target_closes[0]["entry_idx"] == entry_idx
+    assert target_closes[0]["exit_idx"] == entry_idx + 1
+
+
+def test_d1_range_target_absent_before_lookback_days_available(monkeypatch):
+    """An entry too early (fewer than `D1_RANGE_LOOKBACK_DAYS` fully-closed prior
+    days) must get NO target at all — never blocks the entry, never fires a
+    premature D1_RANGE_TP; the position survives to whatever closes it normally."""
+    params = IndicatorParams()
+    candles = _daily_epoch_candles(n_days=10)
+    entry_idx = 2 * 24  # day 2: only 2 fully-closed prior days exist, need 4
+    close_idx = entry_idx + 5
+    _scripted_engine(monkeypatch, {entry_idx: "BASE_LONG", close_idx: "BASE_SHORT"})
+    trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        d1_range_target_enabled=True, d1_range_target_k=0.5,
+    )
+    assert not any(t["exit_reason"] == "D1_RANGE_TP" for t in trades)
+    assert len([t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]) == 1
+
+
+# ── Faza 4 candidate #1: Protected Stage-1 (Midline TP remainder protection) ──
+
+def test_run_backtest_rejects_unknown_midline_tp_remainder_mode():
+    candles = _flat_candles(50)
+    params = IndicatorParams()
+    with pytest.raises(ValueError):
+        be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12,
+                         trend_filter_enabled=False, midline_tp_remainder_mode="BOGUS")
+
+
+def _midline_remainder_scenario(monkeypatch, remainder_mode):
+    """Flat candles @ 100.0 (TMA converges to 100.0 once warmed up): a scripted
+    BASE_LONG entry touches the midline on the very next candle (entry <= tma_mid
+    and high >= tma_mid both hold trivially at a flat 100.0), booking a 50%
+    partial with pnl=0 at the midline itself — isolates the REMAINDER-protection
+    mechanism under test from any partial-booking PnL noise."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10, price=100.0)
+    _scripted_engine(monkeypatch, {warmup: "BASE_LONG"})
+    return be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        midline_tp_enabled=True, midline_tp_fraction=0.5, midline_tp_remainder_mode=remainder_mode,
+    )
+
+
+def test_midline_remainder_none_keeps_original_2pct_sl_unchanged(monkeypatch):
+    """Variant (1), the control: default "NONE" must reproduce today's shipped
+    behavior bit-for-bit — the remainder's SL stays at the original 2%, so the
+    quiet candles' own -0.5% wick (99.5, well inside 98.0) never stops it out."""
+    trades = _midline_remainder_scenario(monkeypatch, "NONE")
+    assert any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
+    assert not any(t["exit_reason"] == "STOP_LOSS" for t in trades)
+
+
+def test_midline_remainder_breakeven_tightens_sl_after_partial(monkeypatch):
+    """Variant (2): after the partial, the remainder's SL moves to
+    `base_entry_price` + a round-trip-fee buffer — MUCH tighter than the
+    original 2% SL, so the SAME quiet -0.5% wick (99.5) that variant (1) ignores
+    now stops the remainder out, at a small NET-OF-FEE breakeven, not a loss."""
+    trades = _midline_remainder_scenario(monkeypatch, "BREAKEVEN")
+    assert any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
+    sl_trades = [t for t in trades if t["exit_reason"] == "STOP_LOSS"]
+    assert len(sl_trades) == 1
+    assert sl_trades[0]["exit_price"] == pytest.approx(100.0 * (1 + be.ROUND_TRIP_FEE_PCT), rel=1e-6)
+    assert sl_trades[0]["pnl_pct"] > 0  # a small gross gain, not a fresh loss
+
+
+def test_midline_remainder_invalidation_closes_on_close_back_across_midline(monkeypatch):
+    """Variant (3): the candle right after the partial closes back BELOW the
+    frozen midline reference (100.0) -- the remainder must invalidate at that
+    close, even though it never reaches the (much looser) original 2% SL."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10, price=100.0)
+    candles[warmup + 2] = Candle(timestamp=warmup + 2, open=99.5, high=100.0, low=98.5, close=99.0, volume=1.0)
+    _scripted_engine(monkeypatch, {warmup: "BASE_LONG"})
+    trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        midline_tp_enabled=True, midline_tp_fraction=0.5, midline_tp_remainder_mode="INVALIDATION",
+    )
+    assert any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
+    inv = [t for t in trades if t["exit_reason"] == "MIDLINE_INVALIDATION"]
+    assert len(inv) == 1
+    assert inv[0]["exit_price"] == pytest.approx(99.0)
+
+
+def test_midline_remainder_invalidation_does_not_fire_while_price_holds_above_midline(monkeypatch):
+    """Same mode, but price never actually closes back below the frozen
+    reference -- the remainder must NOT be invalidated just because the mode is
+    armed; it needs the actual close-back-across-midline event."""
+    trades = _midline_remainder_scenario(monkeypatch, "INVALIDATION")
+    assert any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
+    assert not any(t["exit_reason"] == "MIDLINE_INVALIDATION" for t in trades)
+
+
+def test_midline_full_exit_closes_entire_position_no_partial(monkeypatch):
+    """Variant (4): 100% exit at the midline -- a full, non-partial close, no
+    MIDLINE_PARTIAL_TP booked at all."""
+    params = IndicatorParams()
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10, price=100.0)
+    _scripted_engine(monkeypatch, {warmup: "BASE_LONG"})
+    trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False,
+        midline_tp_enabled=True, midline_tp_full_exit=True,
+    )
+    full_exits = [t for t in trades if t["exit_reason"] == "MIDLINE_FULL_TP"]
+    assert len(full_exits) == 1
+    assert not full_exits[0].get("partial")
+    assert full_exits[0]["weight"] == pytest.approx(1.0, abs=0.01)
+    assert not any(t["exit_reason"] == "MIDLINE_PARTIAL_TP" for t in trades)
