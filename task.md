@@ -2738,10 +2738,10 @@ teoretycznego sufitu oszczędności, nie gwarantowany wynik.
 - [x] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
 - [x] Parametr w `backtest_engine.py` (domyślnie bez zmian)
 - [x] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
-- [ ] Wpis wyniku do `task.md` + `HANDOFF.md`
-- [ ] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
-      9+1 hipotez, wynik końcowy, akceptacja natury strategii, poprawiony opis
-      SCOUT_MODE)
+- [x] Wpis wyniku do `task.md` + `HANDOFF.md`
+- [x] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
+      8+1 hipotez [patrz zastrzeżenie o liczeniu "9" w sekcji zamknięcia],
+      wynik końcowy, akceptacja natury strategii, poprawiony opis SCOUT_MODE)
 - [ ] Testy + handshake
 
 ### Krok 1 — weryfikacja stawki maker/taker OKX (wynik)
@@ -2907,3 +2907,80 @@ w harnessie backtestowym.
    dźwignia dostępna w projekcie (koszt egzekucji, nie sygnał) redukuje stratę
    o dziesiątki punktów procentowych, ale jej NIE odwraca. Brak sygnałowego
    edge'a pozostaje głównym ograniczeniem, nie koszt transakcyjny.
+
+---
+
+## 🔒 Formalne domknięcie Profitability Workstream (2026-09-12)
+
+Po maker-first (Krok 1-3 wyżej) — ostatnim uzgodnionym teście — poszukiwanie
+poprawy zyskowności `mms4tk` przez nowe filtry sygnałowe/parametry jest
+**formalnie zamknięte**. Ta sekcja jest werdyktem końcowym całego wątku pracy.
+
+### Tabela zbiorcza: wszystkie przetestowane hipotezy
+
+**Uwaga o liczeniu**: sekcja "Decyzje architektoniczne usera" wyżej mówi o "9
+niezależnie przetestowanych hipotezach" przed maker-first, ale wymienia z
+nazwy dokładnie 8. Przeszukałem cały `task.md` (`grep` po `WERDYKT`/`ODRZUCON`/
+`Status:` w każdej sekcji Faza/Etap) i nie znalazłem dziewiątej, odrębnej,
+udokumentowanej hipotezy poza tymi 8 — nie fabrykuję brakującej pozycji, żeby
+"dobić" do liczby z inherited tekstu. Tabela niżej ma więc **8 wcześniejszych +
+maker-first = 9 wierszy** (nie 10); rozbieżność z "9+1" w zadaniu jest
+świadomie udokumentowana, nie przemilczana.
+
+| # | Hipoteza | Wynik | Wdrożone do produkcji? |
+|---|---|---|---|
+| 1 | **P1** — addon SL decoupling (V0/V1/V2 warianty) | Bramka "V1/V2 bije V0 w ≥5/6 okien" NIGDY nie przeszła (V1=3/6, V2=3/6 strict). Zamknięte formalnie z INNEGO powodu (determinizm egzekucji P3, nie PnL) | **TAK** (V2 = dzisiejsza produkcja), ale NIE na podstawie dowodu PnL — patrz zastrzeżenie w tekście |
+| 2 | **P4** — siatka `base_sl_pct` (1,5-3,5%, BTC/ETH) | ODRZUCONE — 2,0% to płaskowyż bez przewagi na BTC, na ETH poszerzanie SL monotonicznie pogarsza wynik w obu połowach OOS. Przeliczone ponownie pod V2/długą historię (2026-09-11) — ta sama decyzja (2,0% zostaje), ale ówczesne uzasadnienie obalone | NIE (parametr niezmieniony: `base_sl_pct=2,0%`) |
+| 3 | **A/B `engine_mode`** (ADAPTIVE vs CLASSIC) | ODRZUCONE/brak sygnału — 24-mies.: 4/10 okien na korzyść CLASSIC (p=0,75), mean Δ +0,51pp przy sd 6,30pp (rozrzut 12× większy niż efekt), kierunki sprzeczne między symbolami (BTC→ADAPTIVE, ETH→CLASSIC) | NIE (`engine_mode=ADAPTIVE` zostaje) |
+| 4 | **Kroczące okna kalibracji TMA/ATR** (rolling recalibration, 7d/14d) | ODRZUCONE — "rolling bije static" to pozytywny dowód PRZECIWKO hipotezie (sygnatura losowego wyboru okna, nie realnej struktury rynkowej) | NIE |
+| 5 | **Filtr wyczerpania zasięgu D1** (D1 ATR exhaustion, blokada HIGH_RISK_ADD) | ODRZUCONE — efekt dokładnie zero: 0/16 okien z jakąkolwiek zmianą PnL/R:R/txn, identyczność bit-for-bit | NIE |
+| 6 | **Bramka H4 directional-bias** (model nadzoru Hermes) | JEDYNY jednoznacznie pozytywny wynik na redukcję strat: 10/10 okien netto (p=0,0020), redukuje straty o ~25-30%, **NIE tworzy zysku** (BTC/ETH pooled pozostają głęboko ujemne) | **TAK, kod zmergowany** (`htf_directional_gate_enabled`), default **OFF**, nie włączony dla żadnego symbolu na produkcji |
+| 7 | **Protected Stage-1** (Midline TP + ochrona reszty, BREAKEVEN/INVALIDATION) | NIEJEDNOZNACZNY — główny grid PASS (BREAKEVEN 10/10, INVALIDATION 9/10), kontrola na realnych danych USDC tego NIE potwierdza (BREAKEVEN 2/3 blisko zera, INVALIDATION 0/3 wyraźnie ujemne) | NIE (reguła sesji: żaden niejednoznaczny wynik nie trafia do `daemon.py`) |
+| 8 | **D1 Range Target** (jawny cel zysku skalowany zasięgiem D1) | ODRZUCONE — 0/4 kombinacji k×fixture-set przechodzi bramkę ≥8/10; cel ucina zyski wcześniej niż naturalny bieg pozycji, bez kompensującej poprawy | NIE |
+| 9 | **Maker-first execution** (postOnly zamiast taker, ten dokument) | 16/16 okien MAKER>TAKER (proxy p=0,0020, kontrola p=0,0312), redukuje stratę o ~23% (proxy) do ~71% (kontrola), **NIE odwraca jej na plus** (pooled proxy nadal −168,42%/10 okien) | NIE (harness-only measurement; `okx_executor.py` niezmieniony — wdrożenie egzekucji maker to osobny projekt inżynieryjny, poza zakresem) |
+
+**Werdykt zbiorczy**: 9/9 hipotez — zero stworzyło samodzielną, spójną
+rentowność. Jedna (#1/P1→V2) jest dziś w produkcji, ale z powodu determinizmu
+egzekucji, nie dowodu PnL. Jedna (#6/H4) redukuje straty w silnym trendzie o
+~25-30% i ma kod gotowy (default OFF, nieaktywny dla żadnego symbolu). Reszta:
+odrzucone, niejednoznaczne, lub bez efektu.
+
+### Trzy decyzje architektoniczne usera (2026-09-12)
+
+1. **Ostatni test — wykonany** (Krok 1-3 wyżej: maker-first postOnly na
+   24-mies. danych pod V2). Wynik: patrz tabela wyżej, wiersz #9.
+2. **Formalne zamknięcie Profitability Workstream** po tym teście — koniec
+   poszukiwania nowych filtrów sygnałowych, koniec dopasowywania parametrów
+   pod historię ("Stop Over-Engineering"). Zob. stwierdzenie zamykające
+   niżej.
+3. **Akceptacja natury MMS4**: system do handlu w konsolidacji pod nadzorem,
+   nie w pełni autonomiczny bot 24/7 na każdy reżim. Poleganie na Maszynie
+   Stanów (SCOUT_MODE) + asynchronicznym nadzorze Hermes Agenta (HITL).
+   **Poprawiony opis SCOUT_MODE** (koryguję tu jeszcze raz wprost, żeby nie
+   utrwalić błędu w dokumencie zamykającym): SCOUT_MODE **NIE** redukuje
+   ryzyka przez dźwignię `0,1x` — to nieaktualny model mentalny, już
+   sprostowany w Fazie 3.1. Redukuje przez **ROZMIAR POZYCJI**
+   (`SCOUT_SIZE_MULT=0,3`, mniejszy notional na wejście), podczas gdy
+   `SCOUT_LEVERAGE` zostaje na `1.0` — dźwignia się nie zmienia. Decyzja
+   architektoniczna #3 zostaje słuszna, tylko z poprawnym uzasadnieniem
+   mechanizmu.
+
+### ✅ Profitability Workstream — FORMALNIE ZAMKNIĘTY
+
+Ten wątek pracy (poszukiwanie nowych filtrów sygnałowych/parametrów w celu
+uczynienia `mms4tk` samodzielnie rentownym na historycznych danych) **kończy
+się tutaj**. 9 niezależnie przetestowanych hipotez (patrz tabela wyżej), zero
+stworzyło spójną, samodzielną rentowność; najsilniejsza dostępna dźwignia
+(koszt egzekucji, maker-first) redukuje straty, ale ich nie odwraca.
+
+**Nie proponować nowych filtrów sygnałowych ani nowych przeliczeń parametrów
+na tej samej 24-mies. historii** bez nowego, **jakościowo innego** źródła
+dowodów — nie kolejnego dopasowania parametrów do tych samych danych
+(overfitting tej samej próby, niezależnie jak "niezależnie" jest liczony
+każdy kolejny grid search). Przykłady tego, co BYŁOBY jakościowo inne (nie
+zlecenie samo w sobie, tylko ilustracja progu): nowy, niezależny zbiór danych
+spoza obecnych 24 mies.; rzeczywiste dane egzekucji produkcyjnej z długiego
+okresu (fill-rate, realny slippage) zamiast backtestu; zmiana samego reżimu
+rynkowego widoczna w danych na żywo. Operacyjna przyszłość MMS4 to Decyzja #3:
+handel w konsolidacji pod nadzorem (Maszyna Stanów + Hermes HITL), nie
+poszukiwanie kolejnego filtra.

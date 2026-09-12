@@ -40,9 +40,11 @@ zamiast taker na 24-mies. danych pod V2, potem formalnie zamknąć workstream
       MAKER>TAKER** (proxy p=0,0020, kontrola p=0,0312), ale pooled proxy
       pozostaje głęboko ujemny nawet pod MAKER (−168,42%/10 okien) — redukuje
       stratę, nie odwraca jej. Pełna tabela: `task.md`/Faza 5/"Krok 3 — wynik".
-- [ ] Krok 4: formalne domknięcie Profitability Workstream w `task.md`
-      (tabela 10 hipotez, 3 decyzje architektoniczne z poprawionym opisem
-      SCOUT_MODE, jawne stwierdzenie zamknięcia).
+- [x] Krok 4: formalne domknięcie Profitability Workstream w `task.md`
+      (tabela 9 hipotez [8 wcześniejszych + maker-first — zastrzeżenie o
+      liczeniu "9" w sekcji zamknięcia], 3 decyzje architektoniczne z
+      poprawionym opisem SCOUT_MODE, jawne stwierdzenie formalnego
+      zamknięcia workstreamu).
 - [ ] Pełny `pytest -q -m "not slow"` + handshake
       (`--conversation-id faza5-maker-first-execution`)
 
