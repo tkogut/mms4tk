@@ -37,7 +37,10 @@ Pełna specyfikacja metodologii: `task.md`, sekcja "Faza 4", akapit
 - [x] Krok 0: bramka MFE — **PASS** (pooled mediana +0,992% vs próg 0,10%,
       BTC/ETH osobno >=2x próg) — kandydat #2 idzie do siatki. Pełny wynik:
       `task.md`/Faza 4/"Krok 0".
-- [ ] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed, `k∈{0.25,0.5}`)
+- [x] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed, `k∈{0.25,0.5}`) —
+      **ODRZUCONY**: 0/4 kombinacji k×fixture-set przechodzi bramkę (główny
+      grid: k=0.25 tylko ETH 4/5, BTC 2/5; k=0.5 oba 2/5; kontrola USDC: oba k
+      prawie same ujemne delty). Pełny wynik: `task.md`/Faza 4/"Kandydat #2".
 - [ ] Kandydat #1 (Protected Stage-1, 5 wariantów × 10 okien)
 - [ ] Wyniki wpisane do `task.md` (pełna tabela + werdykt)
 - [ ] Decyzja: wdrożyć / odrzucić / dalsze badanie

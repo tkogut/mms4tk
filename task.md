@@ -2432,10 +2432,69 @@ Stąd ta sekcja + `HANDOFF.md`, aktualizowane na bieżąco, nie tylko na końcu.
 - [x] Dispatch agenta do backtestu — branch `chore/faza4-masterminda-candidates`,
       worktree `.claude/worktrees/agent-ab159cf9eb4b3dc4e` (Builder, model Sonnet)
 - [x] Krok 0: bramka MFE — wynik: **PASS** (patrz niżej)
-- [ ] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik
+- [x] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik: **ODRZUCONY** (patrz niżej)
 - [ ] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik
 - [ ] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu
 - [ ] `task.md` finalna sekcja + `HANDOFF.md` status=completed
+
+### Kandydat #2: D1 Range Target — WYNIK: 🔴 ODRZUCONY (0/4 kombinacji k×fixture-set przechodzi bramkę)
+
+**Implementacja** (`backtest_engine.py`): `d1_range_target_enabled`/`d1_range_target_k`
+(default off), `D1_RANGE_LOOKBACK_DAYS=4` zafiksowane a priori (stała modułowa,
+NIE parametr `run_backtest()`, więc nieosiągalna dla siatki), `_compute_d1_range_ref_series`
+(przyczynowe, rolling 4-dniowe okno D1 high-low, bez lookaheadu), cel zamrożony
+w momencie wejścia (`base_entry_price ± k×D1_range_ref`, nietknięty przez
+addon). Testowane TYLKO `k ∈ {0,25, 0,5}`. 5 nowych testów jednostkowych
+(`test_compute_d1_range_ref_series_*`, `test_d1_range_target_*`).
+
+**Metoda** (`scripts/d1_range_target_analysis.py`): 5×122d okien × 2 symbole
+(10 komórek, `_swap_24m`) + kontrola 3×122d × 2 symbole (6 komórek,
+`_USDC_1h_max`), każde k osobno vs baseline (bez celu), produkcyjne ustawienia
+bez zmian.
+
+**Wynik — siatka główna (10 komórek, `_swap_24m`):**
+
+| k | BTC dodatnich | ETH dodatnich | bramka (≥4/5 osobno) |
+|---|---|---|---|
+| 0,25 | 2/5 (mean Δ=−1,98pp) | 4/5 (mean Δ=+4,10pp) | **FAIL** (BTC nie przechodzi) |
+| 0,5 | 2/5 (mean Δ=−2,03pp) | 2/5 (mean Δ=+0,72pp) | **FAIL** (oba nie przechodzą) |
+
+**Wynik — kontrola (6 komórek, `_USDC_1h_max`, realne dane):**
+
+| k | BTC dodatnich | ETH dodatnich | bramka (≥3/3 osobno) |
+|---|---|---|---|
+| 0,25 | 0/3 (mean Δ=−11,65pp) | 0/3 (mean Δ=−8,50pp) | **FAIL** |
+| 0,5 | 1/3 (mean Δ=−5,41pp) | 0/3 (mean Δ=−4,32pp) | **FAIL** |
+
+**Werdykt**: **0 z 4 kombinacji (k×fixture-set) przechodzi bramkę ≥8/10
+(≥4/5 per symbol)** — ani k=0,25 ani k=0,5 nie działa spójnie nawet na SAMYM
+głównym gridzie (k=0,25 działa dla ETH ale nie BTC; k=0,5 nie działa dla
+żadnego), a kontrola na realnych danych USDC jest jeszcze wyraźniej negatywna
+(prawie wszystkie okna ujemne względem baseline, w tym k=0,25 dokłada
+−8 do −22pp na pojedynczych oknach). Cel wyzwala się relatywnie często
+(4-38 trafień na okno) ale **konsekwentnie pogarsza wynik częściej niż
+poprawia** — spójne z mechanizmem: `TP_AND_FLIP` (pełna przeciwna wstęga)
+zwykle daje WIĘKSZY ruch (mediana MFE dla tego exit_reason w kroku 0 to
++2,19%/+3,62% BTC/ETH) niż wąski cel `k×D1_range_ref` (rzędu 0,25-2×
+mediana MFE Inactivity ~0,74-1,21%), więc D1 Range Target **ucina zyski
+wcześniej niż pozwoliłby na to naturalny bieg pozycji**, bez kompensującej
+poprawy w oknach, gdzie inaczej pozycja zakończyłaby się stratą (Inactivity
+Manager i tak by ją zamknął o wiele bliżej, ale widocznie nie na tyle bliżej,
+żeby cel D1 systematycznie wygrywał).
+
+**Status: HIPOTEZA ODRZUCONA.** Kod (`d1_range_target_enabled`, default
+`False`) zostaje w `backtest_engine.py` wyłącznie do odtwarzalności tego
+pomiaru — **NIE wdrażać do `daemon.py`**, żadna z 2 przetestowanych wartości
+`k` nie ma wsparcia w danych, ani na głównym gridzie, ani (silniej) na
+kontroli realnych danych USDC.
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/d1_range_target_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --window-days 122
+PYTHONPATH=src python3 scripts/d1_range_target_analysis.py \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv --window-days 122 --control
+```
 
 ### Krok 0: bramka MFE (max favorable excursion) — WYNIK: **PASS**, kandydat #2 idzie do siatki
 
