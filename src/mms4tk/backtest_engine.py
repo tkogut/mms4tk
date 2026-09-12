@@ -176,6 +176,9 @@ def _trade_record_flags(exit_reason: str) -> Dict[str, bool]:
         "FORCE_CLOSE":         dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
         "FORCE_CLOSE_BE":      dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
         "BE_ESCAPE":           dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+        "D1_RANGE_TP":         dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+        "MIDLINE_FULL_TP":     dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+        "MIDLINE_INVALIDATION": dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
     }
     return table[exit_reason]
 
@@ -422,6 +425,57 @@ def _compute_d1_exhaustion_flags(
     return flags
 
 
+# Faza 4 (task.md, candidate #2 "D1 Range Target"): from the Mastermind document,
+# the D1 lookback for the multi-day range reference. FIXED A PRIORI at the
+# document's own value — deliberately NOT a `run_backtest()` parameter and NOT
+# swept by the candidate's grid (only `k` is), so this cannot reproduce the
+# in-sample selection bias that got Faza 3.3's rolling TMA/ATR recalibration
+# rejected (best-of-N chosen on the same data that evaluates it). Anyone wanting
+# to test a different lookback must edit this constant and treat the result as a
+# NEW, separate hypothesis — not another cell in the same grid.
+D1_RANGE_LOOKBACK_DAYS = 4
+
+
+def _compute_d1_range_ref_series(
+    candles: List[Candle], lookback_days: int = D1_RANGE_LOOKBACK_DAYS,
+) -> List[Optional[float]]:
+    """Faza 4 candidate #2 (D1 Range Target, task.md): causal, per-H1-candle
+    multi-day price-range reference, one Optional[float] per index of `candles`.
+
+    For an H1 candle on calendar day D (UTC), `D1_range_ref` = max(daily high) -
+    min(daily low) aggregated over the `lookback_days` most recent calendar days
+    that are FULLY CLOSED strictly before D — i.e. day D's own (possibly still
+    forming) range is never included, and the reference never uses a partial day.
+    Same day-boundary causality convention as `_compute_d1_exhaustion_flags`
+    (which reads exactly one prior day; this reads a ROLLING WINDOW of
+    `lookback_days` prior days instead), reused rather than re-derived.
+
+    Returns None for every candle on a day that does not yet have `lookback_days`
+    fully-closed prior days available (i.e. the first `lookback_days` calendar
+    days of `candles`) — callers must treat None as "no target yet for this
+    entry", never as zero.
+    """
+    if not candles:
+        return []
+    ts = [float(c.timestamp) for c in candles]
+    days = [dt.datetime.fromtimestamp(t / 1000.0, tz=dt.timezone.utc).date() for t in ts]
+    df = pd.DataFrame({"day": days, "high": [c.high for c in candles], "low": [c.low for c in candles]})
+    daily = df.groupby("day", sort=True).agg(high=("high", "max"), low=("low", "min")).reset_index()
+    day_order = list(daily["day"])
+    daily_high = list(daily["high"])
+    daily_low = list(daily["low"])
+
+    day_refs: Dict[Any, Optional[float]] = {}
+    for j, day in enumerate(day_order):
+        if j < lookback_days:
+            day_refs[day] = None
+        else:
+            window_high = max(daily_high[j - lookback_days:j])
+            window_low = min(daily_low[j - lookback_days:j])
+            day_refs[day] = window_high - window_low
+    return [day_refs[d] for d in days]
+
+
 def run_backtest(
     symbol: str,
     candles: List[Candle],
@@ -436,6 +490,10 @@ def run_backtest(
     addon_sl_variant: str = "V2",
     htf_directional_gate_enabled: bool = False,
     d1_exhaustion_filter_enabled: bool = False,
+    midline_tp_remainder_mode: str = "NONE",
+    midline_tp_full_exit: bool = False,
+    d1_range_target_enabled: bool = False,
+    d1_range_target_k: float = 0.5,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -552,10 +610,63 @@ def run_backtest(
     leg is gated — a fresh BASE_LONG/BASE_SHORT entry on an overextended day is
     untouched, matching the audit's "blocks the 30%-budget High Risk Add pool
     only" framing.
+
+    Faza 4 (task.md, candidate #1 "Protected Stage-1"): `midline_tp_remainder_mode`
+    controls what happens to the SL of the remainder left open after a Midline
+    Partial TP fires (only meaningful when `midline_tp_enabled=True`, ignored
+    otherwise) — default "NONE" reproduces today's shipped behavior exactly (SL
+    stays at the original `base_entry_price`-anchored 2%, see the Midline Partial
+    TP block below): a bit-for-bit no-op vs. the pre-Faza-4 harness.
+      - "NONE" (default): unchanged production behavior.
+      - "BREAKEVEN": the remainder's SL is moved to `base_entry_price` plus a
+        round-trip-cost buffer (`ROUND_TRIP_FEE_PCT`) on the favorable side, so a
+        full reversal after the partial locks in a true net-zero exit instead of
+        a fresh 2% loss. Implemented via the existing `sl_pct_override`/
+        `sl_price_basis` mechanism with a NEGATIVE pct (see the Midline TP block:
+        `sl_price = base_entry_price * (1 -+ (-fee_pct))`, which algebraically
+        pushes the stop to the profitable side of entry by exactly the fee
+        buffer for both long and short).
+      - "INVALIDATION": the remainder is closed at market on the candle whose
+        CLOSE first lands back on the wrong side of the midline level the
+        partial itself fired at (frozen at partial time, not re-evaluated as
+        the TMA continues to move — a deliberate simplification: the moment of
+        the partial is a fixed, known reference; re-chasing a moving midline
+        for the invalidation trigger would make the exit-price outcome depend
+        on exactly how much the TMA drifted in the meantime, an extra free
+        parameter this candidate does not need). Full close, exit_reason
+        "MIDLINE_INVALIDATION".
+    `midline_tp_full_exit` (variant (4), default False): when True (and
+    `midline_tp_enabled=True`), the midline touch closes the ENTIRE position at
+    the midline price instead of booking a partial — exit_reason
+    "MIDLINE_FULL_TP", a full (non-partial) take-profit close, same SCOUT_MODE-
+    exiting semantics as TP_AND_FLIP. `midline_tp_fraction`/
+    `midline_tp_remainder_mode` are ignored when this is True (there is no
+    remainder to protect).
+
+    Faza 4 (task.md, candidate #2 "D1 Range Target"): when `d1_range_target_enabled`
+    is True, every position also gets a hard, full-close take-profit at
+    `base_entry_price +/- d1_range_target_k * D1_range_ref` (long: +, short: -),
+    where `D1_range_ref` is computed ONCE at entry (frozen for the life of that
+    position, including through any later addon — the target is a property of
+    the ORIGINAL entry, not re-derived from the averaged price) from
+    `_compute_d1_range_ref_series` (causal, `D1_RANGE_LOOKBACK_DAYS=4` fixed a
+    priori, see that function's docstring). If fewer than 4 fully-closed prior
+    days exist yet at entry time, the position simply gets no target (never
+    blocks the entry itself). Checked every candle right after the hard SL check
+    (same conservative "we don't know intracandle path order" convention already
+    used for SL-vs-Midline-TP ordering) and BEFORE the Midline TP check, so a
+    candle that would hit both closes the position once, at the (wider) D1
+    range target, not at the midline. Exit_reason "D1_RANGE_TP".
     """
     if addon_sl_variant not in ("V0", "V1", "V2"):
         raise ValueError(f"addon_sl_variant must be one of V0/V1/V2, got {addon_sl_variant!r}")
+    if midline_tp_remainder_mode not in ("NONE", "BREAKEVEN", "INVALIDATION"):
+        raise ValueError(
+            f"midline_tp_remainder_mode must be one of NONE/BREAKEVEN/INVALIDATION, "
+            f"got {midline_tp_remainder_mode!r}"
+        )
     d1_exhausted = _compute_d1_exhaustion_flags(candles, params) if d1_exhaustion_filter_enabled else None
+    d1_range_ref = _compute_d1_range_ref_series(candles) if d1_range_target_enabled else None
     sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, trading_symbol=symbol, logger_db=None)
     engine = MMS4SignalEngine()
     im = MMS4InactivityManager()
@@ -634,6 +745,23 @@ def run_backtest(
             amount=0.0, pnl=0.0, pnl_percent=0.0, sl_percent=0.0, **flags,
         )
 
+    def _attach_d1_range_target(pos: Dict[str, Any], entry_idx: int) -> None:
+        """Faza 4 candidate #2: freeze `d1_range_target_price` on a freshly opened
+        position, from the D1_range_ref as of the ENTRY candle — never recomputed
+        later (an addon does not move it; it is a property of the original entry,
+        matching `base_entry_price`'s own "pinned at entry, never touched" role).
+        No-op (leaves the key absent) when the filter is off or fewer than
+        `D1_RANGE_LOOKBACK_DAYS` fully-closed days exist yet at entry time."""
+        if d1_range_ref is None:
+            return
+        ref = d1_range_ref[entry_idx]
+        if ref is None:
+            return
+        base = pos["base_entry_price"]
+        pos["d1_range_target_price"] = (
+            base + d1_range_target_k * ref if pos["side"] == "long" else base - d1_range_target_k * ref
+        )
+
     for i in range(warmup, len(candles) - 1):
         window = candles[: i + 2]
         curr_c = candles[i]
@@ -657,8 +785,32 @@ def run_backtest(
                     sl_cooldown_until_ts = float(curr_c.timestamp) + (sl_cooldown_candles * candle_interval)
                 continue
 
-            # ── Midline Partial TP (PLAN-009 v2), evaluated BEFORE inactivity
-            # checks, matching daemon.py's ordering ──
+            # ── D1 Range Target (Faza 4 candidate #2, task.md), checked right
+            # after the hard SL — same "unknown intracandle path, conservative
+            # ordering" convention already used for SL-vs-Midline-TP below. A
+            # position without a target (no history yet at entry time) simply
+            # has `d1_range_target_price` absent/None and this never fires. ──
+            if d1_range_target_enabled and position.get("d1_range_target_price") is not None:
+                target_price = position["d1_range_target_price"]
+                target_hit = (curr_c.high >= target_price) if side == "long" else (curr_c.low <= target_price)
+                if target_hit:
+                    close_position(target_price, "D1_RANGE_TP", i)
+                    continue
+
+            # ── Protected Stage-1 remainder invalidation (Faza 4 candidate #1
+            # variant (3), task.md): armed only after a Midline Partial TP under
+            # midline_tp_remainder_mode="INVALIDATION" — closes the remainder at
+            # market the first candle whose CLOSE lands back on the wrong side
+            # of the midline level frozen at partial time. ──
+            if position.get("midline_invalidation_armed"):
+                ref = position["midline_invalidation_price"]
+                invalidated = (curr_c.close < ref) if side == "long" else (curr_c.close > ref)
+                if invalidated:
+                    close_position(curr_c.close, "MIDLINE_INVALIDATION", i)
+                    continue
+
+            # ── Midline Partial/Full TP (PLAN-009 v2 + Faza 4 candidate #1),
+            # evaluated BEFORE inactivity checks, matching daemon.py's ordering ──
             if midline_tp_enabled and not position.get("midline_tp_done"):
                 tma_mid = float(full_df["tma"].iloc[i]) if not pd.isna(full_df["tma"].iloc[i]) else 0.0
                 if tma_mid > 0:
@@ -667,6 +819,10 @@ def run_backtest(
                     else:
                         midline_hit = (curr_c.low <= tma_mid) and (entry >= tma_mid or curr_c.close < entry)
                     if midline_hit:
+                        if midline_tp_full_exit:
+                            # Variant (4): 100% exit at the midline, no remainder.
+                            close_position(tma_mid, "MIDLINE_FULL_TP", i)
+                            continue
                         contracts = position["contracts"]
                         reduce_amt = OKXExecutor.reduction_amount(contracts, midline_tp_fraction)
                         position["midline_tp_done"] = True  # at most once per position, hit or skipped
@@ -690,7 +846,18 @@ def run_backtest(
                             # `sl_price` above is already computed from that same basis
                             # (`base_entry_price` under the default V2, `entry` under
                             # legacy V0/V1), unchanged, so no further action is needed
-                            # here — this comment documents that it's deliberate.
+                            # here — this comment documents that it's deliberate, EXCEPT
+                            # under the two Faza 4 candidate #1 remainder modes below.
+                            if midline_tp_remainder_mode == "BREAKEVEN":
+                                # Negative pct algebraically pushes sl_price to the
+                                # FAVORABLE side of base_entry_price by exactly the
+                                # round-trip fee buffer, for both long and short (see
+                                # run_backtest's docstring for the derivation).
+                                position["sl_pct_override"] = -ROUND_TRIP_FEE_PCT
+                                position["sl_price_basis"] = "base_entry"
+                            elif midline_tp_remainder_mode == "INVALIDATION":
+                                position["midline_invalidation_armed"] = True
+                                position["midline_invalidation_price"] = tma_mid
 
             atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
             action = im.update_and_check(
@@ -740,6 +907,7 @@ def run_backtest(
                 side = "long" if signal.signal_type == "BASE_LONG" else "short"
                 position = {"side": side, "entry_price": curr_c.close, "base_entry_price": curr_c.close, "entry_idx": i,
                             **_size_new_entry(symbol, sm)}
+                _attach_d1_range_target(position, i)
                 atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
                 im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),
                                    side=side, atr=atr_now)
@@ -776,6 +944,15 @@ def run_backtest(
                 # ignored in all three variants, exactly as production does: the
                 # pre-P3 paths overrode it at execution time, and P3 V2 attaches no
                 # addon SL at all (`execute_order(..., stop_loss_pct=0.0, ...)`).
+                # Known interaction (Faza 4, not separately guarded): if a Midline
+                # BREAKEVEN remainder-protection was already armed on this position
+                # (midline_tp_remainder_mode="BREAKEVEN"), an addon firing AFTER
+                # that partial overwrites sl_pct_override here, same as it would
+                # overwrite any other pre-existing override — the addon's SL always
+                # wins going forward, exactly like it already does for a pre-P3
+                # STOP_LOSS-recovery scenario. Not a bug: an addon is a deliberate
+                # new risk decision production makes independent of an earlier
+                # partial, so it is allowed to supersede the BE protection.
                 if addon_sl_variant == "V2":  # default — live production (P3 V2)
                     position["sl_pct_override"] = BASE_SL_PCT
                     position["sl_price_basis"] = "base_entry"
@@ -798,6 +975,7 @@ def run_backtest(
                 if not flip_blocked:
                     position = {"side": new_side, "entry_price": curr_c.close, "base_entry_price": curr_c.close, "entry_idx": i,
                                 **_size_new_entry(symbol, sm)}
+                    _attach_d1_range_target(position, i)
                     atr_now = float(full_df["atr"].iloc[i]) if not pd.isna(full_df["atr"].iloc[i]) else 0.0
                     im.track_position(inst_id=symbol, entry_price=curr_c.close, entry_time=float(curr_c.timestamp),
                                        side=new_side, atr=atr_now)
