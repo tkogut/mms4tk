@@ -93,11 +93,15 @@ async def _fake_fetch_candles(
     symbol: Optional[str] = None,
     timeframe: str = "1m",
     limit: int = 100,
+    allow_mock_fallback: bool = True,
 ) -> List[Any]:
     # Reuses the existing generator from okx_executor.py — exactly what the real
     # method already returns in its except branch after a failed live request, so
     # tests expecting "some" sensible candles keep the same effective data shape,
     # just without the slow and unreliable network round-trip in front of it.
+    # `allow_mock_fallback` is accepted (not exercised) purely for signature parity
+    # with the real method (okx_executor.py) — this fake never fails, so it never
+    # needs to raise regardless of the flag's value.
     return _generate_mock_candles(count=limit)
 
 

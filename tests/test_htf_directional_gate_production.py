@@ -13,6 +13,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
+
 from mms4tk.analytics import Candle, IndicatorParams, MMS4SignalEngine
 from mms4tk.daemon import MMS4Daemon
 from mms4tk.logger_db import LoggerDB
@@ -158,7 +160,9 @@ def test_refresh_htf_gate_sets_long_only_when_h4_above_band(tmp_path: Path):
         daemon.executor.fetch_candles = AsyncMock(return_value=_h4_candles_above())
         params = IndicatorParams(htf_directional_gate_enabled=True)
         await daemon._refresh_htf_directional_gate("BTC/USDC", params)
-        daemon.executor.fetch_candles.assert_awaited_once_with(symbol="BTC/USDC", timeframe="4h", limit=50)
+        daemon.executor.fetch_candles.assert_awaited_once_with(
+            symbol="BTC/USDC", timeframe="4h", limit=50, allow_mock_fallback=False
+        )
         assert daemon.state_manager.get_symbol_htf_bias("BTC/USDC") == "LONG_ONLY"
     asyncio.run(_run())
 
@@ -195,6 +199,60 @@ def test_refresh_htf_gate_leaves_previous_reading_on_fetch_failure(tmp_path: Pat
         await daemon._refresh_htf_directional_gate("BTC/USDC", params)
         # A transient fetch failure must not reset an active gate back to "BOTH".
         assert daemon.state_manager.get_symbol_htf_bias("BTC/USDC") == "LONG_ONLY"
+    asyncio.run(_run())
+
+
+@pytest.mark.allow_real_okx_network
+def test_refresh_htf_gate_freezes_on_real_fetch_failure_not_mock_data(tmp_path: Path):
+    """Audit Phase 3.2-followup (2026-09-11, real bug found and fixed): the test
+    above (`test_refresh_htf_gate_leaves_previous_reading_on_fetch_failure`)
+    replaces `daemon.executor.fetch_candles` with an `AsyncMock(side_effect=...)`
+    directly -- that bypasses the REAL `OKXExecutor.fetch_candles`, which never
+    used to raise at all (it swallowed every failure and returned deterministic,
+    mildly upward-drifting mock candles instead). That made the daemon's
+    `except Exception` fail-safe dead code for a genuine OKX outage: instead of
+    freezing the last known-good bias, it silently recomputed one from fabricated
+    trending-up data.
+
+    This test uses a REAL `OKXExecutor` (opted out of tests/conftest.py's global
+    fake via the marker above) with only `.exchange` swapped for a deterministic
+    stand-in -- exercising the exact integration path the bug lived in. It first
+    establishes SHORT_ONLY from real (fake-exchange) DECLINING H4 data, then makes
+    the exchange fail. Pre-fix, this would have flipped to LONG_ONLY (the mock
+    generator's upward drift crosses the H4 upper band) instead of freezing --
+    this assertion would have failed before the fix and passes after it.
+    """
+    class _DecliningExchange:
+        async def fetch_ohlcv(self, *args, **kwargs):
+            raw = []
+            price = 300.0
+            ts = 0
+            for _ in range(40):
+                price *= 0.97
+                raw.append([ts, price * 1.01, price * 1.02, price * 0.99, price, 1.0])
+                ts += 14_400_000
+            return raw
+
+    class _AlwaysFailsExchange:
+        async def fetch_ohlcv(self, *args, **kwargs):
+            raise ConnectionError("simulated OKX outage")
+
+    async def _run():
+        db = LoggerDB(db_path=str(tmp_path / "htf_gate_real_fetch.db"))
+        executor = OKXExecutor()
+        executor.exchange = _DecliningExchange()
+        executor.fetch_positions = AsyncMock(return_value=[])
+        state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+        daemon = MMS4Daemon(executor=executor, state_manager=state_mgr, logger_db=db, interval_seconds=0.1)
+        params = IndicatorParams(htf_directional_gate_enabled=True)
+
+        await daemon._refresh_htf_directional_gate("BTC/USDC", params)
+        assert daemon.state_manager.get_symbol_htf_bias("BTC/USDC") == "SHORT_ONLY"
+
+        executor.exchange = _AlwaysFailsExchange()
+        await daemon._refresh_htf_directional_gate("BTC/USDC", params)
+        # Frozen at the last known-good reading -- NOT recomputed from mock data.
+        assert daemon.state_manager.get_symbol_htf_bias("BTC/USDC") == "SHORT_ONLY"
     asyncio.run(_run())
 
 

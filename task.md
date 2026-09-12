@@ -1896,6 +1896,60 @@ Zero zmian w istniejącym `tma_trend_filter_enabled`/`trend_filter_enabled` w te
 sesji — harness (`run_backtest`) i produkcyjny kod docelowy trzymają obie bramki
 jako niezależne, ortogonalne flagi.
 
+### 🐛 Follow-up (2026-09-11, po merge do `main`/v0.45.0): realny bug w fail-safe znaleziony przez `/code-review` i naprawiony
+
+Niezależny audyt kodu już zmergowanego do `main` (zlecony po fakcie, bo merge+deploy
+nastąpiły zanim audyt zdążył się uruchomić — zob. notatka procesowa niżej) znalazł, że
+udokumentowane i "przetestowane" zachowanie "błąd fetchu H4 → zamroź ostatni znany
+dobry odczyt" **nigdy faktycznie nie działało**: `OKXExecutor.fetch_candles` (kod
+sprzed Fazy 3, niezmieniony przez ten branch) nigdy nie rzuca wyjątku — łapie każdy
+błąd sam i zwraca deterministyczne świece mock (`_generate_mock_candles`, ze
+zmierzonym, systematycznym dryfem w górę, średnio +3,33 na cykl 6 świec). Skutek:
+`daemon._refresh_htf_directional_gate`'s `except Exception` był martwym kodem dla
+dokładnie tego scenariusza, który miał obsługiwać — przy realnej awarii OKX bramka
+liczyłaby `h4_tma_position` ze sfabrykowanych danych i mogłaby po cichu wymusić
+`LONG_ONLY`/`SHORT_ONLY` na żywym symbolu zamiast zamrozić poprzedni odczyt.
+
+**Dlaczego istniejące testy tego nie złapały**: `test_refresh_htf_gate_leaves_previous_
+reading_on_fetch_failure` podmieniało `daemon.executor.fetch_candles` bezpośrednio na
+`AsyncMock(side_effect=RuntimeError(...))` — co całkowicie omijało prawdziwą metodę
+`OKXExecutor.fetch_candles` (i jej połykanie wyjątków), więc test dawał fałszywe
+poczucie bezpieczeństwa, nigdy nie wystawiając prawdziwej integracji na próbę.
+
+**Naprawa**: `fetch_candles` dostał opcjonalny parametr `allow_mock_fallback: bool =
+True` (domyślnie zachowuje dokładnie dotychczasowe zachowanie dla KAŻDEGO innego
+wywołania w kodzie — zero zmiany zachowania gdziekolwiek indziej).
+`_refresh_htf_directional_gate` woła go z `allow_mock_fallback=False`, więc realna
+awaria teraz faktycznie trafia w już poprawnie napisany (ale wcześniej nieosiągalny)
+`except Exception`. Nowy test (`test_refresh_htf_gate_freezes_on_real_fetch_failure_
+not_mock_data`, prawdziwy `OKXExecutor` z podmienionym tylko `.exchange`, marker
+`@pytest.mark.allow_real_okx_network`) **zweryfikowany jako faktycznie łapiący ten
+bug**: uruchomiony na tymczasowo cofniętej wersji poprawki (`allow_mock_fallback=True`
+z powrotem) faktycznie failuje (`SHORT_ONLY` → cicho `BOTH`), przechodzi po
+przywróceniu poprawki. Status: **NAPRAWIONE i zmergowane**, dziś nieszkodliwe (flaga
+`htf_directional_gate_enabled` wciąż domyślnie `False` na produkcji — potwierdzone
+bezpośrednio na VPS, `system_settings` nie ma żadnego wpisu dla tego klucza), ale
+krytyczne do naprawienia PRZED włączeniem flagi dla jakiegokolwiek symbolu.
+
+**Pozostałe ustalenia audytu, NIE naprawione w tym follow-upie (świadomie odłożone,
+niższy priorytet, opisane w PR-ze/rozmowie, nie tutaj — dodać osobny wpis gdy ktoś je
+zaadresuje):** `GET /api/v1/symbols`/dashboard pokazują surowy `directional_bias`
+zamiast `get_effective_directional_bias()` (brak widoczności operatora gdy bramka
+aktywna); `_refresh_htf_directional_gate` odpytuje H4 co cykl (~15s) bez cache'a mimo
+że H4 zamyka się raz na 4h; `get_effective_directional_bias` nie odróżnia świadomego
+resetu Hermesa na `"BOTH"` od nigdy-nieustawionego stanu; drobny off-by-one na
+granicy Midline TP (`len(closed_candles)>=20`, jedna świeca ostrzejsza niż
+`len(candles)>=20` sprzed Fazy 3.1, nieszkodliwe przy dziś wyłączonej fladze);
+duplikacja logiki band-test H4 między `backtest_engine.py` a `analytics.py`.
+
+**Notatka procesowa (nie kodowa):** commity `f434a16` (bump wersji) i `282bf42`
+(docs sync) poszły bezpośrednio na `main`, z pominięciem worktree/branch/handshake/
+QA-gate wymaganych przez `CLAUDE.md` tego repo — merge czterech branchy Fazy 3 i
+deploy na VPS nastąpiły zanim zlecony `/code-review` zdążył się w ogóle uruchomić
+(padł na rate limit, potem wznowiony post-factum). Zweryfikowane bezpośrednio na
+VPS (2026-09-11): deploy faktyczny i zdrowy (`antigravity_core` healthy, `VERSION`
+kontenera = `0.45.0`, git HEAD na serwerze = `f434a16`, maintenance lock zdjęty).
+
 ---
 
 ## 🔹 Faza 3 (2026-09-11) — kroczące okna kalibracji TMA/ATR (7d/14d): hipoteza ZMIERZONA i ODRZUCONA
