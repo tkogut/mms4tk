@@ -2429,9 +2429,83 @@ Stąd ta sekcja + `HANDOFF.md`, aktualizowane na bieżąco, nie tylko na końcu.
 
 ### Status wykonania — aktualizowany na bieżąco
 
-- [ ] Dispatch agenta do backtestu (branch, worktree — uzupełnić po starcie)
-- [ ] Krok 0: bramka MFE — wynik
+- [x] Dispatch agenta do backtestu — branch `chore/faza4-masterminda-candidates`,
+      worktree `.claude/worktrees/agent-ab159cf9eb4b3dc4e` (Builder, model Sonnet)
+- [x] Krok 0: bramka MFE — wynik: **PASS** (patrz niżej)
 - [ ] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik
 - [ ] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik
 - [ ] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu
 - [ ] `task.md` finalna sekcja + `HANDOFF.md` status=completed
+
+### Krok 0: bramka MFE (max favorable excursion) — WYNIK: **PASS**, kandydat #2 idzie do siatki
+
+**Metoda** (`scripts/mfe_inactivity_gate_analysis.py`, dodany w tej sesji): dla
+każdej pozycji zamkniętej przez `run_backtest()` policzone MFE (dla long:
+`max(high)` w oknie `[entry_idx, exit_idx]` minus entry, jako % entry; dla short:
+entry minus `min(low)` w tym samym oknie), pogrupowane po `exit_reason`.
+`entry_idx` dodany do trade dictów zwracanych przez `run_backtest()` (był
+liczony wewnętrznie, ale nigdy nie eksportowany — czysto addytywna zmiana, zero
+wpływu na istniejące wywołania/testy, potwierdzone: `56 passed, 4 deselected`
+na `tests/test_backtest_engine.py`).
+
+**Uwaga metodologiczna**: krok 0 pierwotnie uruchomiony jako JEDEN ciągły
+przebieg na całej 24-mies. historii per symbol — porzucone po ~4,5 min pracy
+100% CPU bez wyniku, gdy przypomniało się, że `evaluate_signals()` przelicza
+TMA/ATR na CAŁYM rosnącym oknie przy KAŻDYM kroku (ta sama pułapka O(n²), którą
+Faza 3.3 już udokumentowała: 2928 świec/122d ≈3 min, gorzej niż liniowo —
+pełne ~17520 świec/730d w jednym ciągłym przebiegu byłoby rzędu GODZIN).
+Naprawione przez ponowne użycie DOKŁADNIE tej samej metodologii co reszta tej
+sesji (Faza 2a/2b/3.2/3-4): 5 niezależnych, nienachodzących okien 122d ×
+2 symbole = 10 komórek, wyniki MFE spool'owane ze wszystkich 10 (silniejsza,
+nie słabsza populacja niż jeden ciągły przebieg — więcej niezależnych próbek
+zjawiska, nie mniej). Produkcyjne ustawienia bez zmian: `engine_mode=ADAPTIVE`,
+VR 1,6/0,8, `stale_candles_threshold=12`, trend filter OFF, `addon_sl_variant`
+default (V2), `ROUND_TRIP_FEE_PCT=0,0010003` (A1).
+
+**Wynik — MFE per `exit_reason`, BTC/USDC (5×122d):**
+
+| exit_reason | n | mediana MFE | średnia | p25 | p75 | > progu (0,10%) |
+|---|---|---|---|---|---|---|
+| BE_ESCAPE [Inactivity] | 6 | +0,275% | +0,273% | +0,230% | +0,327% | 6/6 (100%) |
+| FORCE_CLOSE [Inactivity] | 410 | +0,802% | +1,024% | +0,521% | +1,276% | 410/410 (100%) |
+| FORCE_CLOSE_BE [Inactivity] | 5 | +0,369% | +0,405% | +0,288% | +0,541% | 5/5 (100%) |
+| STALE_SPLIT_50 [Inactivity] | 253 | +0,683% | +0,812% | +0,390% | +1,069% | 253/253 (100%) |
+| STOP_LOSS | 153 | +0,321% | +0,453% | +0,200% | +0,611% | 141/153 (92,2%) |
+| TP_AND_FLIP | 141 | +2,185% | +2,585% | +1,652% | +3,307% | 141/141 (100%) |
+| **INACTIVITY (razem)** | **674** | **+0,738%** | **+0,933%** | +0,472% | +1,213% | 674/674 (100%) |
+
+Inactivity share: 674/968 (69,6%) zdarzeń wyjścia.
+
+**Wynik — MFE per `exit_reason`, ETH/USDC (5×122d):**
+
+| exit_reason | n | mediana MFE | średnia | p25 | p75 | > progu (0,10%) |
+|---|---|---|---|---|---|---|
+| BE_ESCAPE [Inactivity] | 3 | +0,647% | +0,616% | +0,496% | +0,706% | 3/3 (100%) |
+| FORCE_CLOSE [Inactivity] | 390 | +1,291% | +1,592% | +0,858% | +1,861% | 390/390 (100%) |
+| FORCE_CLOSE_BE [Inactivity] | 2 | +0,649% | +0,649% | +0,317% | +0,981% | 2/2 (100%) |
+| STALE_SPLIT_50 [Inactivity] | 486 | +1,176% | +1,459% | +0,731% | +1,771% | 486/486 (100%) |
+| STOP_LOSS | 230 | +0,469% | +0,624% | +0,294% | +0,792% | 220/230 (95,7%) |
+| TP_AND_FLIP | 97 | +3,616% | +4,298% | +2,882% | +5,354% | 97/97 (100%) |
+| **INACTIVITY (razem)** | **881** | **+1,212%** | **+1,513%** | +0,777% | +1,801% | 881/881 (100%) |
+
+Inactivity share: 881/1208 (72,9%) zdarzeń wyjścia — potwierdza wcześniejszą
+atrybucję "~75% zdarzeń" w tej sesji (69,6%/72,9% zmierzone, ten sam rząd
+wielkości).
+
+**POOLED (1555 zdarzeń Inactivity, oba symbole):** mediana MFE = **+0,992%**,
+średnia +1,262%, wobec progu 0,10% (`ROUND_TRIP_FEE_PCT`).
+
+**Werdykt bramki**: mediana MFE populacji Inactivity **PRZEKRACZA próg
+0,10% ~10-krotnie** (pooled +0,992% vs +0,10%; BTC +0,738%, ETH +1,212% —
+obie osobno >=2× progu), i to konsekwentnie: 100% obserwacji Inactivity w OBU
+symbolach leży powyżej samego progu kosztu (nie tylko mediana). **Bramka
+PASS** — jest realna, wielokrotna nad kosztem przestrzeń cenowa, w której cel
+D1 Range Target mógłby coś złapać, zanim pozycja i tak zamknie się przez
+Inactivity Manager po zdecydowanie mniejszym ruchu niż faktyczne MFE. **Kandydat
+#2 idzie do siatki** (`k ∈ {0,25, 0,5}`, `ATR_LOOKBACK=4` a priori).
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/mfe_inactivity_gate_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --workers 10
+```

@@ -34,9 +34,11 @@ Pełna specyfikacja metodologii: `task.md`, sekcja "Faza 4", akapit
 - [x] Checkpoint w `task.md` + ten plik zreplikowane do worktree Buildera
       (brakowały w worktree, bo w main checkout były niescommitowane — patrz
       task.md/Faza 4 dla treści źródłowej)
-- [ ] Krok 0: bramka MFE
-- [ ] Kandydat #2 (jeśli MFE przechodzi)
-- [ ] Kandydat #1
+- [x] Krok 0: bramka MFE — **PASS** (pooled mediana +0,992% vs próg 0,10%,
+      BTC/ETH osobno >=2x próg) — kandydat #2 idzie do siatki. Pełny wynik:
+      `task.md`/Faza 4/"Krok 0".
+- [ ] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed, `k∈{0.25,0.5}`)
+- [ ] Kandydat #1 (Protected Stage-1, 5 wariantów × 10 okien)
 - [ ] Wyniki wpisane do `task.md` (pełna tabela + werdykt)
 - [ ] Decyzja: wdrożyć / odrzucić / dalsze badanie
 - [ ] Status tego pliku → `completed`
