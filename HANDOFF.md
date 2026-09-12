@@ -9,7 +9,7 @@
 - **Conversation ID**: `faza4-masterminda-candidates`
 - **Role**: Builder (implementacja, testy, atomowe commity — nie merguje/pushuje)
 - **Timestamp**: 2026-09-12T00:00:00Z (aktualizowane przy każdym checkpointcie)
-- **Status**: `in-progress`
+- **Status**: `completed`
 
 ## Current Task
 Backtest dwóch kandydatów strategicznych znalezionych przez analizę dokumentu
@@ -41,10 +41,16 @@ Pełna specyfikacja metodologii: `task.md`, sekcja "Faza 4", akapit
       **ODRZUCONY**: 0/4 kombinacji k×fixture-set przechodzi bramkę (główny
       grid: k=0.25 tylko ETH 4/5, BTC 2/5; k=0.5 oba 2/5; kontrola USDC: oba k
       prawie same ujemne delty). Pełny wynik: `task.md`/Faza 4/"Kandydat #2".
-- [ ] Kandydat #1 (Protected Stage-1, 5 wariantów × 10 okien)
-- [ ] Wyniki wpisane do `task.md` (pełna tabela + werdykt)
-- [ ] Decyzja: wdrożyć / odrzucić / dalsze badanie
-- [ ] Status tego pliku → `completed`
+- [x] Kandydat #1 (Protected Stage-1, 5 wariantów × 10 okien) —
+      **NIEJEDNOZNACZNY**: BREAKEVEN/INVALIDATION przechodzą formalną bramkę
+      na głównym gridzie (10/10, 9/10) ale kontrola na realnych danych USDC
+      NIE potwierdza (BTC płasko/ujemnie). FULL_EXIT jednoznacznie odrzucony.
+      Pełny wynik: `task.md`/Faza 4/"Kandydat #1".
+- [x] Wyniki wpisane do `task.md` (pełna tabela + werdykt)
+- [x] Decyzja: **żaden kandydat nie wdrożony do `daemon.py`** — oba zostają w
+      `backtest_engine.py` jako opcjonalne parametry, default OFF/False,
+      wyłącznie do odtwarzalności pomiarów.
+- [x] Status tego pliku → `completed`
 
 ## State Snapshot
 ### Files Modified
