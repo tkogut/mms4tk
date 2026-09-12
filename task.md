@@ -2427,11 +2427,23 @@ ryzyko przerwania sesji przez tygodniowy limit, tak żeby inny agent
 ("Antigravity"/Coordinator) mógł dokładnie wiedzieć, na czym się skończyło.
 Stąd ta sekcja + `HANDOFF.md`, aktualizowane na bieżąco, nie tylko na końcu.
 
-### Status wykonania — aktualizowany na bieżąco
+### Status wykonania — ZAKOŃCZONE (2026-09-12), zweryfikowane niezależnie
 
-- [ ] Dispatch agenta do backtestu (branch, worktree — uzupełnić po starcie)
-- [ ] Krok 0: bramka MFE — wynik
-- [ ] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik
-- [ ] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik
-- [ ] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu
-- [ ] `task.md` finalna sekcja + `HANDOFF.md` status=completed
+- [x] Dispatch agenta do backtestu — branch `chore/faza4-masterminda-candidates`
+      (Sonnet, checkpointował po każdym kroku, zgodnie z instrukcją)
+- [x] Krok 0: bramka MFE — **PASS** (mediana MFE wyjść Inactivity: BTC +0,74%,
+      ETH +1,21%, oba ≥2× progu 0,10%)
+- [x] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — **ODRZUCONY**,
+      0/4 kombinacji k×fixture przechodzi bramkę ≥8/10
+- [x] Kandydat #1 (Protected Stage-1) — **NIEJEDNOZNACZNY**: główna siatka
+      (proxy USDT) formalnie przechodzi (BREAKEVEN 10/10, INVALIDATION 9/10),
+      ale kontrola na realnych danych USDC tego nie potwierdza (BREAKEVEN 2/3
+      blisko zera, INVALIDATION 0/3 wyraźnie ujemne) — zweryfikowane osobno
+      przeze mnie, liczby kontrolne zgodne co do promila z raportem agenta
+- [x] Werdykt końcowy: **NIC nie wdrożone do `daemon.py`** — brak jednoznacznego,
+      spójnego dowodu (standard tej sesji). Wszystkie nowe parametry
+      `run_backtest()` domyślnie wyłączone, zero zmiany zachowania. Pełny
+      pytest (404 passed, 4 deselected) zweryfikowany niezależnie.
+- [x] `HANDOFF.md` status=completed. Pełny szczegółowy zapis (tabele, kod,
+      commity) na branchu `chore/faza4-masterminda-candidates` — niezmergowany,
+      czeka na decyzję o push/PR.
