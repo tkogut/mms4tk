@@ -1,4 +1,33 @@
-# 📋 TASK BACKLOG: Etap 0 — P9 (Higiena) + P7 (Naprawa parametrów silnika rekalibracji)
+# 📋 TASK BACKLOG: mms4tk Profitability & Hardening Workstream
+
+**Status aktualny (2026-09-12): v0.45.0 na produkcji, Faza 3 zmergowana do `main`.**
+Jeden otwarty follow-up: branch `chore/phase3-2-htf-fetch-failsafe-fix` (fail-safe
+bramki H4 — naprawiony realny bug znaleziony przez `/code-review` post-merge,
+gotowy, niezmergowany — patrz sekcja "Faza 3.2" niżej).
+
+**Uwaga dla czytelnika:** ten dokument to chronologiczny, żywy log decyzji —
+zaczął się jako wąski backlog Etapu 0 (patrz tytuł oryginalny niżej, zachowany dla
+historii) i urósł przez kolejne fazy audytu i optymalizacji aż po Fazę 3. Sekcje
+oznaczone ✅/ZAMKNIĘTE/ODRZUCONE to **celowo zachowane uzasadnienia** decyzji
+(zaakceptowanych i odrzuconych hipotez) — nie usuwać bez dowodu, który je obala;
+to one chronią przed ponownym proponowaniem już sfalsyfikowanych pomysłów.
+
+**Nawigacja (chronologicznie, najstarsze pierwsze):**
+- Etap 0 (P9 higiena + P7 naprawa rekalibracji) → Etap 1 (P2 model kosztów) →
+  Etap 2 (P1 SL dokładki) → Etap 3 (P4 krok 0, P6.1) → Etap 4 (P3 rekoncyliacja) →
+  Sesja A1+A2 (kalibracja opłat, KPI od epoki) → Sesja A3 (długa historia 24 mies.) →
+  **Etap 5: raport strategiczny** (czy w ogóle zarabiamy — kluczowe ustalenie o
+  wrażliwości na trend) → **Faza 3**: 3.1 (audyt SCOUT_MODE + bugfix Midline TP),
+  3.2 (H4 directional-bias gate — WDROŻONE jako flaga OFF + follow-up fail-safe fix),
+  3.3 (rolling TMA/ATR recalibration — ODRZUCONE), 3-4 (D1 ATR exhaustion filter —
+  ODRZUCONE).
+- Pełna historia dostarczonych planów/PR-ów: `CHANGELOG.md` (wpis per wersja) i
+  `.agents/MEMORY.md` (zwięzłe podsumowanie architektury i status).
+
+---
+
+<details>
+<summary>Oryginalny nagłówek dokumentu (Etap 0, zachowany dla historii)</summary>
 
 **Status:** P9 (TICKET-P9.1 do P9.7) ORAZ P7 (TICKET-P7.1 + 3 "same file" follow-ony)
 ZAIMPLEMENTOWANE i przetestowane — 301/301 testów PASS. Decyzje architektoniczne dla
@@ -9,6 +38,8 @@ zlecono) — core fix, potem 3 follow-ony, każdy osobnym commitem/krokiem weryf
 **Źródło:** `docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md`, sekcje P7, P9, §5
 **Standard:** AGENTS-OS v6.5 Swarm / MMS4 Strict Compliance
 **Git Worktree:** `tmp/worktrees/feature/p9-hygiene-p7-recalibration-params`
+
+</details>
 
 ---
 
