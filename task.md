@@ -2686,3 +2686,60 @@ Odtworzenie:
 PYTHONPATH=src python3 scripts/mfe_inactivity_gate_analysis.py \
   --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --workers 10
 ```
+
+---
+
+## 🔹 Faza 5 (2026-09-12) — maker-first (postOnly) na 24-mies. danych pod V2 + formalne domknięcie Profitability Workstream
+
+> **CHECKPOINT AKTYWNY — `HANDOFF.md` ma aktualny status.**
+
+### Decyzje architektoniczne usera (2026-09-12)
+
+Po 9 niezależnie przetestowanych hipotezach (P1, P4, A/B engine_mode, rolling
+recalibration, D1 exhaustion filter, bramka H4, Protected Stage-1, D1 Range
+Target — wszystkie: brak efektu, odrzucone, niejednoznaczne, lub redukują
+straty bez tworzenia zysku) user podjął 3 decyzje kończące ten wątek pracy:
+
+1. **Ostatni test**: przeliczyć egzekucję maker (`postOnly`) zamiast taker na
+   24-mies. danych pod V2 — jedyna dźwignia w projekcie działająca na
+   deterministycznej arytmetyce kosztu, nie na hipotezie rynkowej. Stara
+   liczba w `task.md` (linia ~1362, "+0,81% → +7,31%") jest ze STAREGO
+   90-dniowego fixture'u, sprzed V2/długiej historii — wymaga przeliczenia.
+2. **Formalne zamknięcie Profitability Workstream** po tym teście — koniec
+   poszukiwania nowych filtrów sygnałowych, koniec dopasowywania parametrów
+   pod historię ("Stop Over-Engineering").
+3. **Akceptacja natury MMS4**: system do handlu w konsolidacji pod nadzorem,
+   nie w pełni autonomiczny bot 24/7 na każdy reżim. Poleganie na Maszynie
+   Stanów (SCOUT_MODE) + asynchronicznym nadzorze Hermes Agenta (HITL).
+   **Korekta merytoryczna (orchestrating session, 2026-09-12)**: SCOUT_MODE
+   NIE redukuje ryzyka przez dźwignię 0,1x (nieaktualny model mentalny,
+   sprostowany już w Fazie 3.1) — redukuje przez ROZMIAR POZYCJI
+   (`SCOUT_SIZE_MULT=0,3`), dźwignia zostaje na `SCOUT_LEVERAGE=1.0`. Decyzja
+   architektoniczna #3 zostaje słuszna, tylko z poprawnym uzasadnieniem
+   mechanizmu.
+
+### Zadanie: przeliczenie maker-first
+
+Zweryfikować realną, aktualną stawkę maker/taker OKX dla instrumentu
+używanego przez produkcję (nie zakładać starego "0,02%" bez źródła), dodać
+opcjonalny parametr przeliczający `ROUND_TRIP_FEE_PCT` na stawkę maker w
+`backtest_engine.py` (domyślnie bez zmian — dzisiejsza, skalibrowana z A1
+stawka taker `0.0010003` zostaje defaultem), przeliczyć TĘ SAMĄ populację
+transakcji z 24-mies. backtestu (metodologia Fazy 2a/2b: 5+5 okien proxy
+USDT + 3+3 kontrola USDC) pod stawką maker, i podać twardą liczbę delty netto
+per okno + sumarycznie. **Jawne zastrzeżenie wymagane w wyniku**: to zakłada
+100% wypełnień jako maker (`postOnly`) — nie modeluje ryzyka niewypełnienia
+zlecenia (fill-rate), które w realnej egzekucji istnieje (stare Sesja B:
+"twarda bramka rollbacku: fill-rate <80% = powrót do market"). To pomiar
+teoretycznego sufitu oszczędności, nie gwarantowany wynik.
+
+### Status wykonania
+
+- [ ] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
+- [ ] Parametr w `backtest_engine.py` (domyślnie bez zmian)
+- [ ] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
+- [ ] Wpis wyniku do `task.md` + `HANDOFF.md`
+- [ ] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
+      9+1 hipotez, wynik końcowy, akceptacja natury strategii, poprawiony opis
+      SCOUT_MODE)
+- [ ] Testy + handshake
