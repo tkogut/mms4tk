@@ -2387,7 +2387,7 @@ poprawnościowy: sprawdza WYŁĄCZNIE istnienie zlecenia algo SL, nigdy jego cen
 triggera — ręcznie przesunięty SL nigdy nie zostanie wykryty ani cofnięty.
 Osobny, mały ticket hardeningowy, nie strategia.
 
-**2 realne, nigdy nieprzetestowane kandydaty znalezione:**
+**2 realne, nigdy nieprzetestowane kandydaci znalezione:**
 
 1. **Protected Stage-1** — shipowany Midline Partial TP (PLAN-009, dziś
    `midline_partial_tp_enabled=False`, odrzucony 6/6 w starym backteście)
@@ -2427,23 +2427,320 @@ ryzyko przerwania sesji przez tygodniowy limit, tak żeby inny agent
 ("Antigravity"/Coordinator) mógł dokładnie wiedzieć, na czym się skończyło.
 Stąd ta sekcja + `HANDOFF.md`, aktualizowane na bieżąco, nie tylko na końcu.
 
-### Status wykonania — ZAKOŃCZONE (2026-09-12), zweryfikowane niezależnie
+### Status wykonania — aktualizowany na bieżąco
 
-- [x] Dispatch agenta do backtestu — branch `chore/faza4-masterminda-candidates`
-      (Sonnet, checkpointował po każdym kroku, zgodnie z instrukcją)
-- [x] Krok 0: bramka MFE — **PASS** (mediana MFE wyjść Inactivity: BTC +0,74%,
-      ETH +1,21%, oba ≥2× progu 0,10%)
-- [x] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — **ODRZUCONY**,
-      0/4 kombinacji k×fixture przechodzi bramkę ≥8/10
-- [x] Kandydat #1 (Protected Stage-1) — **NIEJEDNOZNACZNY**: główna siatka
-      (proxy USDT) formalnie przechodzi (BREAKEVEN 10/10, INVALIDATION 9/10),
-      ale kontrola na realnych danych USDC tego nie potwierdza (BREAKEVEN 2/3
-      blisko zera, INVALIDATION 0/3 wyraźnie ujemne) — zweryfikowane osobno
-      przeze mnie, liczby kontrolne zgodne co do promila z raportem agenta
-- [x] Werdykt końcowy: **NIC nie wdrożone do `daemon.py`** — brak jednoznacznego,
-      spójnego dowodu (standard tej sesji). Wszystkie nowe parametry
-      `run_backtest()` domyślnie wyłączone, zero zmiany zachowania. Pełny
-      pytest (404 passed, 4 deselected) zweryfikowany niezależnie.
-- [x] `HANDOFF.md` status=completed. Pełny szczegółowy zapis (tabele, kod,
-      commity) na branchu `chore/faza4-masterminda-candidates` — niezmergowany,
-      czeka na decyzję o push/PR.
+- [x] Dispatch agenta do backtestu — branch `chore/faza4-masterminda-candidates`,
+      worktree `.claude/worktrees/agent-ab159cf9eb4b3dc4e` (Builder, model Sonnet)
+- [x] Krok 0: bramka MFE — wynik: **PASS** (patrz niżej)
+- [x] Kandydat #2 (D1 Range Target, `ATR_LOOKBACK=4` fixed) — wynik: **ODRZUCONY** (patrz niżej)
+- [x] Kandydat #1 (Protected Stage-1, 5 ramion × 10 okien) — wynik: **NIEJEDNOZNACZNY** (patrz niżej)
+- [x] Werdykt końcowy + decyzja o wdrożeniu/odrzuceniu — **żaden kandydat nie
+      wdrożony do `daemon.py`** (patrz "Werdykt końcowy" niżej)
+- [x] `task.md` finalna sekcja + `HANDOFF.md` status=completed
+
+### Werdykt końcowy (obaj kandydaci)
+
+| kandydat | wynik | wdrożone do `daemon.py`? |
+|---|---|---|
+| #2 D1 Range Target | 🔴 ODRZUCONY (0/4 k×fixture-set) | NIE |
+| #1 Protected Stage-1 | 🟡 NIEJEDNOZNACZNY (BREAKEVEN/INVALIDATION PASS na głównym gridzie, FAIL na kontroli realnych danych) | NIE |
+
+Żaden kandydat nie trafia do produkcji z tej sesji. Kod obu (parametry
+`run_backtest()`, wszystkie default OFF/False) zostaje w `backtest_engine.py`
+wyłącznie do odtwarzalności pomiarów — zero zmiany zachowania dla istniejących
+wywołań, potwierdzone pełnym suite (patrz niżej). Dokument Masterminda po tej
+sesji: gap-analysis (wyżej) + te dwa zmierzone kandydaci wyczerpuje realistyczne,
+nigdy-nieprzetestowane pomysły z tego źródła — kolejny krok, jeśli user
+zdecyduje kontynuować profitability workstream, to przeliczenie egzekucji
+maker-first na 24-mies. danych (patrz "Rekomendacja" wyżej) albo zebranie
+dłuższej realnej historii USDC, żeby rozstrzygnąć rozbieżność kandydata #1.
+
+### Kandydat #1: Protected Stage-1 — WYNIK: 🟡 NIEJEDNOZNACZNY (główny grid PASS, kontrola NIE potwierdza)
+
+**Implementacja** (`backtest_engine.py`): `midline_tp_remainder_mode`
+(`NONE`/`BREAKEVEN`/`INVALIDATION`, default `NONE` — bit-for-bit dzisiejsze
+zachowanie) + `midline_tp_full_exit` (wariant 4, default `False`). BREAKEVEN
+realizowany przez istniejący mechanizm `sl_pct_override`/`sl_price_basis` z
+UJEMNYM pct (`-ROUND_TRIP_FEE_PCT`) — algebraicznie przesuwa SL na korzystną
+stronę `base_entry_price` o dokładnie bufor kosztu round-trip, symetrycznie dla
+long/short (wyprowadzenie w docstringu `run_backtest`). INVALIDATION zamraża
+poziom midline W MOMENCIE partiala (`midline_invalidation_price`) i zamyka
+resztę na pierwszym zamknięciu świecy z powrotem po przeciwnej stronie tego
+zamrożonego poziomu — świadomie NIE goni ruchomej TMA (patrz uzasadnienie w
+docstringu). 12 nowych testów jednostkowych (walidacja trybu, NONE/BREAKEVEN/
+INVALIDATION/FULL_EXIT, każdy z osobnym scenariuszem).
+
+**Metoda** (`scripts/protected_stage1_analysis.py`): 5 wariantów × 5×122d okien
+× 2 symbole (10 komórek głównych, `_swap_24m`) + kontrola 5 wariantów × 3×122d
+× 2 symbole (6 komórek, `_USDC_1h_max`). Warianty (2)/(3)/(4) gate'owane
+względem (1) UNPROTECTED (dzisiejsze zachowanie, NIE względem (0) OFF) —
+zgodnie ze specyfikacją. Ten sam setup produkcyjny co reszta sesji.
+
+**Wynik — siatka główna (10 komórek, `_swap_24m`), netto vs UNPROTECTED(1):**
+
+| wariant | BTC dodatnich (mean Δ) | ETH dodatnich (mean Δ) | sign-test p | bramka (≥4/5 osobno) |
+|---|---|---|---|---|
+| (2) BREAKEVEN | 5/5 (+3,02pp) | 5/5 (+5,64pp) | 0,0625/0,0625 | **PASS** |
+| (3) INVALIDATION | 4/5 (+1,64pp) | 5/5 (+5,87pp) | 0,3750/0,0625 | **PASS** |
+| (4) FULL_EXIT | 0/5 (−6,64pp) | 3/5 (−3,95pp) | 0,0625/1,0000 | FAIL |
+
+**Wynik — kontrola (6 komórek, `_USDC_1h_max`, realne dane), netto vs UNPROTECTED(1):**
+
+| wariant | BTC dodatnich (mean Δ) | ETH dodatnich (mean Δ) | bramka (≥3/3 osobno) |
+|---|---|---|---|
+| (2) BREAKEVEN | 2/3 (−0,69pp) | 2/3 (+2,50pp) | FAIL (BTC prawie płasko-ujemny) |
+| (3) INVALIDATION | 0/3 (−2,44pp) | 2/3 (+2,56pp) | FAIL (BTC wyraźnie ujemny) |
+| (4) FULL_EXIT | 0/3 (−15,94pp) | 0/3 (−12,06pp) | FAIL (zdecydowanie) |
+
+**Interpretacja — dlaczego "niejednoznaczny", nie czyste PASS ani czyste REJECT:**
+
+1. **FULL_EXIT (wariant 4) jest jednoznacznie odrzucony** — przegrywa na OBU
+   zestawach, dla obu symboli, z dużym marginesem (do −16pp na kontroli). 100%
+   wyjście na midline ucina zbyt dużo potencjału `TP_AND_FLIP` bez kompensaty.
+   Mechanizm identyczny jak przy odrzuceniu kandydata #2: wąski cel/wczesne
+   wyjście ogranicza właśnie te przypadki, gdzie naturalny bieg pozycji dawałby
+   więcej.
+2. **BREAKEVEN (wariant 2) i INVALIDATION (wariant 3) obie przechodzą
+   FORMALNĄ bramkę zdefiniowaną w zadaniu** (≥8/10 na głównym gridzie 10
+   komórek, spójnie ≥4/5 osobno na BTC i ETH) — i to nie marginalnie: BREAKEVEN
+   10/10, INVALIDATION 9/10, obie z konsekwentnym kierunkiem znaku w niemal
+   każdym oknie.
+3. **Ale kontrola na realnych danych USDC (`_max`, 384 dni, nie proxy) TEGO NIE
+   POTWIERDZA** — ani jedna, ani druga nie osiąga nawet 2/3 spójnie na obu
+   symbolach. BREAKEVEN na BTC kontrolnym jest praktycznie płaski (mean
+   −0,69pp na 3 oknach — nieodróżnialne od szumu przy tak małej próbie), ale
+   INVALIDATION na BTC kontrolnym jest WYRAŹNIE ujemna (0/3, mean −2,44pp) —
+   silniejszy sygnał przeciw niż przy BREAKEVEN.
+4. **To NIE jest ten sam wzorzec co Faza 3.3 (rolling recalibration)** — tam
+   kontrola (`windowed_static`) była SPÓJNA z niezależną Fazą 2a, ujawniając że
+   POZORNA przewaga rolling to w 100% artefakt in-sample selection (dowód:
+   switch rate nieodróżnialny od losowego). Tutaj nie ma mechanizmu selection
+   bias — BREAKEVEN/INVALIDATION to ustalone z góry reguły, nie wybór
+   najlepszej z N opcji. Rozbieżność główny-grid/kontrola tutaj wygląda raczej
+   na **zwykłą niepewność małej próby** (3 okna/symbol na kontroli to bardzo
+   mało — jedno "niewygodne" okno wystarczy, by odwrócić 3/3 w 2/3 albo 0/3) niż
+   na dowód, że mechanizm jest fałszywy — ale to WCIĄŻ oznacza, że nie mamy
+   niezależnego potwierdzenia na realnych danych, więc nie można uczciwie
+   ogłosić czystego zwycięstwa.
+5. **BREAKEVEN jest wyraźnie LEPIEJ wspierany niż INVALIDATION** między tymi
+   dwoma: silniejszy/bardziej spójny sygnał na głównym gridzie (10/10 vs 9/10,
+   większe średnie delty), i na kontroli jego jedyna "porażka" (BTC) jest
+   praktycznie płaska (blisko zera), podczas gdy INVALIDATION na kontrolnym
+   BTC ma wyraźnie ujemny, nie tylko "niepewny" sygnał.
+
+**Werdykt: NIEJEDNOZNACZNY / WARUNKOWY, nie czyste PASS.** Zgodnie z regułą tej
+sesji (żaden pozytywny wynik nie trafia do `daemon.py` bez jednoznacznego,
+odpornego dowodu — patrz precedens Fazy 3.2 H4 gate) i mimo że BREAKEVEN
+formalnie przechodzi bramkę zdefiniowaną w zadaniu na głównym gridzie:
+- **`midline_tp_remainder_mode`/`midline_tp_full_exit` zostają w
+  `backtest_engine.py`, kod gotowy, ale WSZYSTKIE flagi default OFF** —
+  identycznie jak przy Fazie 3.2.
+- **NIE wdrożone do `daemon.py`** — rozbieżność z kontrolą na realnych danych
+  jest zbyt istotna, by rekomendować flip domyślnej wartości bez dalszej
+  walidacji na dłuższej realnej historii USDC (dziś tylko 384 dni/3 okna na
+  symbol — zbyt mało, by rozstrzygnąć czy rozbieżność to szum czy realny efekt).
+- **Rekomendacja na przyszłość**: jeśli/gdy pojawi się więcej realnej historii
+  USDC (>=5-6 niezależnych okien 122d, tak jak proxy), powtórzyć dokładnie ten
+  sam skrypt (`protected_stage1_analysis.py --control`) na szerszej kontroli —
+  to rozstrzygnie, czy BTC-kontrola-płaska jest szumem małej próby czy realną
+  granicą efektu. Do tego czasu: BREAKEVEN jest najlepiej wspieranym z 3
+  zmierzonych wariantów, ale nie na tyle, by przełamać "nie deployuj bez
+  jednoznacznego dowodu".
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/protected_stage1_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --window-days 122
+PYTHONPATH=src python3 scripts/protected_stage1_analysis.py \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv --window-days 122 --control
+```
+
+### Kandydat #2: D1 Range Target — WYNIK: 🔴 ODRZUCONY (0/4 kombinacji k×fixture-set przechodzi bramkę)
+
+**Implementacja** (`backtest_engine.py`): `d1_range_target_enabled`/`d1_range_target_k`
+(default off), `D1_RANGE_LOOKBACK_DAYS=4` zafiksowane a priori (stała modułowa,
+NIE parametr `run_backtest()`, więc nieosiągalna dla siatki), `_compute_d1_range_ref_series`
+(przyczynowe, rolling 4-dniowe okno D1 high-low, bez lookaheadu), cel zamrożony
+w momencie wejścia (`base_entry_price ± k×D1_range_ref`, nietknięty przez
+addon). Testowane TYLKO `k ∈ {0,25, 0,5}`. 5 nowych testów jednostkowych
+(`test_compute_d1_range_ref_series_*`, `test_d1_range_target_*`).
+
+**Metoda** (`scripts/d1_range_target_analysis.py`): 5×122d okien × 2 symbole
+(10 komórek, `_swap_24m`) + kontrola 3×122d × 2 symbole (6 komórek,
+`_USDC_1h_max`), każde k osobno vs baseline (bez celu), produkcyjne ustawienia
+bez zmian.
+
+**Wynik — siatka główna (10 komórek, `_swap_24m`):**
+
+| k | BTC dodatnich | ETH dodatnich | bramka (≥4/5 osobno) |
+|---|---|---|---|
+| 0,25 | 2/5 (mean Δ=−1,98pp) | 4/5 (mean Δ=+4,10pp) | **FAIL** (BTC nie przechodzi) |
+| 0,5 | 2/5 (mean Δ=−2,03pp) | 2/5 (mean Δ=+0,72pp) | **FAIL** (oba nie przechodzą) |
+
+**Wynik — kontrola (6 komórek, `_USDC_1h_max`, realne dane):**
+
+| k | BTC dodatnich | ETH dodatnich | bramka (≥3/3 osobno) |
+|---|---|---|---|
+| 0,25 | 0/3 (mean Δ=−11,65pp) | 0/3 (mean Δ=−8,50pp) | **FAIL** |
+| 0,5 | 1/3 (mean Δ=−5,41pp) | 0/3 (mean Δ=−4,32pp) | **FAIL** |
+
+**Werdykt**: **0 z 4 kombinacji (k×fixture-set) przechodzi bramkę ≥8/10
+(≥4/5 per symbol)** — ani k=0,25 ani k=0,5 nie działa spójnie nawet na SAMYM
+głównym gridzie (k=0,25 działa dla ETH ale nie BTC; k=0,5 nie działa dla
+żadnego), a kontrola na realnych danych USDC jest jeszcze wyraźniej negatywna
+(prawie wszystkie okna ujemne względem baseline, w tym k=0,25 dokłada
+−8 do −22pp na pojedynczych oknach). Cel wyzwala się relatywnie często
+(4-38 trafień na okno) ale **konsekwentnie pogarsza wynik częściej niż
+poprawia** — spójne z mechanizmem: `TP_AND_FLIP` (pełna przeciwna wstęga)
+zwykle daje WIĘKSZY ruch (mediana MFE dla tego exit_reason w kroku 0 to
++2,19%/+3,62% BTC/ETH) niż wąski cel `k×D1_range_ref` (rzędu 0,25-2×
+mediana MFE Inactivity ~0,74-1,21%), więc D1 Range Target **ucina zyski
+wcześniej niż pozwoliłby na to naturalny bieg pozycji**, bez kompensującej
+poprawy w oknach, gdzie inaczej pozycja zakończyłaby się stratą (Inactivity
+Manager i tak by ją zamknął o wiele bliżej, ale widocznie nie na tyle bliżej,
+żeby cel D1 systematycznie wygrywał).
+
+**Status: HIPOTEZA ODRZUCONA.** Kod (`d1_range_target_enabled`, default
+`False`) zostaje w `backtest_engine.py` wyłącznie do odtwarzalności tego
+pomiaru — **NIE wdrażać do `daemon.py`**, żadna z 2 przetestowanych wartości
+`k` nie ma wsparcia w danych, ani na głównym gridzie, ani (silniej) na
+kontroli realnych danych USDC.
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/d1_range_target_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --window-days 122
+PYTHONPATH=src python3 scripts/d1_range_target_analysis.py \
+  --fixtures ohlcv_BTC_USDC_1h_max.csv ohlcv_ETH_USDC_1h_max.csv --window-days 122 --control
+```
+
+### Krok 0: bramka MFE (max favorable excursion) — WYNIK: **PASS**, kandydat #2 idzie do siatki
+
+**Metoda** (`scripts/mfe_inactivity_gate_analysis.py`, dodany w tej sesji): dla
+każdej pozycji zamkniętej przez `run_backtest()` policzone MFE (dla long:
+`max(high)` w oknie `[entry_idx, exit_idx]` minus entry, jako % entry; dla short:
+entry minus `min(low)` w tym samym oknie), pogrupowane po `exit_reason`.
+`entry_idx` dodany do trade dictów zwracanych przez `run_backtest()` (był
+liczony wewnętrznie, ale nigdy nie eksportowany — czysto addytywna zmiana, zero
+wpływu na istniejące wywołania/testy, potwierdzone: `56 passed, 4 deselected`
+na `tests/test_backtest_engine.py`).
+
+**Uwaga metodologiczna**: krok 0 pierwotnie uruchomiony jako JEDEN ciągły
+przebieg na całej 24-mies. historii per symbol — porzucone po ~4,5 min pracy
+100% CPU bez wyniku, gdy przypomniało się, że `evaluate_signals()` przelicza
+TMA/ATR na CAŁYM rosnącym oknie przy KAŻDYM kroku (ta sama pułapka O(n²), którą
+Faza 3.3 już udokumentowała: 2928 świec/122d ≈3 min, gorzej niż liniowo —
+pełne ~17520 świec/730d w jednym ciągłym przebiegu byłoby rzędu GODZIN).
+Naprawione przez ponowne użycie DOKŁADNIE tej samej metodologii co reszta tej
+sesji (Faza 2a/2b/3.2/3-4): 5 niezależnych, nienachodzących okien 122d ×
+2 symbole = 10 komórek, wyniki MFE spool'owane ze wszystkich 10 (silniejsza,
+nie słabsza populacja niż jeden ciągły przebieg — więcej niezależnych próbek
+zjawiska, nie mniej). Produkcyjne ustawienia bez zmian: `engine_mode=ADAPTIVE`,
+VR 1,6/0,8, `stale_candles_threshold=12`, trend filter OFF, `addon_sl_variant`
+default (V2), `ROUND_TRIP_FEE_PCT=0,0010003` (A1).
+
+**Wynik — MFE per `exit_reason`, BTC/USDC (5×122d):**
+
+| exit_reason | n | mediana MFE | średnia | p25 | p75 | > progu (0,10%) |
+|---|---|---|---|---|---|---|
+| BE_ESCAPE [Inactivity] | 6 | +0,275% | +0,273% | +0,230% | +0,327% | 6/6 (100%) |
+| FORCE_CLOSE [Inactivity] | 410 | +0,802% | +1,024% | +0,521% | +1,276% | 410/410 (100%) |
+| FORCE_CLOSE_BE [Inactivity] | 5 | +0,369% | +0,405% | +0,288% | +0,541% | 5/5 (100%) |
+| STALE_SPLIT_50 [Inactivity] | 253 | +0,683% | +0,812% | +0,390% | +1,069% | 253/253 (100%) |
+| STOP_LOSS | 153 | +0,321% | +0,453% | +0,200% | +0,611% | 141/153 (92,2%) |
+| TP_AND_FLIP | 141 | +2,185% | +2,585% | +1,652% | +3,307% | 141/141 (100%) |
+| **INACTIVITY (razem)** | **674** | **+0,738%** | **+0,933%** | +0,472% | +1,213% | 674/674 (100%) |
+
+Inactivity share: 674/968 (69,6%) zdarzeń wyjścia.
+
+**Wynik — MFE per `exit_reason`, ETH/USDC (5×122d):**
+
+| exit_reason | n | mediana MFE | średnia | p25 | p75 | > progu (0,10%) |
+|---|---|---|---|---|---|---|
+| BE_ESCAPE [Inactivity] | 3 | +0,647% | +0,616% | +0,496% | +0,706% | 3/3 (100%) |
+| FORCE_CLOSE [Inactivity] | 390 | +1,291% | +1,592% | +0,858% | +1,861% | 390/390 (100%) |
+| FORCE_CLOSE_BE [Inactivity] | 2 | +0,649% | +0,649% | +0,317% | +0,981% | 2/2 (100%) |
+| STALE_SPLIT_50 [Inactivity] | 486 | +1,176% | +1,459% | +0,731% | +1,771% | 486/486 (100%) |
+| STOP_LOSS | 230 | +0,469% | +0,624% | +0,294% | +0,792% | 220/230 (95,7%) |
+| TP_AND_FLIP | 97 | +3,616% | +4,298% | +2,882% | +5,354% | 97/97 (100%) |
+| **INACTIVITY (razem)** | **881** | **+1,212%** | **+1,513%** | +0,777% | +1,801% | 881/881 (100%) |
+
+Inactivity share: 881/1208 (72,9%) zdarzeń wyjścia — potwierdza wcześniejszą
+atrybucję "~75% zdarzeń" w tej sesji (69,6%/72,9% zmierzone, ten sam rząd
+wielkości).
+
+**POOLED (1555 zdarzeń Inactivity, oba symbole):** mediana MFE = **+0,992%**,
+średnia +1,262%, wobec progu 0,10% (`ROUND_TRIP_FEE_PCT`).
+
+**Werdykt bramki**: mediana MFE populacji Inactivity **PRZEKRACZA próg
+0,10% ~10-krotnie** (pooled +0,992% vs +0,10%; BTC +0,738%, ETH +1,212% —
+obie osobno >=2× progu), i to konsekwentnie: 100% obserwacji Inactivity w OBU
+symbolach leży powyżej samego progu kosztu (nie tylko mediana). **Bramka
+PASS** — jest realna, wielokrotna nad kosztem przestrzeń cenowa, w której cel
+D1 Range Target mógłby coś złapać, zanim pozycja i tak zamknie się przez
+Inactivity Manager po zdecydowanie mniejszym ruchu niż faktyczne MFE. **Kandydat
+#2 idzie do siatki** (`k ∈ {0,25, 0,5}`, `ATR_LOOKBACK=4` a priori).
+
+Odtworzenie:
+```bash
+PYTHONPATH=src python3 scripts/mfe_inactivity_gate_analysis.py \
+  --fixtures ohlcv_BTC_USDT_1h_swap_24m.csv ohlcv_ETH_USDT_1h_swap_24m.csv --workers 10
+```
+
+---
+
+## 🔹 Faza 4 (2026-09-12) — analiza strategiczna dokumentu Masterminda: 2 nowe kandydaty do przetestowania
+
+> **⚠️ CHECKPOINT AKTYWNY — zobacz `HANDOFF.md` w korzeniu repo dla aktualnego
+> stanu przekazania między agentami.** Ta sekcja jest aktualizowana na bieżąco;
+> `HANDOFF.md` to krótki, zawsze-aktualny wskaźnik "gdzie jesteśmy teraz", ten
+> plik to pełny log decyzji i wyników.
+
+### Zlecenie i gap-analysis (Opus, 2026-09-12) — DONE
+
+User poprosił o strategiczną analizę: co realnie można zrobić żeby poprawić
+strategię, w oparciu o `.agents/specs/knowledge/Architektura Systemowa mms4tk:
+Przekład Strategii Masterminda na Logikę Agenta (Raport 10.09.2026).md`.
+
+**Wniosek**: dokument w większości już wyczerpany jako źródło nowych dźwigni
+zyskowności (3 mechanizmy niemierzalne/niewdrażalne rozsądnie: blokada 16:05
+bez definicji "anomalii", dosłowna 5-minutowa Double Retest Protection wymaga
+nowych danych i dwu-timeframe'owego silnika, Iron Execution nie jest dźwignią
+PnL — strata −23%/okno jest w pełni odtwarzalna w backteście bez operatora).
+Self-Healing SL Guard (`daemon.py:1038-1074`) ma realny, ale osobny deficyt
+poprawnościowy: sprawdza WYŁĄCZNIE istnienie zlecenia algo SL, nigdy jego ceny
+triggera — ręcznie przesunięty SL nigdy nie zostanie wykryty ani cofnięty.
+Osobny, mały ticket hardeningowy, nie strategia.
+
+**2 realne, nigdy nieprzetestowane kandydaty znalezione:**
+
+1. **Protected Stage-1** — shipowany Midline Partial TP (PLAN-009, dziś
+   `midline_partial_tp_enabled=False`, odrzucony 6/6 w starym backteście)
+   księguje 50% na midline TMA, ale zostawia resztę na PEŁNYM 2% ryzyku —
+   dokument Masterminda przewiduje zabezpieczenie reszty na Break Even po
+   partialu. To nigdy nie było przetestowane (stary 6/6 testował TYLKO wariant
+   bez ochrony reszty). Warianty do zmierzenia: (0) OFF baseline, (1) 50%
+   partial bez ochrony [= kontrola, stary 6/6 przeliczony na 24-mies./V2 po raz
+   pierwszy], (2) 50% + BE na reszcie, (3) 50% + inwalidacja na zamknięciu
+   świecy poza midline, (4) 100% wyjście na midline.
+2. **D1 Range Target** — system dziś nie ma ŻADNEGO celu cenowego poza pełną
+   przeciwną wstęgą TMA (`TP_AND_FLIP`). Dokument Masterminda definiuje
+   `ATR_LOOKBACK` (3-5 dni, default 4, nigdy niezaimplementowany parametr) do
+   wyznaczenia wielodniowego zasięgu D1 jako Stage-2 celu. **Bramka krok-0
+   OBOWIĄZKOWA przed siatką**: studium MFE (max favorable excursion) na
+   istniejących fixture'ach — jeśli populacja wyjść przez Inactivity Manager
+   (~75% zdarzeń) nie pokazuje MFE istotnie powyżej 0,10% round-tripu, kandydat
+   umiera od razu, zero dalszego ryzyka. `ATR_LOOKBACK` MUSI zostać zafiksowany
+   a priori (=4, wartość z dokumentu) — NIE dobierany siatką, żeby uniknąć
+   dokładnie tego selection bias co Faza 3.3 (rolling recalibration, odrzucona).
+
+**Rekomendacja**: jeden przebieg (MFE gate → jeśli przechodzi, siatka kandydata
+#2 z ustalonym a priori `ATR_LOOKBACK=4` → siatka kandydata #1, 5 ramion × 10
+okien + kontrola USDC), bramka akceptacji **≥8/10 okien dodatnich, spójnie
+osobno na BTC i ETH** (standard Fazy 2b/3.2). Jeśli oba wyjdą null — uczciwy
+wniosek: dokument Masterminda wyczerpany, następne źródło pomysłów to
+egzekucja maker-first (`task.md` linia ~1362, ale **UWAGA**: liczba "+0,81% →
++7,31%" tam zacytowana jest ze STAREGO 90-dniowego fixture'u, sprzed korekty
+V2/długiej historii Fazy 2 — mechanizm nadal wart uwagi, liczba wymaga
+przeliczenia na 24-mies. danych zanim się jej zaufa).
+
