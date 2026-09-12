@@ -155,15 +155,27 @@ def _trade_record_flags(exit_reason: str) -> Dict[str, bool]:
     `inactivity_manager.py`/`daemon.py` never call either state hook for these exits
     (they are inactivity-driven exits, not a signal-driven take-profit or a hard
     stop-loss fill) — confirmed by grep, not assumed.
+
+    Faza 4 (task.md, candidate #1/#2, both default-off measurement-only features):
+    D1_RANGE_TP (candidate #2, hard TP at entry +/- k*D1_range_ref) and
+    MIDLINE_FULL_TP (candidate #1 variant (4), 100% exit at the midline instead of
+    a partial) are both full, non-partial take-profit closes — same classification
+    as TP_AND_FLIP. MIDLINE_INVALIDATION (candidate #1 variant (3): the protected
+    remainder closes because price closed back on the wrong side of the midline)
+    is a full close but NOT a take-profit in this table's sense — it can lock in
+    either a small gain or a small loss depending on where the remainder's close
+    price lands relative to entry, exactly like STOP_LOSS in that respect, but it
+    is not a hard-stop-price fill either, so it maps to neither flag, same as the
+    Inactivity Manager's own ambiguous exits above.
     """
     table = {
-        "STOP_LOSS":          dict(is_stop_loss=True,  is_take_profit=False, is_partial=False),
-        "TP_AND_FLIP":        dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
-        "STALE_SPLIT_50":     dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
-        "MIDLINE_PARTIAL_TP": dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
-        "FORCE_CLOSE":        dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
-        "FORCE_CLOSE_BE":     dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
-        "BE_ESCAPE":          dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+        "STOP_LOSS":           dict(is_stop_loss=True,  is_take_profit=False, is_partial=False),
+        "TP_AND_FLIP":         dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+        "STALE_SPLIT_50":      dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
+        "MIDLINE_PARTIAL_TP":  dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
+        "FORCE_CLOSE":         dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+        "FORCE_CLOSE_BE":      dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+        "BE_ESCAPE":           dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
     }
     return table[exit_reason]
 
@@ -603,7 +615,8 @@ def run_backtest(
         )
         trades.append({
             "side": side, "entry_price": entry, "exit_price": exit_price,
-            "pnl_pct": pnl_pct, "exit_reason": reason, "exit_idx": idx, "weight": weight,
+            "pnl_pct": pnl_pct, "exit_reason": reason,
+            "entry_idx": position["entry_idx"], "exit_idx": idx, "weight": weight,
             "addon_applied": bool(position.get("addon_done", False)),  # test/diagnostic observability only
             **_round_trip_cost_pct(idx - position["entry_idx"]),
         })
@@ -662,7 +675,8 @@ def run_backtest(
                             mid_pnl = (tma_mid - entry) / entry if side == "long" else (entry - tma_mid) / entry
                             trades.append({
                                 "side": side, "entry_price": entry, "exit_price": tma_mid,
-                                "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP", "exit_idx": i,
+                                "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP",
+                                "entry_idx": position["entry_idx"], "exit_idx": i,
                                 "partial": True, "weight": position["notional_weight"] * reduced_frac,
                                 **_round_trip_cost_pct(i - position["entry_idx"]),
                             })
@@ -696,7 +710,8 @@ def run_backtest(
                     half_pnl = (curr_c.close - entry) / entry if side == "long" else (entry - curr_c.close) / entry
                     trades.append({
                         "side": side, "entry_price": entry, "exit_price": curr_c.close,
-                        "pnl_pct": half_pnl, "exit_reason": "STALE_SPLIT_50", "exit_idx": i,
+                        "pnl_pct": half_pnl, "exit_reason": "STALE_SPLIT_50",
+                        "entry_idx": position["entry_idx"], "exit_idx": i,
                         "partial": True, "weight": position["notional_weight"] * reduced_frac,
                         **_round_trip_cost_pct(i - position["entry_idx"]),
                     })
