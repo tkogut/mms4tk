@@ -1,74 +1,56 @@
 # HANDOFF — Agent State Transfer Document
 
-> Jeśli czytasz to jako inny agent (np. Antigravity/Coordinator): to jest
-> zawsze-aktualny wskaźnik "gdzie jesteśmy teraz". Pełny log decyzji i
-> wyników: `task.md`, sekcja **"Faza 5 (2026-09-12) — maker-first (postOnly)
-> na 24-mies. danych pod V2 + formalne domknięcie Profitability Workstream"**
-> (na samym końcu pliku).
+> Jeśli czytasz to jako inny agent (np. Antigravity/Coordinator): Profitability
+> Workstream jest **formalnie zamknięty** (2026-09-12/13). Pełny log: `task.md`,
+> sekcje "Faza 4" i "Faza 5" (na końcu pliku), zwłaszcza "🔒 Formalne domknięcie
+> Profitability Workstream".
 
 ## Session Info
-- **Conversation ID**: `faza5-maker-first-execution`
-- **Role**: Builder
-- **Timestamp**: 2026-09-12T20:00:00Z
-- **Status**: `completed` — wszystkie 4 kroki zrobione i zacommitowane, pełny
-  pytest PASS, handshake wygenerowany
-  (`.agents/swarm/faza5-maker-first-execution_builder_handshake.json`). Branch
-  `chore/faza5-maker-first-execution`, **nie pushnięty, nie PR, nie
-  zmergowany** (zgodnie z instrukcją usera).
+- **Conversation ID**: `profitability-workstream-closure`
+- **Role**: Coordinator
+- **Timestamp**: 2026-09-13T08:25:00Z
+- **Status**: `completed` — cały wątek pracy zamknięty, zweryfikowany niezależnie, zmergowany do `main`
 
 ## Current Task
-Ostatni test Profitability Workstream: przeliczyć egzekucję maker (`postOnly`)
-zamiast taker na 24-mies. danych pod V2, potem formalnie zamknąć workstream
-(koniec poszukiwania nowych filtrów sygnałowych). Pełna specyfikacja:
-`task.md`/Faza 5.
-
-- **Branch**: `chore/faza5-maker-first-execution` (izolowany worktree)
-- **Nie zmergowane, nie pushnięte** — zgodnie z instrukcją usera (NIE push,
-  NIE PR, NIE merge w tej sesji).
+Brak aktywnego zadania. Ostatni wątek (Profitability Workstream: 9 niezależnie
+przetestowanych hipotez poprawy zyskowności `mms4tk`) zakończony formalną
+decyzją usera — **nie kontynuować** bez jakościowo nowego źródła dowodów (patrz
+`task.md`, "🔒 Formalne domknięcie" dla precyzyjnej definicji tego progu).
 
 ## Progress
-- [x] Krok 1: weryfikacja realnej stawki maker/taker OKX — **DONE**. Brak
-      schedule'u w repo (`okx-api-guide.md` × 2 lokalizacje, zero trafień na
-      "fee/maker/taker"); użyto publicznego standardowego OKX VIP0 schedule
-      (maker 0.02%/taker 0.05% per noga, zweryfikowane WebSearch+WebFetch,
-      zgodne co do promila z istniejącą stałą `TAKER_FEE_PCT=0.0005`).
-      `MAKER_ROUND_TRIP_FEE_PCT = 0.00040012`, przeliczone tą samą kalibracją
-      proporcjonalną co A1 (`ROUND_TRIP_FEE_PCT/2×TAKER_FEE_PCT` ratio).
-      Pełne wyprowadzenie: `task.md`/Faza 5/"Krok 1 — wynik".
-- [x] Krok 2: opcjonalny `round_trip_fee_pct_override` param w
-      `backtest_engine.py::run_backtest()` (domyślnie `None`, zero zmiany
-      zachowania) + 5 testów jednostkowych. Pełny `pytest -q -m "not slow"`:
-      409 passed, 4 deselected (było 404, +5 nowych, zero regresji).
-- [x] Krok 3: przeliczenie 24-mies. (5+5 proxy USDT + kontrola USDC 3+3),
-      tabela per okno, baseline taker vs maker. Wynik: **16/16 okien
-      MAKER>TAKER** (proxy p=0,0020, kontrola p=0,0312), ale pooled proxy
-      pozostaje głęboko ujemny nawet pod MAKER (−168,42%/10 okien) — redukuje
-      stratę, nie odwraca jej. Pełna tabela: `task.md`/Faza 5/"Krok 3 — wynik".
-- [x] Krok 4: formalne domknięcie Profitability Workstream w `task.md`
-      (tabela 9 hipotez [8 wcześniejszych + maker-first — zastrzeżenie o
-      liczeniu "9" w sekcji zamknięcia], 3 decyzje architektoniczne z
-      poprawionym opisem SCOUT_MODE, jawne stwierdzenie formalnego
-      zamknięcia workstreamu).
-- [x] Pełny `pytest -q -m "not slow"`: **409 passed, 4 deselected**. Handshake
-      wygenerowany (`--conversation-id faza5-maker-first-execution`,
-      `--status SUCCESS`).
+- [x] Faza 4: Protected Stage-1 (NIEJEDNOZNACZNY) + D1 Range Target
+      (ODRZUCONY) — PR #46, zmergowane
+- [x] Faza 5: maker-first execution (16/16 okien poprawia, NIE odwraca na
+      zysk) — PR #49, zmergowane
+- [x] Formalne domknięcie workstreamu w `task.md`, z tabelą 9 hipotez i
+      poprawionym opisem SCOUT_MODE (rozmiar pozycji, nie dźwignia 0,1x)
+- [x] Wszystko zweryfikowane niezależnie przez orchestrating session (diff,
+      pytest, przeliczenie wybranych okien od zera) przed każdym mergem
+- [x] Worktree/branche posprzątane, `main` zsynchronizowany (`ab584f7`)
 
 ## State Snapshot
-### Files Modified (na branchu `chore/faza5-maker-first-execution`)
-- `task.md`: Krok 1 wynik dopisany (ta sesja)
-- `HANDOFF.md`: ten plik (ta sesja)
+### Files Modified (skumulowane od początku workstreamu, wszystko na `main`)
+- `src/mms4tk/backtest_engine.py`: opcjonalne parametry pomiarowe (bramka H4,
+  D1 exhaustion, Protected Stage-1, D1 Range Target, maker-fee override) —
+  wszystkie domyślnie wyłączone, zero zmiany zachowania produkcyjnego
+- `daemon.py`/`state_manager.py`/`analytics.py`/`api.py`: **jedyna** realna
+  zmiana produkcyjna to bramka H4 (`htf_directional_gate_enabled`, default
+  OFF) + fix fail-safe fetch_candles (Faza 3.2-followup) — oba zmergowane,
+  oba nieaktywne na produkcji
+- `task.md`, `HANDOFF.md`: pełna historia decyzji
 
 ### Pending Actions
-1. Krok 2 (parametr + testy) → commit.
-2. Krok 3 (przeliczenie 24-mies., nowy skrypt w `scripts/`) → commit z pełną
-   tabelą w `task.md`.
-3. Krok 4 (zamknięcie workstream) → commit.
-4. Testy + handshake → commit końcowy.
+Brak. Jeśli user zdecyduje wznowić pracę nad zyskownością w przyszłości — próg
+do spełnienia PRZED nowym filtrem sygnałowym: jakościowo inne źródło dowodów
+(nowy niezależny zbiór danych, realne dane egzekucji produkcyjnej długiego
+okresu, albo zmiana reżimu rynkowego widoczna na żywo) — nie kolejny grid
+search na tych samych 24 miesiącach.
 
 ### Blockers
 - Brak.
 
 ## Recovery Instructions
-Jeśli czytasz to po przerwaniu: sprawdź `git log --oneline` na tym branchu i
-checklistę w `task.md`/Faza 5/"Status wykonania" — odhaczone pozycje są
-zrobione i zacommitowane, kontynuuj od pierwszej nieodhaczonej.
+To zadanie jest w pełni zakończone. Jeśli trafiłeś tu po przerwaniu jakiejś
+INNEJ, późniejszej pracy — sprawdź czy `task.md` ma sekcję nowszą niż "🔒
+Formalne domknięcie Profitability Workstream"; jeśli tak, ten plik powinien
+był zostać nadpisany na początku tamtej pracy.
