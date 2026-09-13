@@ -19,10 +19,8 @@ obcy system) który duplikuje i częściowo tłumi wewnętrzną bramkę H4 z Faz
 3.2. Pełne ustalenia + propozycje (C.1.1–C.3.3) + gotowy prompt operacyjny
 dla Hermesa: `task.md`/Faza 6.
 
-**Blokujące pytanie, jeszcze nierozstrzygnięte**: user ma zdecydować zakres —
-(a) pełna implementacja poprawek kodu, czy (b) tylko wdrożenie promptu
-Hermesa teraz, kod później. **Nie zaczynaj Kroku 2 (implementacja) bez tej
-decyzji.**
+**Decyzja Kroku 0 podjęta (2026-09-13)**: user powiedział "zacznij prace w
+realizacji planu" — interpretowane jako zakres (a), pełna implementacja.
 
 ## Progress
 - [x] Audyt kanban — wyjaśniony, polityka niezmieniona (user potwierdził)
@@ -31,32 +29,55 @@ decyzji.**
       (istnienie i treść `mms4tk_h4_analysis.py`; brak `allow_mock_fallback=False`
       w `api.py:722`)
 - [x] Audyt 12 narzędzi Hermesa — kompletny
-- [x] Prompt operacyjny dla Hermesa — gotowy, zero zależności kodowych
+- [x] Prompt operacyjny dla Hermesa — gotowy, PEŁNY TEKST persystowany w
+      `task.md`/Faza 6 (nie tylko referencja)
 - [x] Plan implementacji (C.1.1–C.3.3) spisany w `task.md`/Faza 6
-- [ ] **Krok 0**: decyzja usera o zakresie (a)/(b) — NIE PODJĘTA
-- [ ] Krok 1: wdrożenie promptu Hermesa (poza repo, można zrobić niezależnie od Kroku 0)
-- [ ] Krok 2: implementacja C.1.1–C.3.3 (jeśli wybrano zakres (a))
-- [ ] Krok 3: ustalenie jak `mms4tk_h4_analysis.py` trafia na kontener `hermes-agent` (deploy path nieznany, do zbadania PRZED wdrożeniem C.1.1)
+- [x] **Krok 0**: user zdecydował — zakres (a), implementować
+- [x] **Krok 3 ZBADANE**: `mms4tk_h4_analysis.py` istnieje jako DWIE
+      rozjechane, nie-zsynchronizowane z repo kopie na hoście VPS
+      (`/opt/data/scripts/` vs `/opt/data/home/.hermes/scripts/` wewnątrz
+      kontenera `hermes-agent`) — pełne szczegóły w `task.md`/Faza 6/Krok 3.
+      Deploy zmiany C.1.1 wymaga RĘCZNEGO skopiowania na VPS (`docker cp`)
+      + empirycznej weryfikacji która kopia faktycznie się wykonuje —
+      **świadomie zarezerwowane dla orchestrating session, nie dla
+      subagenta buildera** (zbyt ryzykowne dla już żywej automatyzacji).
+- [ ] **Krok 2 W TOKU**: dispatch subagenta (Sonnet, worktree, branch
+      sugerowany `chore/faza6-hermes-hardening`, agentId wewnętrzny
+      `a9a98c864d8195ed4`) implementującego C.1.2→C.1.1→C.1.3→C.2→C.3.1→
+      C.3.2→C.3.3 w tej kolejności (C.1.2 musi być pierwsze — zależność).
+      Instrukcja jawnie zakazuje subagentowi dotykać deployu na VPS —
+      to repo-side kod + testy tylko.
+- [ ] Krok 1: wdrożenie promptu Hermesa (poza repo — user/agent musi wkleić
+      tekst z `task.md`/Faza 6 do konfiguracji Hermes Agenta) — wciąż
+      nie zrobione, niezależne od Kroku 2, można w każdej chwili
+- [ ] Po ukończeniu Kroku 2 przez subagenta: weryfikacja niezależna
+      (diff + pytest) przez orchestrating session, push+PR+merge, deploy
+      `antigravity_core` (maintenance lock) + ręczny deploy skryptu crona
+      na `hermes-agent` (Krok 3, empiryczna weryfikacja)
 
 ## State Snapshot
 ### Files Modified
-- `task.md`: nowa sekcja "Faza 6" (pełny audyt + plan)
+- `task.md`: sekcja "Faza 6" (pełny audyt + plan + pełny tekst promptu +
+  ustalenia deploy path)
 - `HANDOFF.md`: ten plik
-- **Zero zmian w `src/`** — to wyłącznie planowanie, żadna implementacja się jeszcze nie zaczęła
+- **Zero zmian w `src/` na `main`** — implementacja w toku na osobnym,
+  niezmergowanym branchu subagenta
 
 ### Pending Actions
-1. Zapytać usera (jeśli sesja wznawia się bez niego pod ręką, zostaw to jako
-   pierwsze pytanie) o zakres (a)/(b) z sekcji "Otwarta decyzja" w `task.md`/Faza 6.
-2. Jeśli (a): dispatch subagenta z pełną specyfikacją C.1.1–C.3.3 z `task.md`,
-   w kolejności: C.1.2 PRZED C.1.1 (zależność), checkpointować po każdym
-   podpunkcie (commit + wpis do `task.md`), tak jak w Fazie 4/5.
-3. Przed jakąkolwiek zmianą w `scripts/hermes/mms4tk_h4_analysis.py` — ustalić
-   Krok 3 (jak ten skrypt faktycznie trafia na `hermes-agent`), inaczej zmiana
-   w repo nie dotrze do produkcji.
-4. Krok 1 (prompt) można zrobić w każdej chwili, niezależnie — nie czeka na nic.
+1. Poczekać na ukończenie subagenta `a9a98c864d8195ed4` (checkpointuje
+   commit po każdym C.x.x do swojego brancha + wpisy do `task.md` w swoim
+   worktree — scal ustalenia przy weryfikacji, jak w Fazie 4/5).
+2. Zweryfikować niezależnie (diff + pytest + spot-check) przed push/PR/merge.
+3. Po merge: (a) deploy `antigravity_core` z maintenance lockiem, (b) RĘCZNY
+   deploy zaktualizowanego `mms4tk_h4_analysis.py` na `hermes-agent` — patrz
+   `task.md`/Faza 6/Krok 3 dla dokładnej ścieżki i planu empirycznej
+   weryfikacji (dodać unikalny znacznik, sprawdzić który plik faktycznie
+   trafia do `strategy_profile.reason` po najbliższym cyklu crona).
+4. Krok 1 (prompt Hermesa) — zrobić niezależnie, w każdej chwili, nie czeka
+   na nic z powyższych.
 
 ### Blockers
-- Decyzja usera o zakresie (Krok 0) — bez niej nie zaczynać Kroku 2.
+- Brak (decyzja Kroku 0 podjęta, Krok 3 zbadany, implementacja w toku).
 
 ## Recovery Instructions
 1. Przeczytaj `task.md`, sekcja "Faza 6" w całości — tam jest kompletny audyt
