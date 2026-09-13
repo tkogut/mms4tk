@@ -1821,6 +1821,14 @@ class MMS4Daemon:
                     f"{' (od ceny bazy, bez zmian)' if 'BASE' not in signal.signal_type else ''}\n"
                     f"- Stan strategii: `{sym_state.value}`"
                 )
+                # Faza 3.2 gate visibility (audit fix 2026-09-13): note in the
+                # notification itself when this entry was taken while the H4
+                # directional gate or a manual Hermes override was actively
+                # restricting direction. "BOTH" (the normal, unrestricted case)
+                # adds nothing here — zero extra noise on the common path.
+                effective_bias = self.state_manager.get_effective_directional_bias(target_symbol)
+                if effective_bias != "BOTH":
+                    body += f"\n🔒 Otwarto pod aktywną bramką kierunkową: {effective_bias}"
                 wh_client.emit_event(HermesWebhookEvent(
                     event_type="POSITION_OPENED",
                     title=title,
