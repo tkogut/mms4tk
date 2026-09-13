@@ -1,56 +1,67 @@
 # HANDOFF — Agent State Transfer Document
 
 > Jeśli czytasz to jako inny agent (np. Antigravity/Coordinator): Profitability
-> Workstream jest **formalnie zamknięty** (2026-09-12/13). Pełny log: `task.md`,
-> sekcje "Faza 4" i "Faza 5" (na końcu pliku), zwłaszcza "🔒 Formalne domknięcie
-> Profitability Workstream".
+> Workstream jest zamknięty. **Aktywny wątek to Faza 6** (Hermes integration
+> hardening) — pełny plan w `task.md`, sekcja "🔹 Faza 6 (2026-09-13) — Hermes
+> integration hardening: PLAN, nie zaimplementowane" (na końcu pliku).
 
 ## Session Info
-- **Conversation ID**: `profitability-workstream-closure`
+- **Conversation ID**: `hermes-integration-hardening`
 - **Role**: Coordinator
-- **Timestamp**: 2026-09-13T08:25:00Z
-- **Status**: `completed` — cały wątek pracy zamknięty, zweryfikowany niezależnie, zmergowany do `main`
+- **Timestamp**: 2026-09-13T11:00:00Z
+- **Status**: `in-progress` — audyt kompletny, **plan spisany, implementacja NIE rozpoczęta**
 
 ## Current Task
-Brak aktywnego zadania. Ostatni wątek (Profitability Workstream: 9 niezależnie
-przetestowanych hipotez poprawy zyskowności `mms4tk`) zakończony formalną
-decyzją usera — **nie kontynuować** bez jakościowo nowego źródła dowodów (patrz
-`task.md`, "🔒 Formalne domknięcie" dla precyzyjnej definicji tego progu).
+Audyt integracji Hermes Agent ↔ mms4tk (zlecony przez usera po zamknięciu
+Profitability Workstream) znalazł realny, miesiąc działający mechanizm
+("H4 Cron", `scripts/hermes/mms4tk_h4_analysis.py` — NASZ własny skrypt, nie
+obcy system) który duplikuje i częściowo tłumi wewnętrzną bramkę H4 z Fazy
+3.2. Pełne ustalenia + propozycje (C.1.1–C.3.3) + gotowy prompt operacyjny
+dla Hermesa: `task.md`/Faza 6.
+
+**Blokujące pytanie, jeszcze nierozstrzygnięte**: user ma zdecydować zakres —
+(a) pełna implementacja poprawek kodu, czy (b) tylko wdrożenie promptu
+Hermesa teraz, kod później. **Nie zaczynaj Kroku 2 (implementacja) bez tej
+decyzji.**
 
 ## Progress
-- [x] Faza 4: Protected Stage-1 (NIEJEDNOZNACZNY) + D1 Range Target
-      (ODRZUCONY) — PR #46, zmergowane
-- [x] Faza 5: maker-first execution (16/16 okien poprawia, NIE odwraca na
-      zysk) — PR #49, zmergowane
-- [x] Formalne domknięcie workstreamu w `task.md`, z tabelą 9 hipotez i
-      poprawionym opisem SCOUT_MODE (rozmiar pozycji, nie dźwignia 0,1x)
-- [x] Wszystko zweryfikowane niezależnie przez orchestrating session (diff,
-      pytest, przeliczenie wybranych okien od zera) przed każdym mergem
-- [x] Worktree/branche posprzątane, `main` zsynchronizowany (`ab584f7`)
+- [x] Audyt kanban — wyjaśniony, polityka niezmieniona (user potwierdził)
+- [x] Audyt H4 Cron vs wewnętrzna bramka Fazy 3.2 — kompletny, 2 kluczowe
+      ustalenia zweryfikowane niezależnie przez orchestrating session
+      (istnienie i treść `mms4tk_h4_analysis.py`; brak `allow_mock_fallback=False`
+      w `api.py:722`)
+- [x] Audyt 12 narzędzi Hermesa — kompletny
+- [x] Prompt operacyjny dla Hermesa — gotowy, zero zależności kodowych
+- [x] Plan implementacji (C.1.1–C.3.3) spisany w `task.md`/Faza 6
+- [ ] **Krok 0**: decyzja usera o zakresie (a)/(b) — NIE PODJĘTA
+- [ ] Krok 1: wdrożenie promptu Hermesa (poza repo, można zrobić niezależnie od Kroku 0)
+- [ ] Krok 2: implementacja C.1.1–C.3.3 (jeśli wybrano zakres (a))
+- [ ] Krok 3: ustalenie jak `mms4tk_h4_analysis.py` trafia na kontener `hermes-agent` (deploy path nieznany, do zbadania PRZED wdrożeniem C.1.1)
 
 ## State Snapshot
-### Files Modified (skumulowane od początku workstreamu, wszystko na `main`)
-- `src/mms4tk/backtest_engine.py`: opcjonalne parametry pomiarowe (bramka H4,
-  D1 exhaustion, Protected Stage-1, D1 Range Target, maker-fee override) —
-  wszystkie domyślnie wyłączone, zero zmiany zachowania produkcyjnego
-- `daemon.py`/`state_manager.py`/`analytics.py`/`api.py`: **jedyna** realna
-  zmiana produkcyjna to bramka H4 (`htf_directional_gate_enabled`, default
-  OFF) + fix fail-safe fetch_candles (Faza 3.2-followup) — oba zmergowane,
-  oba nieaktywne na produkcji
-- `task.md`, `HANDOFF.md`: pełna historia decyzji
+### Files Modified
+- `task.md`: nowa sekcja "Faza 6" (pełny audyt + plan)
+- `HANDOFF.md`: ten plik
+- **Zero zmian w `src/`** — to wyłącznie planowanie, żadna implementacja się jeszcze nie zaczęła
 
 ### Pending Actions
-Brak. Jeśli user zdecyduje wznowić pracę nad zyskownością w przyszłości — próg
-do spełnienia PRZED nowym filtrem sygnałowym: jakościowo inne źródło dowodów
-(nowy niezależny zbiór danych, realne dane egzekucji produkcyjnej długiego
-okresu, albo zmiana reżimu rynkowego widoczna na żywo) — nie kolejny grid
-search na tych samych 24 miesiącach.
+1. Zapytać usera (jeśli sesja wznawia się bez niego pod ręką, zostaw to jako
+   pierwsze pytanie) o zakres (a)/(b) z sekcji "Otwarta decyzja" w `task.md`/Faza 6.
+2. Jeśli (a): dispatch subagenta z pełną specyfikacją C.1.1–C.3.3 z `task.md`,
+   w kolejności: C.1.2 PRZED C.1.1 (zależność), checkpointować po każdym
+   podpunkcie (commit + wpis do `task.md`), tak jak w Fazie 4/5.
+3. Przed jakąkolwiek zmianą w `scripts/hermes/mms4tk_h4_analysis.py` — ustalić
+   Krok 3 (jak ten skrypt faktycznie trafia na `hermes-agent`), inaczej zmiana
+   w repo nie dotrze do produkcji.
+4. Krok 1 (prompt) można zrobić w każdej chwili, niezależnie — nie czeka na nic.
 
 ### Blockers
-- Brak.
+- Decyzja usera o zakresie (Krok 0) — bez niej nie zaczynać Kroku 2.
 
 ## Recovery Instructions
-To zadanie jest w pełni zakończone. Jeśli trafiłeś tu po przerwaniu jakiejś
-INNEJ, późniejszej pracy — sprawdź czy `task.md` ma sekcję nowszą niż "🔒
-Formalne domknięcie Profitability Workstream"; jeśli tak, ten plik powinien
-był zostać nadpisany na początku tamtej pracy.
+1. Przeczytaj `task.md`, sekcja "Faza 6" w całości — tam jest kompletny audyt
+   i plan, nie tylko skrót.
+2. Sprawdź czy user w międzyczasie odpowiedział na pytanie o zakres (a)/(b) —
+   jeśli to widoczne w historii rozmowy, zacznij od tego. Jeśli nie — zapytaj.
+3. Zero kodu jeszcze nie zmieniono — nie ma czego "kontynuować" w git, to
+   czysty start od specyfikacji w `task.md`.
