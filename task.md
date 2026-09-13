@@ -3178,7 +3178,15 @@ implementacji punktu 2 poniżej.
 - [ ] **Krok 2** (jeśli wybrano zakres (a)): dispatch subagenta (worktree,
       SDLC, checkpointowanie po każdym C.1.x/C.3.x jak w Fazie 4/5) do
       implementacji:
-  - [ ] C.1.2 (partial update API) — **musi być pierwsze**, C.1.1 zależy od tego
+  - [x] C.1.2 (partial update API) — **musi być pierwsze**, C.1.1 zależy od tego.
+        DONE (branch `chore/faza6-hermes-hardening`, commit c75a662): nowy model
+        `StrategyProfileUpdate` (wszystkie pola `Optional[...] = None`),
+        `POST /api/v1/strategy/profile` teraz merguje tylko pola różne od `None`
+        na istniejący `state_manager.strategy_profile`. Pełny payload (jak dziś
+        wysyła `mms4tk_h4_analysis.py`/`hitl_resolve`) nadal daje identyczny efekt
+        (pełne nadpisanie) — regresja pokryta testem. Testy: partial update nie
+        rusza pozostałych pól + regresja pełnego payloadu. Full suite green
+        (411 passed, 4 deselected) przed commitem.
   - [ ] C.1.1 (usunięcie directional_bias z crona)
   - [ ] C.1.3 (fail-safe na `/analytics/higher_tf`)
   - [ ] C.2 (usunięcie `emergency_reverse` ze schematów)
