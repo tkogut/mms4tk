@@ -114,6 +114,90 @@ app = FastAPI(
 )
 
 
+# Faza 6 C.3.1 (2026-09-13): (method, path) -> the Hermes tool name each endpoint
+# backs (see hermes_tools.py's 11 schemas, plus emergency_reverse which stays
+# fail-closed/501 but is no longer offered to the LLM — C.2). Kept as an explicit
+# allowlist (not "log every /api/v1/* call") so this widened audit trail stays
+# scoped to exactly what task.md's C.3.1 asked for: the endpoints Hermes-facing
+# tools actually call, not the whole API surface (dashboard/settings/etc. traffic
+# already has its own uvicorn access log).
+HERMES_TOOL_LOG_PATHS: Dict[tuple, str] = {
+    ("GET", "/api/v1/symbols"): "get_symbols_status",
+    ("GET", "/api/v1/state"): "get_state",
+    ("GET", "/api/v1/balance"): "get_balance",
+    ("GET", "/api/v1/stats/pnl"): "get_pnl",
+    ("GET", "/api/v1/stats"): "get_pnl",
+    ("POST", "/api/v1/analytics/calculate"): "calculate_analytics",
+    ("POST", "/api/v1/emergency/killall"): "emergency_killall",
+    ("POST", "/api/v1/emergency/reverse"): "emergency_reverse",
+    ("POST", "/api/v1/trade/high_risk_add"): "high_risk_add",
+    ("GET", "/api/v1/analytics/higher_tf"): "mms4_get_higher_tf",
+    ("POST", "/api/v1/strategy/profile"): "mms4_set_strategy_profile",
+    ("GET", "/api/v1/hermes/events"): "mms4_get_pending_events",
+    ("POST", "/api/v1/hermes/hitl_resolve"): "mms4_hitl_resolve",
+}
+
+
+@app.middleware("http")
+async def hermes_tool_invocation_logger(request: Request, call_next):
+    """Faza 6 C.3.1: persist every call to a Hermes-tool-facing endpoint into
+    `emergency_action_log` (scope widened from the 3 emergency endpoints to
+    all 12 tools; table name kept as-is — renaming would be invasive for
+    existing dependents). Records `endpoint`, `outcome` (success/error/status
+    code), `client_ip`, `request_params` (query + body, NEVER headers — the
+    only secret in play, X-MMS4-API-KEY, always travels as a header and is
+    therefore never captured here), `client_label` (the caller-supplied
+    `X-MMS4-CLIENT` header, e.g. "hermes-agent"/"h4-cron"/"ui-dashboard"/
+    "event-dispatcher", or None when absent), and `created_at`.
+
+    Reads the request body (needed for POST endpoints' `request_params`) and
+    explicitly replays it via a replacement `_receive` — FastAPI/Starlette
+    caches nothing across a fresh `Request` object, so without this replay
+    the downstream endpoint's own JSON body parsing would hang/fail on an
+    already-drained stream.
+    """
+    tool_name = HERMES_TOOL_LOG_PATHS.get((request.method, request.url.path))
+    if tool_name is None:
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    client_label = request.headers.get("X-MMS4-CLIENT") or None
+    query_params = dict(request.query_params)
+
+    body_bytes = b""
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body_bytes = await request.body()
+        except Exception:
+            body_bytes = b""
+
+        async def _replay_receive(_b: bytes = body_bytes) -> Dict[str, Any]:
+            return {"type": "http.request", "body": _b, "more_body": False}
+
+        request._receive = _replay_receive  # noqa: SLF001 -- documented Starlette replay pattern
+
+    body_str = body_bytes.decode("utf-8", errors="replace") if body_bytes else ""
+    request_params = json.dumps({"query": query_params, "body": body_str[:2000]})
+
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        outcome = "success" if status_code < 400 else f"error_{status_code}"
+        try:
+            logger_db.log_tool_invocation(
+                endpoint=request.url.path,
+                outcome=outcome,
+                client_ip=client_ip,
+                request_params=request_params,
+                client_label=client_label,
+            )
+        except Exception as log_err:
+            logger.error(f"Failed to persist Hermes tool invocation log for {tool_name}: {log_err}")
+
+
 class StateResponse(BaseModel):
     state: str
     leverage: float

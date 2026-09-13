@@ -263,12 +263,33 @@ class LoggerDB:
                     created_at TEXT NOT NULL
                 )
             """)
+            # Faza 6 C.3.1 (2026-09-13): widen this log's SCOPE (not its table name —
+            # renaming would be invasive for existing dependents/dashboards) from the 3
+            # fail-closed emergency endpoints to all 12 Hermes-tool-facing endpoints, via
+            # the `hermes_tool_invocation_logger` middleware in api.py. `client_label`
+            # carries the caller-supplied `X-MMS4-CLIENT` header (e.g. "hermes-agent",
+            # "h4-cron", "ui-dashboard", "event-dispatcher") so a restart-surviving,
+            # persistent log can finally distinguish WHO called a tool, not just that a
+            # call happened — same ALTER TABLE pattern as
+            # position_snapshots.base_entry_price above.
+            cursor.execute("PRAGMA table_info(emergency_action_log)")
+            eal_columns = {row[1] for row in cursor.fetchall()}
+            if "client_label" not in eal_columns:
+                cursor.execute("ALTER TABLE emergency_action_log ADD COLUMN client_label TEXT")
             conn.commit()
 
-    # ── Audit P9.3 (2026-09-08): fail-closed emergency endpoint attempt log ──
+    # ── Audit P9.3 (2026-09-08): fail-closed emergency endpoint attempt log.
+    # Faza 6 C.3.1 (2026-09-13): now a thin backward-compatible wrapper around the
+    # general-purpose log_tool_invocation below — same table, same columns, plus the
+    # new optional client_label. ──
 
     def log_emergency_attempt(
-        self, endpoint: str, outcome: str, client_ip: str = "", request_params: str = ""
+        self,
+        endpoint: str,
+        outcome: str,
+        client_ip: str = "",
+        request_params: str = "",
+        client_label: Optional[str] = None,
     ) -> None:
         """Persist a call attempt against a fail-closed emergency endpoint (e.g.
         /api/v1/emergency/reverse while unimplemented). This is a security/audit
@@ -276,18 +297,61 @@ class LoggerDB:
         believes a live risk event is happening right now, so every attempt is kept,
         never rotated out by this class. `request_params` MUST already be scrubbed of
         secrets by the caller (never pass auth headers here — see api.py)."""
+        self.log_tool_invocation(
+            endpoint=endpoint,
+            outcome=outcome,
+            client_ip=client_ip,
+            request_params=request_params,
+            client_label=client_label,
+        )
+
+    def log_tool_invocation(
+        self,
+        endpoint: str,
+        outcome: str,
+        client_ip: str = "",
+        request_params: str = "",
+        client_label: Optional[str] = None,
+    ) -> None:
+        """Faza 6 C.3.1: general-purpose audit-trail write for ANY of the 12
+        Hermes-tool-facing endpoints (not just the 3 emergency ones), used by
+        api.py's `hermes_tool_invocation_logger` middleware. Same
+        `emergency_action_log` table/columns `log_emergency_attempt` already
+        used, plus `client_label` (the caller-supplied `X-MMS4-CLIENT` header,
+        or None/NULL when absent). `request_params` MUST already be scrubbed
+        of secrets by the caller — never pass the X-MMS4-API-KEY header value
+        here."""
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO emergency_action_log
-                    (endpoint, outcome, client_ip, request_params, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (endpoint, outcome, client_ip, request_params, created_at, client_label)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (str(endpoint), str(outcome), str(client_ip), str(request_params), now_str),
+                (
+                    str(endpoint),
+                    str(outcome),
+                    str(client_ip),
+                    str(request_params),
+                    now_str,
+                    str(client_label) if client_label is not None else None,
+                ),
             )
             conn.commit()
+
+    def get_recent_tool_invocations(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Faza 6 C.3.1: read back the most recent `emergency_action_log` rows
+        (now covering all 12 Hermes-tool-facing endpoints, not just the 3
+        emergency ones). Used by tests and could back a future diagnostics
+        endpoint."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM emergency_action_log ORDER BY id DESC LIMIT ?", (limit,)
+            )
+            return [dict(r) for r in cursor.fetchall()]
 
     # ── PLAN-010 Phase 2: trend-filter recalibration job tracking ──
 
