@@ -744,14 +744,51 @@ async def get_strategy_profile() -> StrategyProfile:
     return state_manager.strategy_profile
 
 
+class StrategyProfileUpdate(BaseModel):
+    """Faza 6 C.1.2: partial-update counterpart to StrategyProfile.
+
+    `POST /api/v1/strategy/profile` used to require the FULL `StrategyProfile`
+    model — every field Pydantic didn't receive was silently filled with its
+    default, so a caller that only meant to change `risk_profile` (e.g. the H4
+    cron, once C.1.1 stops it from also sending `directional_bias`) would
+    reset `directional_bias` back to "BOTH" on every write. All 4 fields here
+    are Optional[...] = None so "field not sent" and "field explicitly unset"
+    are the same thing (None); `set_strategy_profile` below merges only the
+    fields that are NOT None onto the existing persisted profile. A request
+    that supplies every field still behaves exactly like the old full-replace
+    (every existing field gets overwritten with the request's value) — this
+    is a strict superset of the old behavior, not a change to it.
+    """
+    directional_bias: Optional[str] = Field(default=None, description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
+    risk_profile: Optional[str] = Field(default=None, description="CONSERVATIVE | MODERATE | AGGRESSIVE")
+    scout_override: Optional[bool] = Field(default=None, description="True allows early SCOUT_MODE relaxation")
+    reason: Optional[str] = Field(default=None)
+
+
 @app.post("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
-async def set_strategy_profile(profile: StrategyProfile) -> StrategyProfile:
+async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfile:
     """
-    Update active strategy profile configuration.
-    If scout_override is True, relaxes SCOUT_MODE to BASE_MODE immediately.
+    Partially update the active strategy profile configuration: only fields
+    present (non-None) in the request overwrite the persisted profile, every
+    other field is left exactly as it was. If the merged scout_override is
+    True, relaxes SCOUT_MODE to BASE_MODE immediately.
     Protected by X-MMS4-API-KEY header.
+
+    Faza 6 C.1.2: previously took the full `StrategyProfile` model, so any
+    write (even one meaning to change a single field) reset every unset field
+    to its Pydantic default — see `StrategyProfileUpdate`'s docstring. A
+    request that sets all 4 fields (every caller that predates this change,
+    e.g. `mms4tk_h4_analysis.py` and `hitl_resolve` below) still fully
+    replaces the profile, byte for byte the same as before.
     """
-    updated = state_manager.update_strategy_profile(profile)
+    current = state_manager.strategy_profile
+    merged = StrategyProfile(
+        directional_bias=profile.directional_bias if profile.directional_bias is not None else current.directional_bias,
+        risk_profile=profile.risk_profile if profile.risk_profile is not None else current.risk_profile,
+        scout_override=profile.scout_override if profile.scout_override is not None else current.scout_override,
+        reason=profile.reason if profile.reason is not None else current.reason,
+    )
+    updated = state_manager.update_strategy_profile(merged)
     if updated.scout_override:
         state_manager.relax_scout_mode()
     return updated

@@ -131,6 +131,47 @@ def test_strategy_profile_api(client):
     assert get_resp.json()["directional_bias"] == "LONG_ONLY"
 
 
+def test_strategy_profile_partial_update_does_not_clobber_other_fields(client):
+    """Faza 6 C.1.2: POST /api/v1/strategy/profile with only ONE field set must
+    leave every other field of the existing persisted profile untouched --
+    the bug this fixes: `directional_bias` used to reset to "BOTH" (Pydantic
+    default) on ANY write that didn't explicitly repeat it."""
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
+    os.environ["MMS4_API_KEY"] = api_key
+
+    # Seed a known, non-default baseline profile.
+    state_manager.update_strategy_profile(
+        StrategyProfile(
+            directional_bias="LONG_ONLY",
+            risk_profile="MODERATE",
+            scout_override=False,
+            reason="Seeded baseline",
+        )
+    )
+
+    # Send ONLY risk_profile.
+    resp = client.post(
+        "/api/v1/strategy/profile",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"risk_profile": "AGGRESSIVE"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["risk_profile"] == "AGGRESSIVE"
+    # directional_bias, scout_override, reason must survive untouched.
+    assert data["directional_bias"] == "LONG_ONLY"
+    assert data["scout_override"] is False
+    assert data["reason"] == "Seeded baseline"
+
+    # GET confirms persistence of the merge, not just the response body.
+    get_resp = client.get("/api/v1/strategy/profile")
+    assert get_resp.json()["directional_bias"] == "LONG_ONLY"
+    assert get_resp.json()["risk_profile"] == "AGGRESSIVE"
+
+    # Reset for other tests.
+    state_manager.update_strategy_profile(StrategyProfile())
+
+
 def test_directional_bias_signal_filtering():
     """Test filtering of trading signals by directional_bias (LONG_ONLY, SHORT_ONLY, FLAT)."""
     engine = MMS4SignalEngine()
