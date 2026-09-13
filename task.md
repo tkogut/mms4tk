@@ -3015,3 +3015,185 @@ wyświetlanie:
    momencie; brak zmian gdy "BOTH".
 
 Zero zmian w logice tradingu — wyłącznie observability.
+
+---
+
+## 🔹 Faza 6 (2026-09-13) — Hermes integration hardening: PLAN, nie zaimplementowane
+
+> **CHECKPOINT — PLANNED, nie rozpoczęte.** `HANDOFF.md` wskazuje tu jako
+> aktualny stan. Jeśli czytasz to jako agent kontynuujący pracę: nic z tej
+> sekcji nie zostało jeszcze zaimplementowane, to jest kompletny plan do
+> wykonania, nie log zrobionej pracy.
+
+### Kontekst i zlecenie
+
+Po formalnym zamknięciu Profitability Workstream (Faza 5) user poprosił o
+kompleksowy audyt integracji Hermes Agent ↔ `antigravity_core` (mms4tk) —
+zaczęło się od pytania "dlaczego nigdy nie pojawiła się karta na kanban".
+Audyt (Opus, `/grill-me` + pełne zlecenie z SSH-dostępem do produkcji)
+znalazł coś znacznie ważniejszego niż samo pytanie o kanban: realny,
+nigdy niemodelowany w żadnym backteście tej sesji mechanizm sterujący
+`directional_bias` na produkcji od miesiąca.
+
+### Ustalenia audytu (zweryfikowane częściowo niezależnie przez orchestrating session — patrz adnotacje "✅ zweryfikowane")
+
+**A) Kanban — działa poprawnie, polityka niezmieniona (temat zamknięty, user potwierdził).**
+Tylko `SCOUT_MODE_ACTIVATED` (niejednoznaczna klasyfikacja H4) tworzy prawdziwą
+kartę; reszta zdarzeń (`POSITION_OPENED`, `MULTI_SYMBOL_DIGEST`,
+`STALE_POSITION_*`, `TAKE_PROFIT_OPPOSITE_BAND`, `MIDLINE_PARTIAL_TP`) trafia
+świadomie tylko na Telegram (`kanban_task_id='telegram_only'`). Historyczna
+korekta: do 2026-08-15T16:24 część zdarzeń DOSTAWAŁA prawdziwe karty (87×
+`MULTI_SYMBOL_DIGEST`, 41× `POSITION_OPENED`) — polityka zmieniona po ~36h
+"spamu" kartami, nie od początku. Zero błędów dostarczania w całej historii
+(0/904 `webhook_events`).
+
+**B) "H4 Cron" — to NASZ WŁASNY skrypt w tym repo, nie obcy system.**
+Plik: `scripts/hermes/mms4tk_h4_analysis.py` (✅ zweryfikowane: istnieje,
+treść zgodna z opisem — `ABOVE→LONG_ONLY`, `BELOW→SHORT_ONLY`, else `BOTH`,
+identyczne z mapowaniem w `daemon.py:816`). Uruchamia się co 4h w kontenerze
+`hermes-agent` (osobnym od `antigravity_core`!), woła
+`GET /api/v1/analytics/higher_tf`, POSTuje PEŁNY obiekt profilu (nie
+częściowy) do `POST /api/v1/strategy/profile`.
+
+Dane produkcyjne (`strategy_profile`, 228 wierszy, 2026-08-10 → dziś):
+- 198 wpisów crona: `BOTH`=158, `LONG_ONLY`=33, `SHORT_ONLY`=7 →
+  **narzuca kierunek w 20,2% cykli**, sekwencje do 15 cykli/60h z rzędu
+- 0/198 rozjazdów między zapisanym `pos` a zastosowaną regułą — cron jest
+  wewnętrznie spójny, liczy DOKŁADNIE to samo co wewnętrzna bramka Fazy 3.2
+- Test na 270 wspólnych świecach H4 BTC/ETH (realne dane OKX): cron (liczony
+  tylko z BTC) narzuca globalnie kierunek na 48 świec; z tego **16 = 5,9%
+  wszystkich świec ETH to błędne ograniczenie** (własny odczyt ETH byłby
+  "BOTH", ale globalny cron z BTC narzuca inaczej). Zero inwersji (przeciwny
+  kierunek) w zaobserwowanej próbce.
+- Mechanizm priorytetu (`state_manager.py:267-285`, ✅ zweryfikowane wcześniej
+  w tej sesji): globalne, manualne pole (którym cron zapisuje) ZAWSZE wygrywa
+  nad per-symbol wewnętrzną bramką Fazy 3.2. Cron efektywnie **tłumi** bramkę
+  za każdym razem gdy ustawia coś innego niż "BOTH".
+- Trzy przerwy w działaniu crona >4,6h (do 16h) — w dwóch z nich bias był
+  zamrożony na non-BOTH przez cały czas przerwy, bez żadnego alertu. Nic się
+  nie zmaterializowało źle (sprawdzone), ale to było szczęście, nie projekt.
+
+**Rekomendacja audytu (nie zaimplementowana)**: KONSOLIDOWAĆ — nie przez
+wyłączenie wewnętrznej bramki Fazy 3.2 (ona jest lepsza: per-symbol, co 15s,
+per-symbol params, ma naprawiony fail-safe), tylko przez **odebranie cronowi
+kompetencji do ustawiania `directional_bias`**. Cron zostaje odpowiedzialny
+za `risk_profile` (D1 ATR — czego bramka nie robi), `scout_override` + HITL
+przy SCOUT_MODE, i Telegram digest — te funkcje nie mają wewnętrznego
+odpowiednika i mają sens.
+
+**Dodatkowe znalezisko, ✅ zweryfikowane bezpośrednio przez orchestrating session**:
+`GET /api/v1/analytics/higher_tf` (`api.py:722-735`) woła `executor.fetch_candles(...)`
+BEZ `allow_mock_fallback=False` — dokładnie ten sam bug co naprawiony w
+Fazie 3.2-followup (`daemon._refresh_htf_directional_gate`), ale pominięty
+przy TYM endpoincie, który karmi crona danymi. Przy awarii OKX cron dostaje
+świece mock i liczy `directional_bias`/`risk_profile` ze sfabrykowanych
+danych, bez żadnego sygnału błędu.
+
+**Dodatkowe znalezisko, ✅ zweryfikowane**: `POST /api/v1/strategy/profile`
+(`api.py:748-756`) przyjmuje PEŁNY model `StrategyProfile`, zero pól
+opcjonalnych/częściowych — każdy zapis (np. tylko `risk_profile`) nadpisuje
+też `directional_bias`. To jest warunek konieczny do naprawienia, żeby
+rozdzielenie kompetencji (cron→risk_profile, bramka→directional_bias) w ogóle
+miało sens.
+
+**C) Audyt 12 narzędzi Hermesa (`hermes_tools.py`)** — tabela dowodów użycia:
+
+| Narzędzie | Dowód |
+|---|---|
+| `mms4_set_strategy_profile` | 198 wpisów crona + 9 wpisów testowych (przypadkowe pisanie do produkcji przez suite testową — patrz niżej) + 2 HITL |
+| `mms4_get_pending_events` | ~1 wywołanie/min z IP `hermes-agent` (172.23.0.9) — to `mms4tk_event_dispatcher.py`, nie sam LLM |
+| `mms4_get_higher_tf` | wołane przez crona co 4h |
+| `mms4_hitl_resolve` | ~2 razy w całej historii, raz przez Web UI nie przez Hermesa |
+| `emergency_killall` | **0 wywołań** (`emergency_action_log` pusta) — nigdy nieprzetestowane end-to-end |
+| `emergency_reverse` | **martwe** — zawsze 501, już udokumentowane |
+| `high_risk_add` | **0 wywołań** |
+| `get_state`/`get_pnl`/`get_symbols_status` | wyłącznie ruch z ui_dashboard (172.21.0.2), zero dowodu użycia przez Hermesa |
+| `get_balance`/`calculate_analytics` | 0 wywołań w oknie obserwacji |
+
+**Luka obserwowalności**: rozróżnienie Hermes vs UI JEST możliwe (client_ip w
+logu uvicorn), ale log jest efemeryczny (znika po restarcie kontenera) i nie
+ma trwałego audytu. `emergency_action_log` (schema: `endpoint, outcome,
+client_ip, request_params, created_at`) już istnieje i ma właściwy kształt —
+tylko obejmuje 3 endpointy emergency, nie wszystkie 12 narzędzi.
+
+**Znalezisko uboczne (bezpieczeństwo)**: suita testowa 9× zapisała bezpośrednio
+do produkcyjnej `strategy_profile` (2026-08-12 i 08-19, wzorzec "Initial
+default profile" → "Test update via API" → "Hermes Scout Mode Relaxation" w
+odstępach ~150ms). Nic się nie zmaterializowało (sprawdzone: `state_history`
+pokazuje `BASE_MODE` w tych oknach), ale to zaostrza istniejące ostrzeżenie
+z `.agents/MEMORY.md`/pamięci sesji o niebezpieczeństwie odpalania testów
+przeciwko produkcyjnej bazie.
+
+### Propozycje do wykonania (C.1–C.3 z raportu audytu)
+
+- **C.1.1** — usunąć `directional_bias` z payloadu wysyłanego przez
+  `scripts/hermes/mms4tk_h4_analysis.py`. Cron dalej zarządza `risk_profile`/
+  `scout_override`/HITL/Telegram.
+- **C.1.2** — `POST /api/v1/strategy/profile` musi wspierać częściową
+  aktualizację (opcjonalne pola, `exclude_unset` albo osobny model
+  `StrategyProfileUpdate`), inaczej C.1.1 nie da się bezpiecznie wdrożyć bez
+  ryzyka że zapis `risk_profile` resetuje `directional_bias` do default.
+- **C.1.3** — `get_higher_tf_analytics()` w `api.py` musi wołać
+  `fetch_candles(..., allow_mock_fallback=False)` i zwracać jawny błąd/flagę
+  `data_stale` zamiast cicho liczyć z mock candles.
+- **C.2** — `emergency_reverse` usunąć z `hermes_tools.py::get_tool_schemas()`
+  (zostaje jako endpoint 501 dla kompatybilności, ale LLM nie powinien go
+  widzieć jako opcji). `emergency_killall` — rozważyć kwartalny drill
+  (osobna decyzja operacyjna, nie kod). `high_risk_add` — zostawić bez zmian.
+- **C.3.1** — rozszerzyć `emergency_action_log` (przemianować na
+  `tool_invocation_log`?) na wszystkie 12 narzędzi Hermesa + nagłówek
+  `X-MMS4-CLIENT` (wartości: `hermes-agent`/`h4-cron`/`ui-dashboard`/
+  `event-dispatcher`) ustawiany przez wołających, żeby log przeżywał restart
+  kontenera i pozwalał trwale odróżnić źródło wywołania.
+- **C.3.2** — nowy endpoint `GET /api/v1/diagnostics/bias-sync`: per symbol
+  `directional_bias`/`htf_bias`/`effective_directional_bias`/
+  `htf_directional_gate_enabled`/wiek ostatniego odświeżenia bramki/wiek
+  ostatniego zapisu `strategy_profile`+`reason`/flaga `suppressed: true` gdy
+  manual tłumi bramkę.
+- **C.3.3** — alert Telegram gdy `directional_bias != "BOTH"` trwa dłużej niż
+  N godzin bez nowego zapisu (zaobserwowano 16h cichego zamrożenia).
+
+**Gotowy prompt operacyjny dla Hermesa (Sekcja D audytu)** — pełny tekst,
+patrz transkrypt sesji z 2026-09-13 (agent `a7c32b67725715b00`) — **do
+wklejenia w konfigurację Hermesa niezależnie od reszty planu, zero zależności
+kodowych, można wdrożyć od razu, ma wbudowany fallback na wypadek gdyby
+C.1.1 jeszcze nie było wdrożone** (akapit w nawiasie w sekcji 4 promptu).
+
+### Otwarta decyzja (do rozstrzygnięcia zanim ktokolwiek zacznie implementować)
+
+User zapytany o zakres: **(a)** zaimplementować C.1.1–C.1.3 + C.3.1–C.3.3 jako
+jedno zlecenie z testami, **(b)** czy najpierw tylko wdrożyć prompt dla
+Hermesa (zero kodu) i zostawić resztę na później. **Odpowiedź jeszcze nie
+padła** — user poprosił najpierw o spisanie tego planu na wypadek przerwania
+sesji limitem. Następny agent/user musi to rozstrzygnąć PRZED rozpoczęciem
+implementacji punktu 2 poniżej.
+
+### Plan wykonania (checklist, nic z tego nie zaczęte)
+
+- [ ] **Krok 0 (blokujący)**: user/kolejny agent decyduje zakres (a)/(b) powyżej
+- [ ] **Krok 1 (zero zależności kodowych, można zrobić natychmiast niezależnie
+      od Kroku 0)**: wkleić gotowy prompt operacyjny Hermesa (Sekcja D audytu)
+      do konfiguracji Hermes Agenta — to dzieje się POZA tym repo, użytkownik
+      robi to sam lub prosi agenta o instrukcję krok po kroku
+- [ ] **Krok 2** (jeśli wybrano zakres (a)): dispatch subagenta (worktree,
+      SDLC, checkpointowanie po każdym C.1.x/C.3.x jak w Fazie 4/5) do
+      implementacji:
+  - [ ] C.1.2 (partial update API) — **musi być pierwsze**, C.1.1 zależy od tego
+  - [ ] C.1.1 (usunięcie directional_bias z crona)
+  - [ ] C.1.3 (fail-safe na `/analytics/higher_tf`)
+  - [ ] C.2 (usunięcie `emergency_reverse` ze schematów)
+  - [ ] C.3.1 (rozszerzony log wywołań narzędzi)
+  - [ ] C.3.2 (endpoint diagnostyczny bias-sync)
+  - [ ] C.3.3 (alert stale-bias)
+  - [ ] Testy + handshake
+- [ ] **Krok 3**: WAŻNE — `scripts/hermes/mms4tk_h4_analysis.py` działa w
+      kontenerze `hermes-agent`, NIE `antigravity_core`. Trzeba ustalić, jak
+      ten skrypt faktycznie trafia na produkcję (osobny deploy? wolumen
+      montowany z tego repo? ręczna kopia?) — **niezweryfikowane w tym
+      audycie, do sprawdzenia przed wdrożeniem C.1.1**, inaczej zmiana w tym
+      repo nie dotrze do działającego crona.
+  - [ ] Weryfikacja niezależna (diff + testy + spot-check danych) przed
+        push/PR — standard tej sesji
+  - [ ] Deploy z maintenance lockiem (dotyka `api.py`/`state_manager.py` na
+        `antigravity_core` — wymaga rebuild) ORAZ osobno deploy skryptu crona
+        na `hermes-agent` (patrz Krok 3 wyżej)
