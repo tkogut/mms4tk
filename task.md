@@ -3018,12 +3018,17 @@ Zero zmian w logice tradingu — wyłącznie observability.
 
 ---
 
-## 🔹 Faza 6 (2026-09-13) — Hermes integration hardening: PLAN, nie zaimplementowane
+## 🔹 Faza 6 (2026-09-13) — Hermes integration hardening: ZAIMPLEMENTOWANE I ZDEPLOYOWANE
 
-> **CHECKPOINT — PLANNED, nie rozpoczęte.** `HANDOFF.md` wskazuje tu jako
-> aktualny stan. Jeśli czytasz to jako agent kontynuujący pracę: nic z tej
-> sekcji nie zostało jeszcze zaimplementowane, to jest kompletny plan do
-> wykonania, nie log zrobionej pracy.
+> **CHECKPOINT — COMPLETED (2026-09-13).** Wszystkie 7 poprawek (C.1.2→C.1.3,
+> C.2, C.3.1→C.3.3) zaimplementowane (PR #55), zweryfikowane niezależnie,
+> zdeployowane na `antigravity_core` i obie kopie na `hermes-agent`,
+> potwierdzone empirycznie (patrz "Krok 3" niżej). Jedyny pozostały krok z
+> oryginalnego planu (Krok 1: wklejenie promptu operacyjnego do konfiguracji
+> Hermesa) leży po stronie usera, poza tym repo. Ten dokument poniżej to
+> historyczny zapis audytu i planu — treść nieaktualna względem tego nagłówka
+> (np. "PLAN, nie zaimplementowane" gdzieniegdzie w tekście) odnosi się do
+> stanu SPRZED wykonania, zachowana dla ciągłości historii decyzji.
 
 ### Kontekst i zlecenie
 
