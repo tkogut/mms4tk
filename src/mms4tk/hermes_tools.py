@@ -3,6 +3,13 @@ Hermes Tools Module (mms4tk.hermes_tools)
 
 Provides JSON schemas (OpenAPI/OpenAI function format) for Hermes agent (Nous Research)
 function calling interface to interact with mms4tk FastAPI endpoints.
+
+Faza 6 C.2 (2026-09-13): `emergency_reverse` was removed from the schemas this
+module returns to the LLM. The underlying `POST /api/v1/emergency/reverse`
+endpoint is untouched (still returns HTTP 501, fail-closed) — this change
+only stops Hermes from being offered a tool that can never actually act, so
+it isn't tempted to try it during a real incident. Use `emergency_killall` to
+flatten exposure instead.
 """
 
 from typing import Dict, Any, List
@@ -16,7 +23,11 @@ class HermesToolGenerator:
         """
         Returns the list of function tools exposed to Hermes agent.
         Includes tools for: get_state, get_pnl, calculate_analytics,
-        emergency_killall, emergency_reverse, high_risk_add.
+        emergency_killall, high_risk_add.
+
+        Faza 6 C.2: `emergency_reverse` deliberately NOT included — the
+        endpoint always returns HTTP 501 (fail-closed, unimplemented), so it
+        is not offered to the LLM as a usable option. See module docstring.
         """
         return [
             {
@@ -110,23 +121,6 @@ class HermesToolGenerator:
                 "function": {
                     "name": "emergency_killall",
                     "description": "Emergency stop signal: cancels all open orders and closes active positions immediately. Requires X-MMS4-API-KEY header.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "x_mms4_api_key": {
-                                "type": "string",
-                                "description": "Authentication key for X-MMS4-API-KEY header."
-                            }
-                        },
-                        "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "emergency_reverse",
-                    "description": "NOT YET IMPLEMENTED (audit P9.3, 2026-09-08) — always returns HTTP 501 and touches no position. Do not rely on this to reverse a position; use emergency_killall to flatten instead. Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
                         "properties": {
