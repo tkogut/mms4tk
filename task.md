@@ -2984,3 +2984,34 @@ okresu (fill-rate, realny slippage) zamiast backtestu; zmiana samego reżimu
 rynkowego widoczna w danych na żywo. Operacyjna przyszłość MMS4 to Decyzja #3:
 handel w konsolidacji pod nadzorem (Maszyna Stanów + Hermes HITL), nie
 poszukiwanie kolejnego filtra.
+
+---
+
+## 🔹 Fix widoczności: bramka H4 directional-bias (2026-09-13)
+
+Nie nowa hipoteza profitability — `htf_directional_gate_enabled` (Faza 3.2)
+jest teraz WŁĄCZONE na produkcji dla BTC/USDC i ETH/USDC (decyzja usera,
+2026-09-13). Audyt post-merge (`/code-review`) znalazł lukę: `GET
+/api/v1/symbols` pokazywał wyłącznie surowy ręczny
+`strategy_profile.directional_bias` (zawsze "BOTH" chyba że Hermes ręcznie
+ustawił inaczej) — nigdy efektywny stan bramki H4. Operator/Hermes nie
+widział, kiedy bramka faktycznie coś blokuje. Bramka sama (`get_effective_directional_bias`,
+`get_symbol_htf_bias`, `_refresh_htf_directional_gate`) — bez zmian, tylko
+wyświetlanie:
+
+1. **`api.py` (`get_trading_symbols`)** — dodano `"htf_bias"` i
+   `"effective_directional_bias"` obok istniejącego `"directional_bias"` w
+   każdym wpisie `/api/v1/symbols`. Test: `test_get_trading_symbols_api_htf_gate_visibility`
+   w `tests/test_multi_symbol.py`.
+2. **`hermes_tools.py`** — opis narzędzia `get_symbols_status` zaktualizowany,
+   wprost wymienia nowe pola per symbol.
+3. **`ui_dashboard/src/components/SymbolsTab.jsx`** — nowy badge (fuchsia)
+   "🔒 LONG_ONLY/SHORT_ONLY" gdy `effective_directional_bias !== "BOTH"`;
+   subtelna szara kropka "bramka H4 aktywna" gdy bramka włączona ale
+   neutralna.
+4. **`daemon.py`** — powiadomienie Telegram przy otwarciu pozycji dostaje
+   dodatkową linię "🔒 Otwarto pod aktywną bramką kierunkową: {bias}" tylko
+   gdy `get_effective_directional_bias(target_symbol) != "BOTH"` w danym
+   momencie; brak zmian gdy "BOTH".
+
+Zero zmian w logice tradingu — wyłącznie observability.

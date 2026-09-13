@@ -1,7 +1,7 @@
 import pytest
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
-from mms4tk.api import app, configured_symbols_store
+from mms4tk.api import app, configured_symbols_store, state_manager
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -48,6 +48,39 @@ def test_get_trading_symbols_api():
     symbols_list = [s["symbol"] for s in data["symbols"]]
     assert "BTC/USDC" in symbols_list
     assert "ETH/USDC" in symbols_list
+
+
+def test_get_trading_symbols_api_htf_gate_visibility():
+    """GET /api/v1/symbols surfaces all 3 directional-bias layers (audit gap fix,
+    2026-09-13): raw manual `directional_bias`, the automatic HTF gate reading
+    (`htf_bias`), and what evaluate_signals actually enforces
+    (`effective_directional_bias`) -- see state_manager.get_symbol_htf_bias /
+    get_effective_directional_bias.
+    """
+    assert state_manager.strategy_profile.directional_bias == "BOTH"
+    try:
+        # Simulate the H4 gate having fired for BTC/USDC (what daemon.py's
+        # _refresh_htf_directional_gate does when htf_directional_gate_enabled
+        # is on for that symbol), while ETH/USDC's gate has never set anything.
+        state_manager.set_symbol_htf_bias("BTC/USDC", "LONG_ONLY")
+
+        res = client.get("/api/v1/symbols")
+        assert res.status_code == 200
+        by_symbol = {s["symbol"]: s for s in res.json()["symbols"]}
+
+        gated = by_symbol["BTC/USDC"]
+        assert gated["htf_bias"] == "LONG_ONLY"
+        assert gated["effective_directional_bias"] == "LONG_ONLY"
+        assert gated["directional_bias"] == "BOTH"  # raw manual field untouched
+
+        ungated = by_symbol["ETH/USDC"]
+        assert ungated["htf_bias"] == "BOTH"
+        assert ungated["effective_directional_bias"] == "BOTH"
+        assert ungated["directional_bias"] == "BOTH"
+    finally:
+        # Don't leak gate state into other tests sharing this module-level
+        # state_manager singleton.
+        state_manager.set_symbol_htf_bias("BTC/USDC", "BOTH")
 
 
 def test_add_remove_trading_symbol_api():
