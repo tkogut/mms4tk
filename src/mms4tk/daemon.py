@@ -1927,6 +1927,71 @@ class MMS4Daemon:
         self.last_cycle_timestamp = datetime.now(timezone.utc).isoformat()
         return valid_results
 
+    def _check_stale_directional_bias_alert(self) -> None:
+        """Faza 6 C.3.3: warn via Telegram when the GLOBAL manual
+        `directional_bias` override (`strategy_profile.directional_bias`) has
+        been stuck at something other than "BOTH" for longer than a
+        configurable threshold, without any new `strategy_profile` write —
+        the audit finding this covers: three real production gaps in the H4
+        cron (up to 16h) left a non-"BOTH" bias silently frozen the whole
+        time, with zero alerting.
+
+        Threshold is read from `system_settings` key
+        `stale_directional_bias_alert_hours` (same get_setting/float-parse
+        pattern as `total_max_portfolio_margin_usd` in __init__ above),
+        default 12.0h. Deliberately synchronous and exception-swallowing at
+        the call site (see run_loop) — this is pure observability, must never
+        interrupt or slow down the trading cycle it runs alongside.
+        """
+        bias = self.state_manager.strategy_profile.directional_bias
+        if bias == "BOTH":
+            return
+
+        threshold_hours = 12.0
+        raw_threshold = self.logger_db.get_setting("stale_directional_bias_alert_hours")
+        if isinstance(raw_threshold, str):
+            try:
+                threshold_hours = float(raw_threshold)
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring invalid persisted stale_directional_bias_alert_hours={raw_threshold!r}")
+
+        last_profile = self.logger_db.get_latest_strategy_profile()
+        if not last_profile or not last_profile.get("timestamp"):
+            return
+
+        try:
+            ts_raw = str(last_profile["timestamp"]).replace("Z", "+00:00")
+            ts = datetime.fromisoformat(ts_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except Exception as e:
+            logger.warning(f"stale_directional_bias check: failed to parse strategy_profile timestamp: {e}")
+            return
+
+        age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+        if age_hours < threshold_hours:
+            return
+
+        from mms4tk.hermes_webhook import HermesWebhookClient
+        HermesWebhookClient.send_telegram(
+            title=f"⚠️ directional_bias={bias} zamrożony od {age_hours:.1f}h",
+            body=(
+                f"Globalny manualny `directional_bias` = `{bias}` (tłumi wewnętrzną "
+                f"bramkę H4) bez nowego zapisu `strategy_profile` od {age_hours:.1f}h "
+                f"(próg: {threshold_hours:.1f}h).\n\n"
+                f"Ostatni powód: {last_profile.get('reason', 'N/A')}\n"
+                f"Ostatni zapis: {last_profile['timestamp']}\n\n"
+                f"Ustaw \"BOTH\" przez POST /api/v1/strategy/profile, żeby przywrócić automatykę."
+            ),
+            priority=6,
+            # Faza 6 C.3.3: dedupe key includes the frozen write's own timestamp, so a
+            # NEW strategy_profile write (which changes this timestamp) always produces
+            # a fresh key -- no manual reset needed. ttl_override keeps this from firing
+            # every ~15s cycle while still stale, without suppressing it forever.
+            dedupe_key=f"STALE_DIRECTIONAL_BIAS_{bias}_{last_profile['timestamp']}",
+            ttl_override=3600.0,
+        )
+
     async def run_loop(self) -> None:
         """Background loop executing multi-symbol cycles at configured intervals."""
         while self._is_running:
@@ -1939,6 +2004,11 @@ class MMS4Daemon:
                 await self.execute_multi_symbol_cycle(symbols)
             except Exception as e:
                 logger.error(f"Error during multi-symbol daemon loop: {type(e).__name__}: {str(e)}")
+
+            try:
+                self._check_stale_directional_bias_alert()
+            except Exception as e:
+                logger.error(f"Error during stale directional_bias check: {type(e).__name__}: {str(e)}")
 
             try:
                 await asyncio.sleep(self.interval_seconds)
