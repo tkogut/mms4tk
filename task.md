@@ -3261,11 +3261,41 @@ implementacji punktu 2 poniżej.
       zależności od wyniku (a)) przez `docker cp`/`scp` — nie ma tu
       automatycznego pipeline'u CI/CD, to osobny, ręczny krok deploy poza
       standardowym `docker compose up -d --build` dla `antigravity_core`.
-  - [ ] Weryfikacja niezależna (diff + testy + spot-check danych) przed
-        push/PR — standard tej sesji
-  - [ ] Deploy z maintenance lockiem (dotyka `api.py`/`state_manager.py` na
-        `antigravity_core` — wymaga rebuild) ORAZ osobno ręczny deploy
-        obu kopii skryptu crona na `hermes-agent` (patrz Krok 3 wyżej)
+  - [x] Weryfikacja niezależna (diff + testy + spot-check) — DONE. Diff
+        C.1.2 (obsługa `None` vs `False`), C.1.1, C.1.3, C.3.1 (potwierdzone
+        w kodzie: `verify_api_key` czyta klucz WYŁĄCZNIE z `Header()`, nigdy
+        z query/body — middleware nie może go wycieknąć), C.3.2, C.3.3
+        (`ttl_override` podłączony do już istniejącej funkcjonalności
+        `telegram_queue.py`, nie wymyślonej) — wszystkie zgodne z opisem.
+        `pytest -q -m "not slow"`: 425 passed, 4 deselected, potwierdzone
+        niezależnie. PR #55 zmergowany.
+  - [x] Deploy `antigravity_core` (2026-09-13, maintenance lock) — DONE.
+        HEAD serwera = `685112a`, healthy, `/api/v1/diagnostics/bias-sync`
+        (C.3.2) zweryfikowany żywym requestem: poprawnie pokazuje
+        `htf_directional_gate_enabled=true` tylko dla BTC/USDC i ETH/USDC,
+        `false` dla ICP/SOL/XRP, `suppressed=false` (bo `directional_bias`
+        globalne jest dziś "BOTH").
+  - [x] Deploy `mms4tk_h4_analysis.py` na `hermes-agent` (2026-09-13) — DONE
+        dla OBU kopii (`/docker/hermes-agent/data/scripts/` root:root,
+        `/docker/hermes-agent/data/home/.hermes/scripts/` uid:gid 10000:10000,
+        oba zachowane). Kopie zapasowe zrobione przed nadpisaniem
+        (`.bak_20260913_110823`). Potwierdzone: payload wysyłany do
+        `POST /strategy/profile` zawiera już tylko `risk_profile`/
+        `scout_override`/`reason`, bez `directional_bias`. Obie kopie
+        zweryfikowane jako identyczne (`diff` wewnątrz kontenera
+        `hermes-agent` — zero różnic), więc nie ma już znaczenia, którą z
+        dwóch faktycznie wykonuje runtime Hermesa — obie są poprawne.
+  - [ ] **Weryfikacja empiryczna, wciąż otwarta** — harmonogram crona to
+        `0 */4 * * *` (00/04/08/12/16/20 UTC). Po najbliższym uruchomieniu
+        sprawdzić w produkcyjnej `strategy_profile`
+        (`/app/.agents/swarm/logs.db` na `antigravity_core`) czy nowy wiersz
+        z `reason` zaczynającym się od "H4 Cron:" ma `directional_bias`
+        IDENTYCZNY jak poprzedni wiersz (nie nadpisany na ABOVE/BELOW-
+        wynikającą wartość) — to ostateczne potwierdzenie że zaktualizowany
+        kod faktycznie działa na żywo, nie tylko że plik został poprawnie
+        skopiowany. Sprawdzić przy następnej okazji (kolejna sesja lub
+        bezpośrednie zapytanie o `SELECT * FROM strategy_profile ORDER BY
+        timestamp DESC LIMIT 3` po najbliższym pełnym cyklu 4h).
 
 ### Gotowy prompt operacyjny dla Hermesa (pełny tekst, do wklejenia w konfigurację Hermes Agenta)
 
