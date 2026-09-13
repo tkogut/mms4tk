@@ -127,6 +127,83 @@ def test_round_trip_fee_pct_is_the_production_calibrated_value_not_an_assumption
         abs(be.ROUND_TRIP_FEE_PCT - 0.00100029) < 1e-6
 
 
+# ── Faza 5 (2026-09-12): round_trip_fee_pct_override (maker-first measurement) ──
+
+def test_round_trip_cost_pct_override_none_is_identical_to_no_override():
+    """Default (None) must reproduce today's behavior bit-for-bit — no override
+    param at all vs explicit None are the same call."""
+    default = be._round_trip_cost_pct(5)
+    explicit_none = be._round_trip_cost_pct(5, None)
+    assert default == explicit_none
+    assert default["fee_pct"] == be.ROUND_TRIP_FEE_PCT
+
+
+def test_round_trip_cost_pct_override_replaces_fee_pct_only():
+    """A non-None override replaces fee_pct with the override value; funding_pct
+    (an independent, maker/taker-agnostic mechanism) is untouched."""
+    baseline = be._round_trip_cost_pct(9)
+    overridden = be._round_trip_cost_pct(9, be.MAKER_ROUND_TRIP_FEE_PCT)
+    assert overridden["fee_pct"] == pytest.approx(be.MAKER_ROUND_TRIP_FEE_PCT)
+    assert overridden["fee_pct"] != baseline["fee_pct"]
+    assert overridden["funding_pct"] == baseline["funding_pct"]
+
+
+def test_maker_round_trip_fee_pct_matches_a1_calibration_ratio():
+    """MAKER_ROUND_TRIP_FEE_PCT must be derived by applying the SAME A1
+    calibration ratio (ROUND_TRIP_FEE_PCT / (2 * TAKER_FEE_PCT)) to OKX's public
+    maker rate (0.02%/leg) as was used for the taker constant — not an
+    independently-invented number (task.md, Faza 5, Krok 1)."""
+    calibration_ratio = be.ROUND_TRIP_FEE_PCT / (2 * be.TAKER_FEE_PCT)
+    expected = 2 * 0.0002 * calibration_ratio
+    assert be.MAKER_ROUND_TRIP_FEE_PCT == pytest.approx(expected, rel=1e-6)
+    # Sanity: maker round-trip must be materially cheaper than taker round-trip.
+    assert be.MAKER_ROUND_TRIP_FEE_PCT < be.ROUND_TRIP_FEE_PCT
+
+
+def test_run_backtest_without_override_is_unchanged():
+    """No override passed (existing call signature) -> identical trades/fee_pct to
+    before this parameter existed."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    baseline = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    with_explicit_none = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False,
+        round_trip_fee_pct_override=None,
+    )
+    assert len(baseline) == len(with_explicit_none) > 0
+    for a, b in zip(baseline, with_explicit_none):
+        assert a["fee_pct"] == b["fee_pct"] == pytest.approx(be.ROUND_TRIP_FEE_PCT)
+        assert a["pnl_pct"] == pytest.approx(b["pnl_pct"])
+        assert a["exit_reason"] == b["exit_reason"]
+
+
+def test_run_backtest_override_changes_fee_and_stats_cost():
+    """override actually changes the per-trade fee_pct AND the resulting _stats()
+    total_pnl (net cost), on the same trade population/entries as the baseline."""
+    candles = load_fixture_candles("ohlcv_BTC_USDC_1h.csv")[:400]
+    params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.0, adaptive_vr_low=0.75)
+    taker_trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False)
+    maker_trades = be.run_backtest(
+        "BTC/USDC", candles, params, stale_candles_threshold=12, trend_filter_enabled=False,
+        round_trip_fee_pct_override=be.MAKER_ROUND_TRIP_FEE_PCT,
+    )
+    assert len(taker_trades) == len(maker_trades) > 0
+    for t in maker_trades:
+        assert t["fee_pct"] == pytest.approx(be.MAKER_ROUND_TRIP_FEE_PCT)
+    # Same entries/exits, only the fee model differs -> gross pnl_pct/funding_pct
+    # identical, net total_pnl strictly higher under the cheaper maker fee.
+    for a, b in zip(taker_trades, maker_trades):
+        assert a["pnl_pct"] == pytest.approx(b["pnl_pct"])
+        assert a["funding_pct"] == pytest.approx(b["funding_pct"])
+    taker_stats = be._stats(taker_trades)
+    maker_stats = be._stats(maker_trades)
+    assert maker_stats["total_pnl"] > taker_stats["total_pnl"]
+    fee_delta_per_leg = be.ROUND_TRIP_FEE_PCT - be.MAKER_ROUND_TRIP_FEE_PCT
+    total_weight = sum(t.get("weight", 1.0) for t in taker_trades)
+    expected_delta = fee_delta_per_leg * total_weight
+    assert maker_stats["total_pnl"] - taker_stats["total_pnl"] == pytest.approx(expected_delta, rel=1e-6)
+
+
 # ── train_test_validate: decision logic, isolated from the real simulation ──
 
 def test_train_test_validate_no_candidate(monkeypatch):

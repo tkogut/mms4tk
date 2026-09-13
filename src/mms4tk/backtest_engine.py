@@ -86,6 +86,24 @@ TAKER_FEE_PCT = 0.0005
 # traceable to production data instead of to another constant's assumption — the
 # next person changing OKX fee tiers must re-measure, not re-derive.
 ROUND_TRIP_FEE_PCT = 0.0010003  # measured (see above); duration-independent, unlike funding
+#
+# ── Faza 5 (2026-09-12): maker-first (postOnly) execution measurement ─────────
+# Not a new independent assumption — derived from the SAME A1 calibration ratio
+# above, applied to OKX's public maker rate instead of taker. Source: OKX's
+# published regular/VIP0 perpetual-swap fee schedule (maker 0.02% / taker 0.05%
+# per leg), verified via WebSearch/WebFetch 2026-09-12 (see task.md, Faza 5,
+# "Krok 1 — wynik" for the citations and full derivation) — NOT found documented
+# anywhere in this repo (`docs/`, `.agents/specs/knowledge/okx-api-guide.md`,
+# `raw_notes/okx-api-guide.md` all checked; none contain a maker rate). The
+# 0.05% taker figure matches this module's own `TAKER_FEE_PCT` to the promille.
+#
+#   calibration_ratio        = ROUND_TRIP_FEE_PCT / (2 * TAKER_FEE_PCT) = 1.0003
+#   MAKER_ROUND_TRIP_FEE_PCT = 2 * 0.0002 * calibration_ratio = 0.00040012
+#
+# Used only via `round_trip_fee_pct_override` (opt-in, see `run_backtest` and
+# `_round_trip_cost_pct`) — never substituted for `ROUND_TRIP_FEE_PCT` itself,
+# so every existing caller is unaffected by this constant's presence.
+MAKER_ROUND_TRIP_FEE_PCT = 0.00040012
 # OKX perpetual funding: charged every 8 hours. On H1 candles (this engine's only
 # timeframe, see run_calibration_job/_fetch_calibration_candles) that is every 8
 # candles. 0.01% is a conservative flat estimate (real funding rates float and can
@@ -95,16 +113,22 @@ FUNDING_RATE_PCT_PER_INTERVAL = 0.0001
 FUNDING_INTERVAL_CANDLES = 8
 
 
-def _round_trip_cost_pct(candles_held: int) -> Dict[str, float]:
+def _round_trip_cost_pct(candles_held: int, fee_pct_override: Optional[float] = None) -> Dict[str, float]:
     """fee_pct is flat (duration-independent); funding_pct scales with how many
     8-candle funding intervals the position was held across (ceil — a position held
     for 1 candle into a new interval still pays that interval in full, matching how
     OKX actually charges funding at the interval boundary regardless of how briefly
-    a position was open during it)."""
+    a position was open during it).
+
+    `fee_pct_override` (Faza 5, 2026-09-12): lets a caller substitute a different
+    round-trip fee rate (e.g. `MAKER_ROUND_TRIP_FEE_PCT`, for the maker-first/
+    postOnly execution measurement — see `task.md`/Faza 5) without touching the
+    module-level `ROUND_TRIP_FEE_PCT` constant that every other caller still relies
+    on. `None` (the default) preserves today's behavior exactly."""
     held = max(int(candles_held), 0)
     funding_intervals = -(-held // FUNDING_INTERVAL_CANDLES)  # ceil division, stdlib-free
     return {
-        "fee_pct": ROUND_TRIP_FEE_PCT,
+        "fee_pct": ROUND_TRIP_FEE_PCT if fee_pct_override is None else fee_pct_override,
         "funding_pct": funding_intervals * FUNDING_RATE_PCT_PER_INTERVAL,
     }
 MIN_FULL_CLOSES_HALF = 30  # below this, a half-window config's stats are too noisy to trust
@@ -494,6 +518,7 @@ def run_backtest(
     midline_tp_full_exit: bool = False,
     d1_range_target_enabled: bool = False,
     d1_range_target_k: float = 0.5,
+    round_trip_fee_pct_override: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Single-symbol, candle-granularity simulation using the real production
     engine classes. Returns closed trades (dicts: side, entry_price, exit_price,
@@ -657,6 +682,15 @@ def run_backtest(
     used for SL-vs-Midline-TP ordering) and BEFORE the Midline TP check, so a
     candle that would hit both closes the position once, at the (wider) D1
     range target, not at the midline. Exit_reason "D1_RANGE_TP".
+
+    Faza 5 (task.md, maker-first/postOnly measurement): `round_trip_fee_pct_override`,
+    when not None, replaces the module-level `ROUND_TRIP_FEE_PCT` for every trade's
+    `fee_pct` in this run (passed straight through to `_round_trip_cost_pct()`), so a
+    caller can measure a different execution fee assumption (e.g. `MAKER_ROUND_TRIP_FEE_PCT`)
+    against the SAME trade population without editing the module constant. Default
+    `None` reproduces today's behavior exactly (uses `ROUND_TRIP_FEE_PCT`, unchanged).
+    Funding cost (`funding_pct`) is untouched either way — OKX funding does not depend
+    on maker/taker order type.
     """
     if addon_sl_variant not in ("V0", "V1", "V2"):
         raise ValueError(f"addon_sl_variant must be one of V0/V1/V2, got {addon_sl_variant!r}")
@@ -729,7 +763,7 @@ def run_backtest(
             "pnl_pct": pnl_pct, "exit_reason": reason,
             "entry_idx": position["entry_idx"], "exit_idx": idx, "weight": weight,
             "addon_applied": bool(position.get("addon_done", False)),  # test/diagnostic observability only
-            **_round_trip_cost_pct(idx - position["entry_idx"]),
+            **_round_trip_cost_pct(idx - position["entry_idx"], round_trip_fee_pct_override),
         })
         im.stop_tracking(symbol)
         position = None
@@ -834,7 +868,7 @@ def run_backtest(
                                 "pnl_pct": mid_pnl, "exit_reason": "MIDLINE_PARTIAL_TP",
                                 "entry_idx": position["entry_idx"], "exit_idx": i,
                                 "partial": True, "weight": position["notional_weight"] * reduced_frac,
-                                **_round_trip_cost_pct(i - position["entry_idx"]),
+                                **_round_trip_cost_pct(i - position["entry_idx"], round_trip_fee_pct_override),
                             })
                             record_partial("MIDLINE_PARTIAL_TP")
                             position["contracts"] = contracts - reduce_amt
@@ -880,7 +914,7 @@ def run_backtest(
                         "pnl_pct": half_pnl, "exit_reason": "STALE_SPLIT_50",
                         "entry_idx": position["entry_idx"], "exit_idx": i,
                         "partial": True, "weight": position["notional_weight"] * reduced_frac,
-                        **_round_trip_cost_pct(i - position["entry_idx"]),
+                        **_round_trip_cost_pct(i - position["entry_idx"], round_trip_fee_pct_override),
                     })
                     record_partial("STALE_SPLIT_50")
                     position["contracts"] = contracts - reduce_amt
