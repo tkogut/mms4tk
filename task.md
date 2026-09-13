@@ -3178,11 +3178,45 @@ implementacji punktu 2 poniżej.
 - [ ] **Krok 2** (jeśli wybrano zakres (a)): dispatch subagenta (worktree,
       SDLC, checkpointowanie po każdym C.1.x/C.3.x jak w Fazie 4/5) do
       implementacji:
-  - [ ] C.1.2 (partial update API) — **musi być pierwsze**, C.1.1 zależy od tego
-  - [ ] C.1.1 (usunięcie directional_bias z crona)
-  - [ ] C.1.3 (fail-safe na `/analytics/higher_tf`)
-  - [ ] C.2 (usunięcie `emergency_reverse` ze schematów)
-  - [ ] C.3.1 (rozszerzony log wywołań narzędzi)
+  - [x] C.1.2 (partial update API) — **musi być pierwsze**, C.1.1 zależy od tego.
+        DONE (branch `chore/faza6-hermes-hardening`, commit c75a662): nowy model
+        `StrategyProfileUpdate` (wszystkie pola `Optional[...] = None`),
+        `POST /api/v1/strategy/profile` teraz merguje tylko pola różne od `None`
+        na istniejący `state_manager.strategy_profile`. Pełny payload (jak dziś
+        wysyła `mms4tk_h4_analysis.py`/`hitl_resolve`) nadal daje identyczny efekt
+        (pełne nadpisanie) — regresja pokryta testem. Testy: partial update nie
+        rusza pozostałych pól + regresja pełnego payloadu. Full suite green
+        (411 passed, 4 deselected) przed commitem.
+  - [x] C.1.1 (usunięcie directional_bias z crona). DONE (commit 8d585ec):
+        `scripts/hermes/mms4tk_h4_analysis.py` — usunięty klucz
+        `directional_bias` z payloadu `update_strategy_profile()`, usunięta
+        "Rule 1" (budowa zmiennej `bias`), `h4_pos` nadal liczone/logowane do
+        stdout. Docstring zaktualizowany (punkt 1 listy usunięty). Zero testów
+        jednostkowych dla tego skryptu (network-only cron script, jak wcześniej).
+  - [x] C.1.3 (fail-safe na `/analytics/higher_tf`). DONE (commit e0d5b5f):
+        `get_higher_tf_analytics()` woła teraz `fetch_candles(...,
+        allow_mock_fallback=False)`, nowe pole `HigherTimeframeResponse.data_stale`
+        (default False), `True` + neutralne/zerowe wartości przy złapanym
+        wyjątku. Testy: symulowana awaria OKX → `data_stale=true`, sukces →
+        `data_stale=false`. Full suite green (414 passed, 4 deselected).
+  - [x] C.2 (usunięcie `emergency_reverse` ze schematów). DONE (commit 62857cc):
+        `hermes_tools.py::get_tool_schemas()` — wpis usunięty (11 narzędzi
+        zamiast 12), endpoint `/api/v1/emergency/reverse` nietknięty (dalej 501).
+        Docstringi modułu/metody zaktualizowane. Testy: liczba/nazwy schematów,
+        `get_tool_by_name("emergency_reverse")` → KeyError.
+  - [x] C.3.1 (rozszerzony log wywołań narzędzi). DONE (commit b244124):
+        `emergency_action_log` — migracja `ALTER TABLE ADD COLUMN client_label`;
+        nowa metoda `logger_db.log_tool_invocation(...)` (ogólna, `client_label`
+        opcjonalny), `log_emergency_attempt` teraz cienki wrapper nad nią
+        (wstecznie kompatybilny). Middleware `hermes_tool_invocation_logger`
+        w `api.py` loguje wszystkie 12 endpointów-narzędzi (allowlist
+        `HERMES_TOOL_LOG_PATHS`), czyta `X-MMS4-CLIENT` → `client_label`,
+        nigdy nie loguje nagłówków (więc nigdy `X-MMS4-API-KEY`). Ręczny
+        `log_emergency_attempt` call w `emergency_reverse` usunięty (middleware
+        go zastępuje jednolicie). Testy: `X-MMS4-CLIENT` → `client_label`
+        zapisany, brak nagłówka → `None`, sekret nigdy w `request_params`,
+        `emergency_reverse` nadal logowany (outcome `error_501`). Full suite
+        green (418 passed, 4 deselected).
   - [ ] C.3.2 (endpoint diagnostyczny bias-sync)
   - [ ] C.3.3 (alert stale-bias)
   - [ ] Testy + handshake

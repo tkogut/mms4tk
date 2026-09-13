@@ -414,12 +414,27 @@ class HermesWebhookClient:
             logger.error(f"Failed to mark error on event #{event_id}: {e}")
 
     @staticmethod
-    def send_telegram(title: str, body: str, priority: int = 5, dedupe_key: Optional[str] = None) -> bool:
-        """Enqueue Telegram alert via TelegramQueueManager with rate-limiting and deduplication."""
+    def send_telegram(
+        title: str,
+        body: str,
+        priority: int = 5,
+        dedupe_key: Optional[str] = None,
+        ttl_override: Optional[float] = None,
+    ) -> bool:
+        """Enqueue Telegram alert via TelegramQueueManager with rate-limiting and deduplication.
+
+        `ttl_override` (Faza 6 C.3.3): overrides the queue's default dedupe TTL
+        (60s) for this specific message -- e.g. a stale-bias reminder that
+        should suppress repeats for an hour, not just a minute, without
+        touching every other caller's dedupe behavior. None (default) keeps
+        the queue's own default, unchanged from before this parameter existed.
+        """
         try:
             from mms4tk.telegram_queue import get_telegram_queue
             tq = get_telegram_queue()
-            return tq.enqueue(title=title, body=body, priority=priority, dedupe_key=dedupe_key)
+            return tq.enqueue(
+                title=title, body=body, priority=priority, dedupe_key=dedupe_key, ttl_override=ttl_override
+            )
         except Exception as e:
             logger.warning(f"Failed to enqueue Telegram alert, falling back to direct send: {e}")
             import subprocess

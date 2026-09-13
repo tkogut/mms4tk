@@ -6,9 +6,21 @@ Runs as Hermes cron job every 4 hours (0 */4 * * *).
 Fetches H4/D1 analytics from mms4tk and updates the strategy profile
 based on MastermindZX rules:
 
-1. Evaluates H4 TMA position → sets directional_bias
-2. Evaluates H4 candle formation (SWEEP_WICK vs MARUBOZU_BREAKOUT)
-3. If uncertain, creates a Blocked Kanban card for HITL
+1. Evaluates H4 candle formation (SWEEP_WICK vs MARUBOZU_BREAKOUT)
+2. If uncertain, creates a Blocked Kanban card for HITL
+
+Faza 6 C.1.1 (2026-09-13): this cron no longer sets `directional_bias` —
+that competency moved entirely to the internal per-symbol H4 directional
+gate (Faza 3.2, `daemon._refresh_htf_directional_gate`), which reads real
+per-symbol H4 candles every 15s instead of this cron's single global,
+BTC-only reading every 4h (audit finding: the cron's global override was
+measured to wrongly restrict ~5.9% of ETH H4 candles vs its own per-symbol
+reading). The H4 TMA position (`h4_pos`) is still fetched and logged to
+stdout below for cron-log diagnostics, just never sent to
+`POST /api/v1/strategy/profile` — thanks to that endpoint's Faza 6 C.1.2
+partial-update support, omitting `directional_bias` from the payload now
+safely leaves whatever the internal gate (or a human) already set, instead
+of resetting it to "BOTH" on every 4h write.
 
 Install via:
     hermes cron create "0 */4 * * *" \
@@ -134,13 +146,9 @@ def main():
 
     # ─── MastermindZX Rules ───────────────────────────────────────────
 
-    # Rule 1: Directional Bias from H4 TMA Position
-    if h4_pos == "ABOVE":
-        bias = "LONG_ONLY"
-    elif h4_pos == "BELOW":
-        bias = "SHORT_ONLY"
-    else:
-        bias = "BOTH"
+    # Rule 1 (directional_bias from H4 TMA position) removed — Faza 6 C.1.1.
+    # h4_pos is still fetched/logged above for diagnostics only; the internal
+    # H4 directional gate (Faza 3.2) now owns directional_bias exclusively.
 
     # Rule 2: Risk Profile from D1 ATR Expansion
     if atr_ratio > 2.5:
@@ -165,9 +173,10 @@ def main():
             create_hitl_card(analytics, state)
             return  # Don't auto-update profile on uncertain classification
 
-    # Build and push profile update
+    # Build and push profile update — directional_bias deliberately omitted
+    # (Faza 6 C.1.1); the partial-update endpoint (C.1.2) merges this onto
+    # whatever directional_bias is already set, leaving it untouched.
     profile = {
-        "directional_bias": bias,
         "risk_profile": risk,
         "scout_override": scout_override,
         "reason": f"H4 Cron: pos={h4_pos}, candle={h4_candle}, atr_ratio={atr_ratio}",

@@ -114,6 +114,90 @@ app = FastAPI(
 )
 
 
+# Faza 6 C.3.1 (2026-09-13): (method, path) -> the Hermes tool name each endpoint
+# backs (see hermes_tools.py's 11 schemas, plus emergency_reverse which stays
+# fail-closed/501 but is no longer offered to the LLM — C.2). Kept as an explicit
+# allowlist (not "log every /api/v1/* call") so this widened audit trail stays
+# scoped to exactly what task.md's C.3.1 asked for: the endpoints Hermes-facing
+# tools actually call, not the whole API surface (dashboard/settings/etc. traffic
+# already has its own uvicorn access log).
+HERMES_TOOL_LOG_PATHS: Dict[tuple, str] = {
+    ("GET", "/api/v1/symbols"): "get_symbols_status",
+    ("GET", "/api/v1/state"): "get_state",
+    ("GET", "/api/v1/balance"): "get_balance",
+    ("GET", "/api/v1/stats/pnl"): "get_pnl",
+    ("GET", "/api/v1/stats"): "get_pnl",
+    ("POST", "/api/v1/analytics/calculate"): "calculate_analytics",
+    ("POST", "/api/v1/emergency/killall"): "emergency_killall",
+    ("POST", "/api/v1/emergency/reverse"): "emergency_reverse",
+    ("POST", "/api/v1/trade/high_risk_add"): "high_risk_add",
+    ("GET", "/api/v1/analytics/higher_tf"): "mms4_get_higher_tf",
+    ("POST", "/api/v1/strategy/profile"): "mms4_set_strategy_profile",
+    ("GET", "/api/v1/hermes/events"): "mms4_get_pending_events",
+    ("POST", "/api/v1/hermes/hitl_resolve"): "mms4_hitl_resolve",
+}
+
+
+@app.middleware("http")
+async def hermes_tool_invocation_logger(request: Request, call_next):
+    """Faza 6 C.3.1: persist every call to a Hermes-tool-facing endpoint into
+    `emergency_action_log` (scope widened from the 3 emergency endpoints to
+    all 12 tools; table name kept as-is — renaming would be invasive for
+    existing dependents). Records `endpoint`, `outcome` (success/error/status
+    code), `client_ip`, `request_params` (query + body, NEVER headers — the
+    only secret in play, X-MMS4-API-KEY, always travels as a header and is
+    therefore never captured here), `client_label` (the caller-supplied
+    `X-MMS4-CLIENT` header, e.g. "hermes-agent"/"h4-cron"/"ui-dashboard"/
+    "event-dispatcher", or None when absent), and `created_at`.
+
+    Reads the request body (needed for POST endpoints' `request_params`) and
+    explicitly replays it via a replacement `_receive` — FastAPI/Starlette
+    caches nothing across a fresh `Request` object, so without this replay
+    the downstream endpoint's own JSON body parsing would hang/fail on an
+    already-drained stream.
+    """
+    tool_name = HERMES_TOOL_LOG_PATHS.get((request.method, request.url.path))
+    if tool_name is None:
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    client_label = request.headers.get("X-MMS4-CLIENT") or None
+    query_params = dict(request.query_params)
+
+    body_bytes = b""
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body_bytes = await request.body()
+        except Exception:
+            body_bytes = b""
+
+        async def _replay_receive(_b: bytes = body_bytes) -> Dict[str, Any]:
+            return {"type": "http.request", "body": _b, "more_body": False}
+
+        request._receive = _replay_receive  # noqa: SLF001 -- documented Starlette replay pattern
+
+    body_str = body_bytes.decode("utf-8", errors="replace") if body_bytes else ""
+    request_params = json.dumps({"query": query_params, "body": body_str[:2000]})
+
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        outcome = "success" if status_code < 400 else f"error_{status_code}"
+        try:
+            logger_db.log_tool_invocation(
+                endpoint=request.url.path,
+                outcome=outcome,
+                client_ip=client_ip,
+                request_params=request_params,
+                client_label=client_label,
+            )
+        except Exception as log_err:
+            logger.error(f"Failed to persist Hermes tool invocation log for {tool_name}: {log_err}")
+
+
 class StateResponse(BaseModel):
     state: str
     leverage: float
@@ -717,6 +801,13 @@ class HigherTimeframeResponse(BaseModel):
     h4_tma: float
     h4_upper_band: float
     h4_lower_band: float
+    data_stale: bool = Field(
+        default=False,
+        description="Faza 6 C.1.3: True when a real OKX candle fetch failed and every "
+        "other field below is best-effort/neutral, NOT a genuine H4/D1 read. Callers "
+        "(the H4 cron, Hermes) must not act on ABOVE/BELOW/SWEEP_WICK/etc. classifications "
+        "while this is True.",
+    )
 
 
 @app.get("/api/v1/analytics/higher_tf", response_model=HigherTimeframeResponse, tags=["Analytics"])
@@ -724,16 +815,33 @@ async def get_higher_tf_analytics() -> Dict[str, Any]:
     """
     Fetch higher timeframe (H4/D1) market state analysis.
     Calculates D1 ATR expansion ratio, H4 TMA position, and candle formation.
+
+    Faza 6 C.1.3: previously called `fetch_candles` without
+    `allow_mock_fallback=False`, so a real OKX outage silently returned
+    deterministic MOCK candles and this endpoint would compute (and the H4
+    cron would act on) a fabricated "ABOVE"/"BELOW"/"SWEEP_WICK" reading with
+    no signal that anything was wrong — the same bug class already fixed in
+    `daemon._refresh_htf_directional_gate` (Faza 3.2-followup). Now a fetch
+    failure raises, is caught, and is surfaced explicitly via `data_stale`
+    instead of quietly computing from mock or empty candles.
     """
+    data_stale = False
     try:
-        candles_h4 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="4h", limit=50)
-        candles_d1 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="1d", limit=50)
+        candles_h4 = await executor.fetch_candles(
+            symbol=daemon.symbol, timeframe="4h", limit=50, allow_mock_fallback=False
+        )
+        candles_d1 = await executor.fetch_candles(
+            symbol=daemon.symbol, timeframe="1d", limit=50, allow_mock_fallback=False
+        )
     except Exception as e:
-        logger.warning(f"Failed to fetch HTF candles from OKX: {e}. Using empty candle list.")
+        logger.warning(f"Failed to fetch real HTF candles from OKX: {e}. Reporting data_stale=True.")
         candles_h4 = []
         candles_d1 = []
+        data_stale = True
 
-    return HigherTimeframeAnalytics.calculate_higher_tf(candles_h4, candles_d1)
+    result = HigherTimeframeAnalytics.calculate_higher_tf(candles_h4, candles_d1)
+    result["data_stale"] = data_stale
+    return result
 
 
 @app.get("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"])
@@ -744,14 +852,51 @@ async def get_strategy_profile() -> StrategyProfile:
     return state_manager.strategy_profile
 
 
+class StrategyProfileUpdate(BaseModel):
+    """Faza 6 C.1.2: partial-update counterpart to StrategyProfile.
+
+    `POST /api/v1/strategy/profile` used to require the FULL `StrategyProfile`
+    model — every field Pydantic didn't receive was silently filled with its
+    default, so a caller that only meant to change `risk_profile` (e.g. the H4
+    cron, once C.1.1 stops it from also sending `directional_bias`) would
+    reset `directional_bias` back to "BOTH" on every write. All 4 fields here
+    are Optional[...] = None so "field not sent" and "field explicitly unset"
+    are the same thing (None); `set_strategy_profile` below merges only the
+    fields that are NOT None onto the existing persisted profile. A request
+    that supplies every field still behaves exactly like the old full-replace
+    (every existing field gets overwritten with the request's value) — this
+    is a strict superset of the old behavior, not a change to it.
+    """
+    directional_bias: Optional[str] = Field(default=None, description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
+    risk_profile: Optional[str] = Field(default=None, description="CONSERVATIVE | MODERATE | AGGRESSIVE")
+    scout_override: Optional[bool] = Field(default=None, description="True allows early SCOUT_MODE relaxation")
+    reason: Optional[str] = Field(default=None)
+
+
 @app.post("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
-async def set_strategy_profile(profile: StrategyProfile) -> StrategyProfile:
+async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfile:
     """
-    Update active strategy profile configuration.
-    If scout_override is True, relaxes SCOUT_MODE to BASE_MODE immediately.
+    Partially update the active strategy profile configuration: only fields
+    present (non-None) in the request overwrite the persisted profile, every
+    other field is left exactly as it was. If the merged scout_override is
+    True, relaxes SCOUT_MODE to BASE_MODE immediately.
     Protected by X-MMS4-API-KEY header.
+
+    Faza 6 C.1.2: previously took the full `StrategyProfile` model, so any
+    write (even one meaning to change a single field) reset every unset field
+    to its Pydantic default — see `StrategyProfileUpdate`'s docstring. A
+    request that sets all 4 fields (every caller that predates this change,
+    e.g. `mms4tk_h4_analysis.py` and `hitl_resolve` below) still fully
+    replaces the profile, byte for byte the same as before.
     """
-    updated = state_manager.update_strategy_profile(profile)
+    current = state_manager.strategy_profile
+    merged = StrategyProfile(
+        directional_bias=profile.directional_bias if profile.directional_bias is not None else current.directional_bias,
+        risk_profile=profile.risk_profile if profile.risk_profile is not None else current.risk_profile,
+        scout_override=profile.scout_override if profile.scout_override is not None else current.scout_override,
+        reason=profile.reason if profile.reason is not None else current.reason,
+    )
+    updated = state_manager.update_strategy_profile(merged)
     if updated.scout_override:
         state_manager.relax_scout_mode()
     return updated
@@ -1548,6 +1693,73 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "risk_profile": state_manager.strategy_profile.risk_profile
         })
     return {"symbols": result, "total": len(result)}
+
+
+class BiasSyncSymbolInfo(BaseModel):
+    symbol: str
+    directional_bias: str = Field(description="Raw global manual/Hermes-set override, 'BOTH' unless explicitly changed")
+    htf_bias: str = Field(description="Automatic Faza 3.2 per-symbol H4 gate reading, 'BOTH' when disabled or never fired")
+    effective_directional_bias: str = Field(description="What evaluate_signals actually enforces right now for this symbol")
+    htf_directional_gate_enabled: bool
+    suppressed: bool = Field(description="True when the global manual override (directional_bias != 'BOTH') is actively suppressing this symbol's automatic H4 gate")
+    last_strategy_profile_reason: Optional[str] = Field(default=None, description="`reason` on the most recent strategy_profile write (global, not per-symbol)")
+    last_strategy_profile_age_seconds: Optional[float] = Field(default=None, description="Seconds since the most recent strategy_profile write; null if never written")
+
+
+class BiasSyncResponse(BaseModel):
+    symbols: List[BiasSyncSymbolInfo]
+
+
+@app.get("/api/v1/diagnostics/bias-sync", response_model=BiasSyncResponse, tags=["Diagnostics"])
+async def get_bias_sync_diagnostics() -> Dict[str, Any]:
+    """
+    Faza 6 C.3.2: read-only diagnostic view (deliberately unauthenticated --
+    this only ever reads state, it changes nothing) of the 3 directional_bias
+    layers per configured symbol, whether the global manual override is
+    currently suppressing that symbol's automatic H4 gate, and how old the
+    most recent strategy_profile write is. Built entirely from state_manager
+    reads already used elsewhere (get_trading_symbols, _trend_filter_fields)
+    -- no new state, just a single place to see bias drift/staleness at a
+    glance instead of cross-referencing /symbols and /strategy/profile.
+    """
+    manual_bias = state_manager.strategy_profile.directional_bias
+    suppressed = manual_bias != "BOTH"
+
+    last_profile: Optional[Dict[str, Any]] = None
+    try:
+        last_profile = logger_db.get_latest_strategy_profile()
+    except Exception as e:
+        logger.warning(f"bias-sync diagnostics: failed to read latest strategy_profile: {e}")
+
+    last_reason = last_profile.get("reason") if last_profile else None
+    last_age_seconds: Optional[float] = None
+    if last_profile and last_profile.get("timestamp"):
+        try:
+            ts_raw = str(last_profile["timestamp"]).replace("Z", "+00:00")
+            ts = datetime.fromisoformat(ts_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            last_age_seconds = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+        except Exception as e:
+            logger.warning(f"bias-sync diagnostics: failed to parse strategy_profile timestamp: {e}")
+
+    symbols_out = []
+    for sym, config in configured_symbols_store.items():
+        if isinstance(config, bool):
+            config = {}
+        trend_filter = _trend_filter_fields(sym, config)
+        symbols_out.append({
+            "symbol": sym,
+            "directional_bias": manual_bias,
+            "htf_bias": state_manager.get_symbol_htf_bias(sym),
+            "effective_directional_bias": state_manager.get_effective_directional_bias(sym),
+            "htf_directional_gate_enabled": trend_filter["htf_directional_gate_enabled"],
+            "suppressed": suppressed,
+            "last_strategy_profile_reason": last_reason,
+            "last_strategy_profile_age_seconds": last_age_seconds,
+        })
+
+    return {"symbols": symbols_out}
 
 
 @app.post("/api/v1/symbols/verify", tags=["Multi-Symbol"])
