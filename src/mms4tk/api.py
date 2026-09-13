@@ -717,6 +717,13 @@ class HigherTimeframeResponse(BaseModel):
     h4_tma: float
     h4_upper_band: float
     h4_lower_band: float
+    data_stale: bool = Field(
+        default=False,
+        description="Faza 6 C.1.3: True when a real OKX candle fetch failed and every "
+        "other field below is best-effort/neutral, NOT a genuine H4/D1 read. Callers "
+        "(the H4 cron, Hermes) must not act on ABOVE/BELOW/SWEEP_WICK/etc. classifications "
+        "while this is True.",
+    )
 
 
 @app.get("/api/v1/analytics/higher_tf", response_model=HigherTimeframeResponse, tags=["Analytics"])
@@ -724,16 +731,33 @@ async def get_higher_tf_analytics() -> Dict[str, Any]:
     """
     Fetch higher timeframe (H4/D1) market state analysis.
     Calculates D1 ATR expansion ratio, H4 TMA position, and candle formation.
+
+    Faza 6 C.1.3: previously called `fetch_candles` without
+    `allow_mock_fallback=False`, so a real OKX outage silently returned
+    deterministic MOCK candles and this endpoint would compute (and the H4
+    cron would act on) a fabricated "ABOVE"/"BELOW"/"SWEEP_WICK" reading with
+    no signal that anything was wrong — the same bug class already fixed in
+    `daemon._refresh_htf_directional_gate` (Faza 3.2-followup). Now a fetch
+    failure raises, is caught, and is surfaced explicitly via `data_stale`
+    instead of quietly computing from mock or empty candles.
     """
+    data_stale = False
     try:
-        candles_h4 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="4h", limit=50)
-        candles_d1 = await executor.fetch_candles(symbol=daemon.symbol, timeframe="1d", limit=50)
+        candles_h4 = await executor.fetch_candles(
+            symbol=daemon.symbol, timeframe="4h", limit=50, allow_mock_fallback=False
+        )
+        candles_d1 = await executor.fetch_candles(
+            symbol=daemon.symbol, timeframe="1d", limit=50, allow_mock_fallback=False
+        )
     except Exception as e:
-        logger.warning(f"Failed to fetch HTF candles from OKX: {e}. Using empty candle list.")
+        logger.warning(f"Failed to fetch real HTF candles from OKX: {e}. Reporting data_stale=True.")
         candles_h4 = []
         candles_d1 = []
+        data_stale = True
 
-    return HigherTimeframeAnalytics.calculate_higher_tf(candles_h4, candles_d1)
+    result = HigherTimeframeAnalytics.calculate_higher_tf(candles_h4, candles_d1)
+    result["data_stale"] = data_stale
+    return result
 
 
 @app.get("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"])
