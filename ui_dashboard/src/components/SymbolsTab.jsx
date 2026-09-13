@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X, ShieldAlert } from 'lucide-react';
+import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X, ShieldAlert, Lock } from 'lucide-react';
 
 export function SymbolsTab({ apiKey }) {
   const [symbols, setSymbols] = useState([
@@ -447,6 +447,32 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
           <span>{symbolObj.is_active !== false ? 'AKTYWNA' : 'WSTRZYMANA'}</span>
         </button>
       </div>
+
+      {/* Faza 3.2 H4 directional gate visibility (audit fix 2026-09-13): a distinct
+          badge (fuchsia, never confused with SCOUT/BASE emerald/amber colors) when
+          the gate or a manual override is actively restricting direction right now,
+          plus a subtle "gate active but neutral" dot when the gate is on but not
+          currently blocking anything — so the operator can see the mechanism is
+          alive even when it isn't gating. */}
+      {symbolObj.effective_directional_bias && symbolObj.effective_directional_bias !== 'BOTH' && (
+        <div
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold font-mono border w-fit bg-fuchsia-950 text-fuchsia-300 border-fuchsia-500/40"
+          title="Bramka kierunkowa H4 / ręczny override aktywnie ogranicza kierunek wejść"
+        >
+          <Lock className="w-3 h-3" />
+          <span>🔒 {symbolObj.effective_directional_bias}</span>
+        </div>
+      )}
+      {(!symbolObj.effective_directional_bias || symbolObj.effective_directional_bias === 'BOTH') &&
+        symbolObj.htf_directional_gate_enabled && (
+        <div
+          className="flex items-center gap-1.5 px-0.5 text-[9px] text-slate-500 font-mono"
+          title="Bramka kierunkowa H4 włączona i aktywna — obecnie neutralna (nic nie blokuje)"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+          <span>bramka H4 aktywna</span>
+        </div>
+      )}
 
       <div
         className={`p-2.5 rounded-lg border text-[11px] font-mono space-y-1 ${

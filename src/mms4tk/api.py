@@ -1538,6 +1538,13 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "okx_price": v_res.get("last_price", 0.0),
             "reason": v_res.get("reason", ""),
             "directional_bias": state_manager.strategy_profile.directional_bias,
+            # Faza 3.2 gate visibility (audit post-merge gap fix): "directional_bias"
+            # above is only the raw manual/Hermes-set field (always "BOTH" unless
+            # explicitly overridden) -- it never reflects the automatic H4 gate.
+            # These two add the automatic reading and the actually-enforced result,
+            # so an operator/Hermes can see all three layers at once.
+            "htf_bias": state_manager.get_symbol_htf_bias(sym),
+            "effective_directional_bias": state_manager.get_effective_directional_bias(sym),
             "risk_profile": state_manager.strategy_profile.risk_profile
         })
     return {"symbols": result, "total": len(result)}
