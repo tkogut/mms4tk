@@ -2735,11 +2735,252 @@ teoretycznego sufitu oszczędności, nie gwarantowany wynik.
 
 ### Status wykonania
 
-- [ ] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
-- [ ] Parametr w `backtest_engine.py` (domyślnie bez zmian)
-- [ ] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
-- [ ] Wpis wyniku do `task.md` + `HANDOFF.md`
-- [ ] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
-      9+1 hipotez, wynik końcowy, akceptacja natury strategii, poprawiony opis
-      SCOUT_MODE)
+- [x] Weryfikacja realnej stawki maker/taker OKX (źródło, nie założenie)
+- [x] Parametr w `backtest_engine.py` (domyślnie bez zmian)
+- [x] Przeliczenie 24-mies. (proxy + kontrola), tabela wyników
+- [x] Wpis wyniku do `task.md` + `HANDOFF.md`
+- [x] Formalne domknięcie Profitability Workstream (sekcja podsumowująca:
+      8+1 hipotez [patrz zastrzeżenie o liczeniu "9" w sekcji zamknięcia],
+      wynik końcowy, akceptacja natury strategii, poprawiony opis SCOUT_MODE)
 - [ ] Testy + handshake
+
+### Krok 1 — weryfikacja stawki maker/taker OKX (wynik)
+
+**W repo brak udokumentowanego schedule'u opłat OKX per-instrument.** Sprawdzone:
+`.agents/specs/knowledge/okx-api-guide.md` (215 linii), `raw_notes/okx-api-guide.md`
+(211 linii) — `grep -i "fee\|maker\|taker"` na obu: **zero trafień**, żaden z nich
+nie zawiera tabeli opłat. `docs/` zawiera tylko rozproszone wzmianki o taker fee
+(`docs/AUDIT_MMS4_2026-08-16.md:392`, `docs/REKOMENDACJE_KONFIGURACJA_2026-08-16.md:139`,
+`docs/AUDIT_MMS4_PROFIT_OPTIMIZATION_2026-09-08.md:128,212`,
+`docs/STRATEGY_AND_ALGORITHM.md:186`) — wszystkie cytują ~0,05% taker per noga,
+zero z nich podaje stawkę maker.
+
+**Źródło użyte (jawnie, zgodnie z wymogiem)**: publiczny, standardowy schedule
+opłat OKX dla kontraktów perpetual swap na poziomie regularnym/VIP0 (brak
+statusu VIP), zweryfikowany przez `WebSearch` + `WebFetch` w tej sesji
+(2026-09-12):
+
+- OKX Trading Fee Rules FAQ (`okx.com/en-us/help/trading-fee-rules-faq`) —
+  potwierdza istnienie tabeli tierów wg wolumenu/aktywów, ale nie podaje same
+  liczb w treści dostępnej fetcherowi (strona wymaga JS do wyświetlenia tabeli).
+- Zewnętrzne, niezależne zestawienie (bitdegree.org, "OKX Fees in 2026: Full
+  Breakdown"): *"Futures fees begin at 0.02% for maker orders and 0.05% for
+  taker orders for regular users."*
+- Potwierdzone drugim, niezależnym agregatem w wynikach wyszukiwania: *"OKX
+  charges 0.02% maker and 0.05% taker on USDT perpetuals at the regular tier."*
+
+**Stawka użyta**: `MAKER_FEE_PCT = 0.02%` per noga, `TAKER_FEE_PCT = 0.05%` per
+noga (regularny tier/VIP0, bez wolumenowych zniżek VIP — zgodnie z produkcją,
+która nie deklaruje statusu VIP). To dokładnie potwierdza już istniejącą w
+`backtest_engine.py` stałą `TAKER_FEE_PCT = 0.0005` (linia 55, opisana jako
+"OKX taker fee per leg, the exchange's published schedule figure") — nowe
+źródło z tej sesji zgadza się co do promila z tym, co już było w kodzie.
+
+Ten sam schedule nie rozróżnia osobno instrumentu USDC- vs USDT-margined
+perpetual swap w publicznie dostępnych fragmentach — OKX stosuje tiery opłat
+wg wolumenu/aktywów jednolicie w obrębie klasy instrumentu (perpetual swap),
+nie osobno per waluta marginu; brak dowodu na odwrotne twierdzenie w żadnym z
+sprawdzonych źródeł.
+
+**Przeliczenie round-trip maker, zachowując metodologię A1 (Sesja A1,
+`backtest_engine.py:57-88`)**: A1 zmierzyło na produkcyjnych `closed_trades`
+`ROUND_TRIP_FEE_PCT = 0.0010003`, co POTWIERDZIŁO (nie zastąpiło) założenie
+`TAKER_FEE_PCT × 2 = 0.0010`, z rozbieżnością +0,03% relative. Żeby nie
+"wymyślać nowej liczby w oderwaniu" (wymóg zadania), stawka maker jest
+przeliczona przez TĘ SAMĄ kalibrację proporcjonalną:
+
+```
+calibration_ratio = ROUND_TRIP_FEE_PCT / (2 × TAKER_FEE_PCT)
+                  = 0.0010003 / 0.0010 = 1.0003
+
+MAKER_ROUND_TRIP_FEE_PCT = 2 × MAKER_FEE_PCT × calibration_ratio
+                         = 2 × 0.0002 × 1.0003
+                         = 0.00040012
+```
+
+**Wynik: `MAKER_ROUND_TRIP_FEE_PCT = 0.00040012`** (obie nogi maker/`postOnly`),
+vs `ROUND_TRIP_FEE_PCT = 0.0010003` (obie nogi taker, dzisiejszy baseline) —
+maker round-trip to **39,99%** kosztu taker (redukcja kosztu fee o ~60%, przy
+tej samej, niezmienionej od A1 metodologii kalibracji; `funding_pct` jest
+osobnym mechanizmem — OKX funding rate nie zależy od maker/taker statusu
+zlecenia i pozostaje niezmieniony w obu wariantach).
+
+### Krok 2 — parametr w `backtest_engine.py` (wynik)
+
+Dodano `round_trip_fee_pct_override: Optional[float] = None` do
+`run_backtest()` i `fee_pct_override: Optional[float] = None` do
+`_round_trip_cost_pct()` (`src/mms4tk/backtest_engine.py`) — przekazywany do
+wszystkich 3 miejsc wywołania `_round_trip_cost_pct()` (close, Midline
+Partial TP, STALE_SPLIT_50). Domyślnie `None` → `fee_pct` = modułowa stała
+`ROUND_TRIP_FEE_PCT`, zero zmiany zachowania. Dodano stałą
+`MAKER_ROUND_TRIP_FEE_PCT = 0.00040012` (wyprowadzoną w Kroku 1) obok
+`ROUND_TRIP_FEE_PCT`, używaną wyłącznie przez opt-in override.
+
+5 nowych testów w `tests/test_backtest_engine.py`:
+- `test_round_trip_cost_pct_override_none_is_identical_to_no_override`
+- `test_round_trip_cost_pct_override_replaces_fee_pct_only`
+- `test_maker_round_trip_fee_pct_matches_a1_calibration_ratio`
+- `test_run_backtest_without_override_is_unchanged` (a) brak override = identyczny wynik jak dziś
+- `test_run_backtest_override_changes_fee_and_stats_cost` (b) override faktycznie zmienia koszt w `_stats()`
+
+Pełny `pytest -q -m "not slow"`: **409 passed, 4 deselected** (było 404 przed
+tą sesją — dokładnie +5 nowych testów, zero regresji).
+
+### Krok 3 — przeliczenie 24-mies. maker vs taker (wynik)
+
+Metodologia identyczna jak Faza 2a/2b/3.2/4: `run_backtest()` z produkcyjnymi
+ustawieniami (`engine_mode=ADAPTIVE`, VR 1,6/0,8, `stale_candles_threshold=12`,
+`trend_filter_enabled=False`, `addon_sl_variant` domyślne V2), TA SAMA
+populacja transakcji (entries/exits/sygnały niezmienione), jedyna różnica —
+`round_trip_fee_pct_override`: `None` (TAKER, dzisiejszy baseline
+`ROUND_TRIP_FEE_PCT=0,0010003`) vs `MAKER_ROUND_TRIP_FEE_PCT=0,00040012`
+(Krok 1). Skrypt: `scripts/maker_first_fee_analysis.py`.
+
+**⚠️ ZASTRZEŻENIE (wymagane, nie do pominięcia)**: kolumna MAKER zakłada
+**100% wypełnień jako maker (`postOnly`)** — NIE modeluje ryzyka
+niewypełnienia zlecenia w realnej egzekucji (fill-rate). To jest **teoretyczny
+sufit oszczędności kosztu, nie gwarantowany, wdrożony wynik**.
+`okx_executor.py`/`execute_order` NIE zostały zmienione — to wyłącznie pomiar
+w harnessie backtestowym.
+
+#### Proxy — 24 mies. (`_swap_24m`, 5+5 nienachodzących okien 122d)
+
+| okno | zakres (UTC) | TAKER (baseline) | MAKER | Δ (MAKER−TAKER) pp | txn |
+|---|---|---|---|---|---|
+| proxy_BTC_W1 | 2024-09-10..2025-01-10 | −28,84% | −24,59% | +4,24 | 173 |
+| proxy_BTC_W2 | 2025-01-10..2025-05-12 | −33,43% | −27,56% | +5,87 | 200 |
+| proxy_BTC_W3 | 2025-05-12..2025-09-11 | −20,35% | −13,09% | +7,27 | 211 |
+| proxy_BTC_W4 | 2025-09-11..2026-01-11 | +1,13% | +8,28% | +7,16 | 209 |
+| proxy_BTC_W5 | 2026-01-11..2026-05-13 | −22,83% | −18,33% | +4,50 | 175 |
+| proxy_ETH_W1 | 2024-09-10..2025-01-10 | −15,72% | −12,62% | +3,10 | 227 |
+| proxy_ETH_W2 | 2025-01-10..2025-05-12 | −14,38% | −10,92% | +3,46 | 237 |
+| proxy_ETH_W3 | 2025-05-12..2025-09-11 | −45,09% | −40,30% | +4,79 | 279 |
+| proxy_ETH_W4 | 2025-09-11..2026-01-11 | −6,19% | −1,08% | +5,11 | 243 |
+| proxy_ETH_W5 | 2026-01-11..2026-05-13 | −32,06% | −28,21% | +3,85 | 222 |
+
+- BTC (n=5): MAKER>TAKER **5/5** (p=0,0625), mean Δ +5,81 pp, sd 1,42 pp.
+  Pooled: TAKER −104,33% vs MAKER −75,28% (Δ **+29,04 pp**).
+- ETH (n=5): MAKER>TAKER **5/5** (p=0,0625), mean Δ +4,06 pp, sd 0,86 pp.
+  Pooled: TAKER −113,44% vs MAKER −93,14% (Δ **+20,30 pp**).
+- BTC+ETH (n=10): MAKER>TAKER **10/10** (p=0,0020), mean Δ +4,93 pp, sd
+  1,44 pp. Pooled: TAKER **−217,76%** vs MAKER **−168,42%** (Δ **+49,35 pp**).
+
+#### Kontrola — 384 d realne dane USDC (`_max`, 3+3 okien 122d)
+
+| okno | zakres (UTC) | TAKER (baseline) | MAKER | Δ (MAKER−TAKER) pp | txn |
+|---|---|---|---|---|---|
+| control_BTC_W1 | 2025-08-22..2025-12-22 | +2,44% | +11,27% | +8,83 | 252 |
+| control_BTC_W2 | 2025-12-22..2026-04-23 | −24,03% | −17,88% | +6,15 | 208 |
+| control_BTC_W3 | 2026-04-23..2026-08-23 | −3,33% | +4,67% | +8,01 | 230 |
+| control_ETH_W1 | 2025-08-22..2025-12-22 | −6,35% | +0,09% | +6,44 | 297 |
+| control_ETH_W2 | 2025-12-22..2026-04-23 | −26,78% | −22,56% | +4,22 | 245 |
+| control_ETH_W3 | 2026-04-23..2026-08-23 | +0,10% | +7,37% | +7,27 | 257 |
+
+- BTC (n=3): MAKER>TAKER **3/3** (p=0,2500), mean Δ +7,66 pp, sd 1,37 pp.
+  Pooled: TAKER −24,92% vs MAKER −1,93% (Δ **+22,99 pp**).
+- ETH (n=3): MAKER>TAKER **3/3** (p=0,2500), mean Δ +5,97 pp, sd 1,57 pp.
+  Pooled: TAKER −33,03% vs MAKER −15,10% (Δ **+17,92 pp**).
+- BTC+ETH (n=6): MAKER>TAKER **6/6** (p=0,0312), mean Δ +6,82 pp, sd
+  1,61 pp. Pooled: TAKER **−57,95%** vs MAKER **−17,04%** (Δ **+40,92 pp**).
+
+#### Interpretacja
+
+1. **Kierunek jest jednoznaczny i w 100% spójny**: 16/16 okien (10 proxy + 6
+   kontrola) ma MAKER > TAKER netto, oba zestawy statystycznie istotne (proxy
+   p=0,0020; kontrola p=0,0312 mimo mniejszej próby n=6). To silniejszy,
+   czystszy sygnał niż jakikolwiek filtr sygnałowy przetestowany w tym
+   workstreamie (patrz tabela zbiorcza w sekcji zamknięcia niżej) — bo to
+   deterministyczna arytmetyka kosztu, nie hipoteza rynkowa.
+2. **Wielkość efektu jest realna, ale NIE odwraca głównego wniosku**: pooled
+   proxy pozostaje głęboko ujemny nawet pod MAKER (−168,42% na 10 okien) —
+   redukcja kosztu fee o ~60% zdejmuje ~+49 pp z ~−218 pp straty, to
+   proporcja rzędu 23%, nie odwrócenie znaku. Na kontroli (realne, świeższe
+   384 dni) efekt jest silniejszy względnie (pooled −57,95%→−17,04%,
+   redukcja ~71% straty) i **4 z 6 okien kontrolnych faktycznie zmieniają
+   znak na dodatni pod MAKER** (control_BTC_W1, control_BTC_W3,
+   control_ETH_W1, control_ETH_W3) — ale to wciąż nie jest spójna,
+   samodzielna rentowność: 2/6 okien kontrolnych zostają wyraźnie ujemne
+   (control_BTC_W2 −17,88%, control_ETH_W2 −22,56%), i cały efekt jest
+   warunkowany zastrzeżeniem o 100% fill-rate.
+3. **Ten test POTWIERDZA, a nie obala, główny wniosek Etapu 5** ("strategia
+   nie ma dziś wykazanego edge'a") — najsilniejsza, najbardziej deterministyczna
+   dźwignia dostępna w projekcie (koszt egzekucji, nie sygnał) redukuje stratę
+   o dziesiątki punktów procentowych, ale jej NIE odwraca. Brak sygnałowego
+   edge'a pozostaje głównym ograniczeniem, nie koszt transakcyjny.
+
+---
+
+## 🔒 Formalne domknięcie Profitability Workstream (2026-09-12)
+
+Po maker-first (Krok 1-3 wyżej) — ostatnim uzgodnionym teście — poszukiwanie
+poprawy zyskowności `mms4tk` przez nowe filtry sygnałowe/parametry jest
+**formalnie zamknięte**. Ta sekcja jest werdyktem końcowym całego wątku pracy.
+
+### Tabela zbiorcza: wszystkie przetestowane hipotezy
+
+**Uwaga o liczeniu**: sekcja "Decyzje architektoniczne usera" wyżej mówi o "9
+niezależnie przetestowanych hipotezach" przed maker-first, ale wymienia z
+nazwy dokładnie 8. Przeszukałem cały `task.md` (`grep` po `WERDYKT`/`ODRZUCON`/
+`Status:` w każdej sekcji Faza/Etap) i nie znalazłem dziewiątej, odrębnej,
+udokumentowanej hipotezy poza tymi 8 — nie fabrykuję brakującej pozycji, żeby
+"dobić" do liczby z inherited tekstu. Tabela niżej ma więc **8 wcześniejszych +
+maker-first = 9 wierszy** (nie 10); rozbieżność z "9+1" w zadaniu jest
+świadomie udokumentowana, nie przemilczana.
+
+| # | Hipoteza | Wynik | Wdrożone do produkcji? |
+|---|---|---|---|
+| 1 | **P1** — addon SL decoupling (V0/V1/V2 warianty) | Bramka "V1/V2 bije V0 w ≥5/6 okien" NIGDY nie przeszła (V1=3/6, V2=3/6 strict). Zamknięte formalnie z INNEGO powodu (determinizm egzekucji P3, nie PnL) | **TAK** (V2 = dzisiejsza produkcja), ale NIE na podstawie dowodu PnL — patrz zastrzeżenie w tekście |
+| 2 | **P4** — siatka `base_sl_pct` (1,5-3,5%, BTC/ETH) | ODRZUCONE — 2,0% to płaskowyż bez przewagi na BTC, na ETH poszerzanie SL monotonicznie pogarsza wynik w obu połowach OOS. Przeliczone ponownie pod V2/długą historię (2026-09-11) — ta sama decyzja (2,0% zostaje), ale ówczesne uzasadnienie obalone | NIE (parametr niezmieniony: `base_sl_pct=2,0%`) |
+| 3 | **A/B `engine_mode`** (ADAPTIVE vs CLASSIC) | ODRZUCONE/brak sygnału — 24-mies.: 4/10 okien na korzyść CLASSIC (p=0,75), mean Δ +0,51pp przy sd 6,30pp (rozrzut 12× większy niż efekt), kierunki sprzeczne między symbolami (BTC→ADAPTIVE, ETH→CLASSIC) | NIE (`engine_mode=ADAPTIVE` zostaje) |
+| 4 | **Kroczące okna kalibracji TMA/ATR** (rolling recalibration, 7d/14d) | ODRZUCONE — "rolling bije static" to pozytywny dowód PRZECIWKO hipotezie (sygnatura losowego wyboru okna, nie realnej struktury rynkowej) | NIE |
+| 5 | **Filtr wyczerpania zasięgu D1** (D1 ATR exhaustion, blokada HIGH_RISK_ADD) | ODRZUCONE — efekt dokładnie zero: 0/16 okien z jakąkolwiek zmianą PnL/R:R/txn, identyczność bit-for-bit | NIE |
+| 6 | **Bramka H4 directional-bias** (model nadzoru Hermes) | JEDYNY jednoznacznie pozytywny wynik na redukcję strat: 10/10 okien netto (p=0,0020), redukuje straty o ~25-30%, **NIE tworzy zysku** (BTC/ETH pooled pozostają głęboko ujemne) | **TAK, kod zmergowany** (`htf_directional_gate_enabled`), default **OFF**, nie włączony dla żadnego symbolu na produkcji |
+| 7 | **Protected Stage-1** (Midline TP + ochrona reszty, BREAKEVEN/INVALIDATION) | NIEJEDNOZNACZNY — główny grid PASS (BREAKEVEN 10/10, INVALIDATION 9/10), kontrola na realnych danych USDC tego NIE potwierdza (BREAKEVEN 2/3 blisko zera, INVALIDATION 0/3 wyraźnie ujemne) | NIE (reguła sesji: żaden niejednoznaczny wynik nie trafia do `daemon.py`) |
+| 8 | **D1 Range Target** (jawny cel zysku skalowany zasięgiem D1) | ODRZUCONE — 0/4 kombinacji k×fixture-set przechodzi bramkę ≥8/10; cel ucina zyski wcześniej niż naturalny bieg pozycji, bez kompensującej poprawy | NIE |
+| 9 | **Maker-first execution** (postOnly zamiast taker, ten dokument) | 16/16 okien MAKER>TAKER (proxy p=0,0020, kontrola p=0,0312), redukuje stratę o ~23% (proxy) do ~71% (kontrola), **NIE odwraca jej na plus** (pooled proxy nadal −168,42%/10 okien) | NIE (harness-only measurement; `okx_executor.py` niezmieniony — wdrożenie egzekucji maker to osobny projekt inżynieryjny, poza zakresem) |
+
+**Werdykt zbiorczy**: 9/9 hipotez — zero stworzyło samodzielną, spójną
+rentowność. Jedna (#1/P1→V2) jest dziś w produkcji, ale z powodu determinizmu
+egzekucji, nie dowodu PnL. Jedna (#6/H4) redukuje straty w silnym trendzie o
+~25-30% i ma kod gotowy (default OFF, nieaktywny dla żadnego symbolu). Reszta:
+odrzucone, niejednoznaczne, lub bez efektu.
+
+### Trzy decyzje architektoniczne usera (2026-09-12)
+
+1. **Ostatni test — wykonany** (Krok 1-3 wyżej: maker-first postOnly na
+   24-mies. danych pod V2). Wynik: patrz tabela wyżej, wiersz #9.
+2. **Formalne zamknięcie Profitability Workstream** po tym teście — koniec
+   poszukiwania nowych filtrów sygnałowych, koniec dopasowywania parametrów
+   pod historię ("Stop Over-Engineering"). Zob. stwierdzenie zamykające
+   niżej.
+3. **Akceptacja natury MMS4**: system do handlu w konsolidacji pod nadzorem,
+   nie w pełni autonomiczny bot 24/7 na każdy reżim. Poleganie na Maszynie
+   Stanów (SCOUT_MODE) + asynchronicznym nadzorze Hermes Agenta (HITL).
+   **Poprawiony opis SCOUT_MODE** (koryguję tu jeszcze raz wprost, żeby nie
+   utrwalić błędu w dokumencie zamykającym): SCOUT_MODE **NIE** redukuje
+   ryzyka przez dźwignię `0,1x` — to nieaktualny model mentalny, już
+   sprostowany w Fazie 3.1. Redukuje przez **ROZMIAR POZYCJI**
+   (`SCOUT_SIZE_MULT=0,3`, mniejszy notional na wejście), podczas gdy
+   `SCOUT_LEVERAGE` zostaje na `1.0` — dźwignia się nie zmienia. Decyzja
+   architektoniczna #3 zostaje słuszna, tylko z poprawnym uzasadnieniem
+   mechanizmu.
+
+### ✅ Profitability Workstream — FORMALNIE ZAMKNIĘTY
+
+Ten wątek pracy (poszukiwanie nowych filtrów sygnałowych/parametrów w celu
+uczynienia `mms4tk` samodzielnie rentownym na historycznych danych) **kończy
+się tutaj**. 9 niezależnie przetestowanych hipotez (patrz tabela wyżej), zero
+stworzyło spójną, samodzielną rentowność; najsilniejsza dostępna dźwignia
+(koszt egzekucji, maker-first) redukuje straty, ale ich nie odwraca.
+
+**Nie proponować nowych filtrów sygnałowych ani nowych przeliczeń parametrów
+na tej samej 24-mies. historii** bez nowego, **jakościowo innego** źródła
+dowodów — nie kolejnego dopasowania parametrów do tych samych danych
+(overfitting tej samej próby, niezależnie jak "niezależnie" jest liczony
+każdy kolejny grid search). Przykłady tego, co BYŁOBY jakościowo inne (nie
+zlecenie samo w sobie, tylko ilustracja progu): nowy, niezależny zbiór danych
+spoza obecnych 24 mies.; rzeczywiste dane egzekucji produkcyjnej z długiego
+okresu (fill-rate, realny slippage) zamiast backtestu; zmiana samego reżimu
+rynkowego widoczna w danych na żywo. Operacyjna przyszłość MMS4 to Decyzja #3:
+handel w konsolidacji pod nadzorem (Maszyna Stanów + Hermes HITL), nie
+poszukiwanie kolejnego filtra.
