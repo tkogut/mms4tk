@@ -1695,6 +1695,73 @@ async def get_trading_symbols() -> Dict[str, Any]:
     return {"symbols": result, "total": len(result)}
 
 
+class BiasSyncSymbolInfo(BaseModel):
+    symbol: str
+    directional_bias: str = Field(description="Raw global manual/Hermes-set override, 'BOTH' unless explicitly changed")
+    htf_bias: str = Field(description="Automatic Faza 3.2 per-symbol H4 gate reading, 'BOTH' when disabled or never fired")
+    effective_directional_bias: str = Field(description="What evaluate_signals actually enforces right now for this symbol")
+    htf_directional_gate_enabled: bool
+    suppressed: bool = Field(description="True when the global manual override (directional_bias != 'BOTH') is actively suppressing this symbol's automatic H4 gate")
+    last_strategy_profile_reason: Optional[str] = Field(default=None, description="`reason` on the most recent strategy_profile write (global, not per-symbol)")
+    last_strategy_profile_age_seconds: Optional[float] = Field(default=None, description="Seconds since the most recent strategy_profile write; null if never written")
+
+
+class BiasSyncResponse(BaseModel):
+    symbols: List[BiasSyncSymbolInfo]
+
+
+@app.get("/api/v1/diagnostics/bias-sync", response_model=BiasSyncResponse, tags=["Diagnostics"])
+async def get_bias_sync_diagnostics() -> Dict[str, Any]:
+    """
+    Faza 6 C.3.2: read-only diagnostic view (deliberately unauthenticated --
+    this only ever reads state, it changes nothing) of the 3 directional_bias
+    layers per configured symbol, whether the global manual override is
+    currently suppressing that symbol's automatic H4 gate, and how old the
+    most recent strategy_profile write is. Built entirely from state_manager
+    reads already used elsewhere (get_trading_symbols, _trend_filter_fields)
+    -- no new state, just a single place to see bias drift/staleness at a
+    glance instead of cross-referencing /symbols and /strategy/profile.
+    """
+    manual_bias = state_manager.strategy_profile.directional_bias
+    suppressed = manual_bias != "BOTH"
+
+    last_profile: Optional[Dict[str, Any]] = None
+    try:
+        last_profile = logger_db.get_latest_strategy_profile()
+    except Exception as e:
+        logger.warning(f"bias-sync diagnostics: failed to read latest strategy_profile: {e}")
+
+    last_reason = last_profile.get("reason") if last_profile else None
+    last_age_seconds: Optional[float] = None
+    if last_profile and last_profile.get("timestamp"):
+        try:
+            ts_raw = str(last_profile["timestamp"]).replace("Z", "+00:00")
+            ts = datetime.fromisoformat(ts_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            last_age_seconds = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+        except Exception as e:
+            logger.warning(f"bias-sync diagnostics: failed to parse strategy_profile timestamp: {e}")
+
+    symbols_out = []
+    for sym, config in configured_symbols_store.items():
+        if isinstance(config, bool):
+            config = {}
+        trend_filter = _trend_filter_fields(sym, config)
+        symbols_out.append({
+            "symbol": sym,
+            "directional_bias": manual_bias,
+            "htf_bias": state_manager.get_symbol_htf_bias(sym),
+            "effective_directional_bias": state_manager.get_effective_directional_bias(sym),
+            "htf_directional_gate_enabled": trend_filter["htf_directional_gate_enabled"],
+            "suppressed": suppressed,
+            "last_strategy_profile_reason": last_reason,
+            "last_strategy_profile_age_seconds": last_age_seconds,
+        })
+
+    return {"symbols": symbols_out}
+
+
 @app.post("/api/v1/symbols/verify", tags=["Multi-Symbol"])
 async def verify_symbol_direct(req: AddSymbolRequest) -> Dict[str, Any]:
     """Directly perform one-time OKX REST API ticker verification for a symbol."""
