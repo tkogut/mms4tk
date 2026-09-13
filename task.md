@@ -3393,11 +3393,6 @@ Jeśli JUŻ ustawisz `directional_bias` ≠ "BOTH":
 - przy każdym kolejnym digeście przypominaj, że jest aktywny i tłumi bramkę.
 Zdejmujesz go ustawiając "BOTH" — to przywraca automatykę.
 
-[Wariant przed wdrożeniem C.1.1: cron mms4tk_h4_analysis.py nadal zapisuje
-`directional_bias` co 4 h. Jeśli widzisz reason zaczynający się od "H4 Cron:",
-to zapis automatyczny, nie decyzja człowieka — nie interpretuj go jako
-świadomego override'u operatora i nie zdejmuj go samodzielnie.]
-
 ## 5. Czego masz NIE robić — bezwzględnie
 
 Workstream rentowności jest FORMALNIE ZAMKNIĘTY. Przetestowano 9 niezależnych
