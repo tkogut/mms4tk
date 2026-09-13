@@ -23,7 +23,7 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "get_symbols_status",
-                    "description": "Fetch active multi-symbol trading list, per-symbol operating states (BASE_MODE/SCOUT_MODE), and active leverage.",
+                    "description": "Fetch active multi-symbol trading list, per-symbol operating states (BASE_MODE/SCOUT_MODE), and active leverage. Each symbol also reports 3 directional-bias layers: 'directional_bias' (raw manual/Hermes-set override, 'BOTH' unless explicitly changed), 'htf_bias' (the automatic Faza 3.2 H4 directional gate's own reading, 'BOTH' when the gate is disabled or has not fired), and 'effective_directional_bias' (what evaluate_signals actually enforces right now, combining the two). Check 'effective_directional_bias' per symbol to know when the gate is actively restricting LONG or SHORT entries.",
                     "parameters": {
                         "type": "object",
                         "properties": {},
