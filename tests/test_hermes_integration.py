@@ -19,9 +19,14 @@ from mms4tk.hermes_tools import HermesToolGenerator, get_hermes_tools
 
 
 def test_hermes_tool_schemas_validity():
-    """Verify Hermes function tool schemas are generated properly."""
+    """Verify Hermes function tool schemas are generated properly.
+
+    Faza 6 C.2: `emergency_reverse` was removed from the schemas exposed to
+    the LLM (the endpoint itself is untouched, still 501) -- 11 tools now,
+    not 12.
+    """
     tools = get_hermes_tools()
-    assert len(tools) == 12
+    assert len(tools) == 11
 
     names = {tool["function"]["name"] for tool in tools}
     expected_names = {
@@ -31,7 +36,6 @@ def test_hermes_tool_schemas_validity():
         "get_pnl",
         "calculate_analytics",
         "emergency_killall",
-        "emergency_reverse",
         "high_risk_add",
         "mms4_get_higher_tf",
         "mms4_set_strategy_profile",
@@ -39,6 +43,15 @@ def test_hermes_tool_schemas_validity():
         "mms4_hitl_resolve",
     }
     assert names == expected_names
+    assert "emergency_reverse" not in names
+
+
+def test_emergency_reverse_tool_not_exposed_but_endpoint_still_501():
+    """The tool is gone from the LLM-facing schema list; `get_tool_by_name`
+    must refuse to find it (KeyError), while the underlying endpoint (tested
+    elsewhere) is untouched and still fail-closed."""
+    with pytest.raises(KeyError):
+        HermesToolGenerator.get_tool_by_name("emergency_reverse")
 
 
     # Check individual tool schema getter

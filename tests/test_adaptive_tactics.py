@@ -1,8 +1,9 @@
 import os
 import pytest
+from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
-from mms4tk.api import app, state_manager, daemon as api_daemon
+from mms4tk.api import app, state_manager, daemon as api_daemon, executor as api_executor
 from mms4tk.analytics import Candle, IndicatorParams, HigherTimeframeAnalytics, MMS4SignalEngine
 from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
 from mms4tk.logger_db import LoggerDB
@@ -82,6 +83,49 @@ def test_higher_timeframe_analytics():
     assert res_marubozu["h4_candle_formation"] == "MARUBOZU_BREAKOUT"
 
 
+def test_higher_tf_endpoint_reports_data_stale_on_okx_outage(client):
+    """Faza 6 C.1.3: a real OKX outage during GET /api/v1/analytics/higher_tf
+    must surface `data_stale=true`, not silently compute a fake reading (mock
+    candles) or a 500. Same bug class already fixed for the internal H4 gate
+    (`daemon._refresh_htf_directional_gate`, `allow_mock_fallback=False`)."""
+    original_fetch = api_executor.fetch_candles
+    api_executor.fetch_candles = AsyncMock(side_effect=Exception("Simulated OKX outage"))
+    try:
+        resp = client.get("/api/v1/analytics/higher_tf")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["data_stale"] is True
+        # Best-effort neutral values, not a real reading presented as genuine.
+        assert data["h4_tma_position"] == "INSIDE"
+        assert data["h4_candle_formation"] == "NEUTRAL"
+    finally:
+        api_executor.fetch_candles = original_fetch
+
+
+def test_higher_tf_endpoint_data_stale_false_on_success(client):
+    """Regression: a normal successful fetch must NOT be flagged stale."""
+    candles_h4 = [
+        Candle(timestamp=i * 14400, open=100.0, high=100.5, low=99.5, close=100.0, volume=1.0)
+        for i in range(30)
+    ]
+    candles_d1 = [
+        Candle(timestamp=i * 86400, open=100.0, high=105.0, low=95.0, close=100.0, volume=1.0)
+        for i in range(30)
+    ]
+    original_fetch = api_executor.fetch_candles
+
+    async def _fake_fetch_candles(*args, **kwargs):
+        return candles_h4 if kwargs.get("timeframe") == "4h" else candles_d1
+
+    api_executor.fetch_candles = _fake_fetch_candles
+    try:
+        resp = client.get("/api/v1/analytics/higher_tf")
+        assert resp.status_code == 200
+        assert resp.json()["data_stale"] is False
+    finally:
+        api_executor.fetch_candles = original_fetch
+
+
 def test_strategy_profile_api(client):
     """Test GET and POST endpoints for StrategyProfile with X-MMS4-API-KEY auth."""
     # Reset strategy profile
@@ -129,6 +173,47 @@ def test_strategy_profile_api(client):
     get_resp = client.get("/api/v1/strategy/profile")
     assert get_resp.status_code == 200
     assert get_resp.json()["directional_bias"] == "LONG_ONLY"
+
+
+def test_strategy_profile_partial_update_does_not_clobber_other_fields(client):
+    """Faza 6 C.1.2: POST /api/v1/strategy/profile with only ONE field set must
+    leave every other field of the existing persisted profile untouched --
+    the bug this fixes: `directional_bias` used to reset to "BOTH" (Pydantic
+    default) on ANY write that didn't explicitly repeat it."""
+    api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
+    os.environ["MMS4_API_KEY"] = api_key
+
+    # Seed a known, non-default baseline profile.
+    state_manager.update_strategy_profile(
+        StrategyProfile(
+            directional_bias="LONG_ONLY",
+            risk_profile="MODERATE",
+            scout_override=False,
+            reason="Seeded baseline",
+        )
+    )
+
+    # Send ONLY risk_profile.
+    resp = client.post(
+        "/api/v1/strategy/profile",
+        headers={"X-MMS4-API-KEY": api_key},
+        json={"risk_profile": "AGGRESSIVE"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["risk_profile"] == "AGGRESSIVE"
+    # directional_bias, scout_override, reason must survive untouched.
+    assert data["directional_bias"] == "LONG_ONLY"
+    assert data["scout_override"] is False
+    assert data["reason"] == "Seeded baseline"
+
+    # GET confirms persistence of the merge, not just the response body.
+    get_resp = client.get("/api/v1/strategy/profile")
+    assert get_resp.json()["directional_bias"] == "LONG_ONLY"
+    assert get_resp.json()["risk_profile"] == "AGGRESSIVE"
+
+    # Reset for other tests.
+    state_manager.update_strategy_profile(StrategyProfile())
 
 
 def test_directional_bias_signal_filtering():
