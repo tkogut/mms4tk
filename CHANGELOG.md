@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.46.0] - 2026-09-14
+
+### 🥇 Gold (XAU) Support & Commodity Asset Class Onboarding
+- ✨ **OKX EEA X-Perp Gold Discovery**: Dodano pełną obsługę kontraktu złota `XAU-USD_UM_XPERP-310502` (`XAU/USD:USD-310502`) z dynamiczną autodetekcją instrumentów X-Perp w `verify_symbol_with_okx` oraz `fetch_candles`.
+- 📐 **Contract Size & Sizing Fallback**: Zaimplementowano prawidłowe przeliczanie rozmiaru kontraktu dla złota (`ctVal = 0.001` XAU per kontrakt, ~$4.30 notional) w `daemon.py` (`_get_contract_size`, `_position_notional_usd`) oraz `okx_executor.py` (`calculate_order_amount`).
+- ⚙️ **Konfiguracja Strategii XAU**: Włączono parę `XAU/USDC` z alokacją $100.0 USD (70/30 base/addon), interwałem `1h`, aktywną bramką makro `htf_directional_gate_enabled: true`, negacją impulsu Fib 38.2% oraz Giveback Protection.
+
 ## 🚀 [0.45.1] - 2026-09-14
 
 ### 🛡️ Inactivity Manager: Live Price Feed & Profit Giveback Protection (PR #60)
