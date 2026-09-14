@@ -224,6 +224,14 @@ class OKXExecutor:
             f"{clean_base}-USDT"
         ]
 
+        # 0. Check if discover_eea_xperp_symbol finds an active EEA contract (e.g. XAU-USD_UM_XPERP-310502)
+        try:
+            eea_cand = await self.discover_eea_xperp_symbol(symbol)
+            if eea_cand and eea_cand not in candidates:
+                candidates.append(eea_cand)
+        except Exception:
+            pass
+
         last_price = 0.0
         public_ticker_found = False
 
@@ -243,7 +251,8 @@ class OKXExecutor:
         # 2. Public fallback instance
         if not public_ticker_found and ccxt is not None:
             try:
-                pub_ex = ccxt.okx({"enableRateLimit": True})
+                rest_url = os.getenv("OKX_REST_URL", "https://eea.okx.com")
+                pub_ex = ccxt.okx({"enableRateLimit": True, "urls": {"api": {"rest": rest_url}}})
                 for cand in candidates:
                     try:
                         ticker = await pub_ex.fetch_ticker(cand)
@@ -302,6 +311,13 @@ class OKXExecutor:
         symbols_to_try = [target_symbol]
         if ":" in target_symbol:
             symbols_to_try.append(target_symbol.split(":")[0])
+        if "_XPERP" not in target_symbol:
+            try:
+                eea_sym = await self.discover_eea_xperp_symbol(target_symbol)
+                if eea_sym and eea_sym not in symbols_to_try:
+                    symbols_to_try.append(eea_sym)
+            except Exception:
+                pass
 
         last_error = None
         for sym in symbols_to_try:
@@ -585,9 +601,15 @@ class OKXExecutor:
             except Exception as e:
                 logger.warning(f"Failed to compute precision amount for {symbol}: {e}")
 
-        # Universal fallback for any contract instrument (BTC, ETH, SOL, ICP, AVAX, etc.)
+        # Universal fallback for any contract instrument (BTC, ETH, XAU, SOL, ICP, AVAX, etc.)
         if is_contract_symbol or "/" not in symbol:
-            ct_val = 0.0001 if "BTC" in symbol else 1.0
+            sym_u = symbol.upper()
+            if "BTC" in sym_u:
+                ct_val = 0.0001
+            elif "ETH" in sym_u or "XAU" in sym_u:
+                ct_val = 0.001
+            else:
+                ct_val = 1.0
             raw_contracts = target_usd / (price * ct_val)
             return float(self._fit_contracts(raw_contracts, 1.0, target_usd, price, ct_val, symbol))
 

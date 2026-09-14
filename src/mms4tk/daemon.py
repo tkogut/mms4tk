@@ -60,7 +60,13 @@ def _pos_notional(p: Dict[str, Any], price: float, symbol: str) -> float:
     except (TypeError, ValueError):
         ct_size = 0.0
     if ct_size <= 0:
-        ct_size = 0.0001 if "BTC" in symbol.upper() else 1.0
+        sym_u = symbol.upper()
+        if "BTC" in sym_u:
+            ct_size = 0.0001
+        elif "ETH" in sym_u or "XAU" in sym_u:
+            ct_size = 0.001
+        else:
+            ct_size = 1.0
     return _pos_contracts(p) * ct_size * price
 
 
@@ -469,7 +475,7 @@ class MMS4Daemon:
         sym_upper = symbol.upper()
         if "BTC" in sym_upper:
             return 0.0001
-        if "ETH" in sym_upper:
+        if "ETH" in sym_upper or "XAU" in sym_upper:
             return 0.001
         return 1.0
 
