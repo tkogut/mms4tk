@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.45.1] - 2026-09-14
+
+### 🛡️ Inactivity Manager: Live Price Feed & Profit Giveback Protection (PR #60)
+- ⚡ **Eliminacja 1h opóźnienia cenowego**: W `daemon.py` parametr `current_price` przekazywany do `inactivity_manager.update_and_check` pobiera teraz bieżącą cenę z aktywnej świecy (`candles[-1].close if candles else signal.price`), zamykając opóźnienie z 1 godziny do 15 sekund bez naruszania dyscypliny closed-candle w `evaluate_signals()`.
+- 🛡️ **Profit Giveback Protection**: Nowa reguła w `inactivity_manager.py` śledząca `peak_profit_atr`. W przypadku osiągnięcia szczytowego zysku $\ge 1.0\times\text{ATR}$ i nagłego cofnięcia o $>50\%$ szczytu, pozycja jest natychmiast redukowana (`SPLIT_50`) w trybie intra-candle, bez czekania na 4 świece stagnacji.
+- 🧪 **Testy jednostkowe**: Dodano `test_profit_giveback_protection` oraz `test_daemon_passes_active_candle_close_to_inactivity_manager` (427 testów przechodzi).
+
 ## 🚀 [0.45.0] - 2026-09-11
 
 ### 🎯 Faza 3 Zakończona (Optymalizacje & Bugfixy)
