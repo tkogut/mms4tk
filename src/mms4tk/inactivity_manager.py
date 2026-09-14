@@ -46,6 +46,7 @@ class PositionTracker:
     stale_detected: bool = False
     profit_stall_candles: int = 0
     last_peak_price: float = 0.0
+    peak_profit_atr: float = 0.0
     # Candle index of the last emitted protective action; guards against re-issuing the
     # same reduction on every cycle while the triggering condition persists.
     last_action_candle: int = -1
@@ -264,6 +265,21 @@ class MMS4InactivityManager:
             if tracker.side == "long"
             else (tracker.entry_price - current_price) / atr
         )
+        tracker.peak_profit_atr = max(tracker.peak_profit_atr, profit_atr)
+
+        # ──────────────────────────────────────────────────────────
+        # Profit Giveback Protection (Fast Reversal Guard)
+        # ──────────────────────────────────────────────────────────
+        giveback_min_peak = self._get_cfg(inst_id, "giveback_min_peak_atr", 1.0)
+        if tracker.peak_profit_atr >= giveback_min_peak and profit_atr <= tracker.peak_profit_atr * 0.5:
+            if not tracker.is_split:
+                logger.warning(
+                    f"🛡️ Profit Giveback Protection triggered for {inst_id} "
+                    f"(peak={tracker.peak_profit_atr:.2f} ATR -> now={profit_atr:.2f} ATR) → SPLIT_50"
+                )
+                tracker.is_split = True
+                tracker.split_at_candle = tracker.candle_count
+                return self._arm(tracker, StaleAction.SPLIT_50)
         if profit_atr >= 0.6:
             is_new_peak = (
                 current_price > tracker.last_peak_price
@@ -436,6 +452,7 @@ class MMS4InactivityManager:
                 "atr_at_entry": t.atr_at_entry,
                 "max_observed_price": t.max_observed_price,
                 "min_observed_price": t.min_observed_price,
+                "peak_profit_atr": t.peak_profit_atr,
                 "age_seconds": int(time.time() - t.entry_time),
             }
         return {
