@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.0] - 2026-09-14
+
+### 🥈 Silver (XAG) Support & Commodity Expansion
+- ✨ **OKX EEA X-Perp Silver Discovery**: Dodano pełną obsługę kontraktu srebra `XAG-USD_UM_XPERP-310509` (`XAG/USD:USD-310509`) z automatycznym wykrywaniem instrumentu i pobieraniem świec live.
+- 📐 **Contract Size & Sizing Fallback**: Zaimplementowano prawidłowe przeliczanie rozmiaru kontraktu dla srebra (`ctVal = 0.01` uncji XAG per kontrakt, ~$0.63 notional) w `daemon.py` (`_get_contract_size`, `_position_notional_usd`) oraz `okx_executor.py` (`calculate_order_amount`).
+- ⚙️ **Konfiguracja Strategii XAG**: Włączono parę `XAG/USDC` z alokacją $100.0 USD (70/30 base/addon), interwałem `1h`, aktywną bramką makro `htf_directional_gate_enabled: true`, negacją impulsu Fib 38.2% oraz Giveback Protection.
+
 ## 🚀 [0.46.1] - 2026-09-14
 
 ### 🧹 Portfolio Cleanup: Deprecation of XRP, SOL, ICP

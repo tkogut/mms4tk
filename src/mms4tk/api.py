@@ -1466,7 +1466,8 @@ def load_symbols_config() -> Dict[str, Dict[str, Any]]:
     defaults = {
         "BTC/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
         "ETH/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
-        "XAU/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
+        "XAU/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
+        "XAG/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
     }
     # 1. First priority: Load from SQLite database (persistent volume, untouched by git updates)
     try:
