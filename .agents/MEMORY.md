@@ -1,4 +1,4 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.45.0)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.45.1)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
@@ -69,14 +69,16 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
-## 📈 4. CURRENT PRODUCTION STATE (v0.45.0, zweryfikowane bezpośrednio na VPS 2026-09-11)
+## 📈 4. CURRENT PRODUCTION STATE (v0.45.1, merge PR #60 2026-09-14)
 - **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`).
 - **Capital Allocation**: $50 USD per symbol (BTC: 4 base / 2 addon contracts, ETH: 14 base / 6 addon contracts).
 - **Trend Filter State**: `tma_trend_filter_enabled` — **DISABLED** dla wszystkich symboli (re-zwalidowane na długiej historii w Fazie 3, decyzja "nie włączać" potwierdzona, nie tylko odziedziczona).
 - **H4 Directional-Bias Gate** (`htf_directional_gate_enabled`, Faza 3.2) — kod gotowy, wdrożony, **domyślnie OFF** dla wszystkich symboli (potwierdzone: brak wpisu w `system_settings` na produkcji). Najsilniejszy zmierzony sygnał w historii projektu (10/10 niezależnych okien poprawa, sign test p=0.0020) — redukuje straty w trendzie ~25-30%, nie czyni strategii zyskowną. Włączenie to świadoma decyzja operacyjna, nie automatyczna.
-- **Midline Partial TP & Inactivity Engine (PLAN-009 v2.0)**: `midline_partial_tp_enabled` — **DISABLED** (odrzucone 6/6 w backteście, P9.1). Kod naprawiony w Fazie 3.1 (closed-candle bug), ale nieaktywny.
+- **Inactivity Engine (v0.45.1 / PR #60)**:
+  - **Live Price Feed**: `daemon.py` przekazuje `candles[-1].close` do `inactivity_manager.update_and_check()`, likwidując 1h lag.
+  - **Profit Giveback Protection**: nowa reguła (`peak_profit_atr >= 1.0` i retracement >50% ze szczytu -> natychmiastowy `SPLIT_50` intra-candle).
+  - `midline_partial_tp_enabled` — **DISABLED** (odrzucone 6/6 w backteście, P9.1).
 - **Fee Accounting**: Round-trip OKX fee via FIFO, `ROUND_TRIP_FEE_PCT=0.0010003` skalibrowane na realnych `closed_trades` (Sesja A1). Net PnL od epoki (`data_collection_epoch_start`) dodatnie, ale statystycznie za mała próbka na twardy wniosek o edge'u.
-- **Otwarty follow-up (niezmergowany)**: branch `chore/phase3-2-htf-fetch-failsafe-fix` — naprawa martwego fail-safe w bramce H4 (patrz §3), gotowy, czeka na merge.
 
 ---
 
