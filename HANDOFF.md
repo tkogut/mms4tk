@@ -6,57 +6,46 @@
 > Pełny log: `task.md`, sekcja "🔹 Faza 6 (2026-09-13)".
 
 ## Session Info
-- **Conversation ID**: `hermes-integration-hardening`
+- **Conversation ID**: `inactivity-giveback-protection`
 - **Role**: Coordinator
-- **Timestamp**: 2026-09-13T11:15:00Z
-- **Status**: `completed` (implementacja + deploy) — jedno pasywne zadanie weryfikacyjne otwarte
+- **Timestamp**: 2026-09-14T11:45:00Z
+- **Status**: `completed` (implementacja, audyt om-auto-review-pr, merge om-approve-merge-pr, v0.45.1 na main)
 
 ## Current Task
-Wszystkie 7 poprawek (C.1.2→C.1.1→C.1.3→C.2→C.3.1→C.3.2→C.3.3) zaimplementowane
-(PR #55, zmergowane), zweryfikowane niezależnie (diff + 425 passed pytest), i
-zdeployowane: `antigravity_core` (HEAD=`685112a`, healthy, nowy endpoint
-`/api/v1/diagnostics/bias-sync` potwierdzony żywym requestem) ORAZ obie kopie
-`mms4tk_h4_analysis.py` na `hermes-agent` (z kopiami zapasowymi, potwierdzone
-identyczne, payload już bez `directional_bias`).
-
-**Jedyne pozostałe zadanie — pasywne, nie wymaga akcji teraz**: po najbliższym
-uruchomieniu crona (harmonogram `0 */4 * * *`) sprawdzić `strategy_profile`
-na produkcji — nowy wiersz "H4 Cron:" powinien mieć `directional_bias`
-identyczny jak poprzedni (nie nadpisany). To ostateczne potwierdzenie, że
-wdrożenie faktycznie działa na żywo.
-
-**Krok 1 z oryginalnego planu wciąż nie zrobiony**: wdrożenie promptu
-operacyjnego dla Hermesa (pełny tekst w `task.md`/Faza 6) do konfiguracji
-Hermes Agenta — to dzieje się poza tym repo, user robi to sam lub prosi o
-instrukcję krok po kroku. Niezależne od reszty, można w każdej chwili.
+Wszystkie prace nad incydentem utraty zysku z 2026-09-13 zostały zakończone:
+1. Podmiana `current_price=candles[-1].close if candles else signal.price` w `daemon.py` (eliminacja 1h opóźnienia cenowego).
+2. Reguła **Profit Giveback Protection** w `inactivity_manager.py` (`peak_profit_atr >= 1.0` i spadek >50% ze szczytu -> natychmiastowy `SPLIT_50`).
+3. Nowe testy jednostkowe (427 passed, 4 deselected).
+4. PR #60 przeszedł formalny audyt (`om-auto-review-pr 60` -> APPROVED) i został scaliły do `main` (`om-approve-merge-pr 60`).
+5. Aplikacja podniesiona do wersji `v0.45.1`.
 
 ## Progress
-- [x] Audyt kanban, H4 Cron, 12 narzędzi Hermesa — kompletny
-- [x] Prompt operacyjny dla Hermesa — gotowy, pełny tekst w `task.md`
-- [x] Plan implementacji — spisany, Krok 0 (zakres) zdecydowany przez usera
-- [x] Krok 3 (deploy path skryptu crona) — zbadane, oba miejsca zidentyfikowane
-- [x] Implementacja C.1.2→C.3.3 — kompletna, zweryfikowana, zmergowana (PR #55)
-- [x] Deploy `antigravity_core` — DONE, healthy, endpoint zweryfikowany
-- [x] Deploy `mms4tk_h4_analysis.py` na obie kopie `hermes-agent` — DONE
-- [ ] Weryfikacja empiryczna po najbliższym cyklu crona (pasywne, patrz wyżej)
-- [ ] Krok 1: wdrożenie promptu Hermesa (poza repo, niezależne, nadal otwarte)
+- [x] Diagnoza incydentu z 2026-09-13 (utrata zysku >3×ATR na BTC i ETH)
+- [x] Weryfikacja obu luk (Luka A: reset w Rule 0, Luka B: 1h lag w daemonie)
+- [x] Implementacja w izolowanym worktree przez Buildera
+- [x] Nowe testy jednostkowe (`test_profit_giveback_protection`, `test_daemon_passes_active_candle_close_to_inactivity_manager`)
+- [x] Test suite 427/427 PASS
+- [x] Otwarcie PR #60
+- [x] Niezależny przegląd Open-Mercato (`/om-auto-review-pr 60` -> APPROVED)
+- [x] Scalenie squash-merge do `main` (`/om-approve-merge-pr 60`)
+- [x] Bump wersji do `v0.45.1` (4 pliki SSOT + CHANGELOG.md)
+- [ ] Opcjonalny deploy na VPS (wg uznania usera z maintenance lockiem)
+- [ ] Pasywna weryfikacja po najbliższym cyklu crona H4 (sprawdzenie braku nadpisywania directional_bias)
+- [ ] Krok 1: wdrożenie promptu Hermesa (poza repo)
 
 ## State Snapshot
 ### Files Modified
-- `main` (`685112a`): pełna implementacja Fazy 6 (`api.py`, `daemon.py`,
-  `hermes_tools.py`, `hermes_webhook.py`, `logger_db.py`,
-  `scripts/hermes/mms4tk_h4_analysis.py`, testy)
-- VPS: `/docker/hermes-agent/data/scripts/mms4tk_h4_analysis.py` i
-  `/docker/hermes-agent/data/home/.hermes/scripts/mms4tk_h4_analysis.py`
-  zaktualizowane, kopie zapasowe `*.bak_20260913_110823` obok oryginałów
+- `main` (`d6a00f6`, v0.45.1):
+  - `src/mms4tk/daemon.py` (live price feed do Inactivity Managera)
+  - `src/mms4tk/inactivity_manager.py` (Profit Giveback Protection + peak_profit_atr)
+  - `tests/test_inactivity_manager.py` (nowe testy)
+  - `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `ui_dashboard/package.json`, `CHANGELOG.md` (v0.45.1)
 
 ### Pending Actions
-1. [x] **Inactivity Giveback Protection & Live Price Feed**: Zaimplementowane i otwarte w **PR #60** (https://github.com/tkogut/mms4tk/pull/60) — czeka na review/merge usera:
-   - Podmiana `current_price=candles[-1].close if candles else signal.price` w `daemon.py`
-   - Reguła Giveback Protection (`peak_profit_atr >= 1.0` i spadek >50% ze szczytu -> natychmiastowy `SPLIT_50`) w `inactivity_manager.py`
-   - Nowe testy jednostkowe (`427 passed, 4 deselected`).
+1. [x] **Inactivity Giveback Protection & Live Price Feed**: Zaimplementowane, zaudytowane i zmergowane w **PR #60** (commit `5365cac`), wersja wydana: `v0.45.1`.
 2. Po najbliższym cyklu crona (00/04/08/12/16/20 UTC) — sprawdzić `strategy_profile` na produkcji, potwierdzić brak zmiany `directional_bias` w nowym wierszu "H4 Cron:".
 3. Zaproponować/wdrożyć Krok 1 (prompt Hermesa) gdy user będzie gotów.
+
 
 ### Blockers
 - Brak.

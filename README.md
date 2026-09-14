@@ -5,7 +5,7 @@
 [![React Dashboard](https://img.shields.io/badge/React--UI-Vite-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.45.0](https://img.shields.io/badge/Version-0.45.0-emerald.svg)](VERSION)
+[![Version: 0.45.1](https://img.shields.io/badge/Version-0.45.1-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -24,22 +24,21 @@ interactive 1-click presets (`MAX OKX`, `SUMA PAR`).
 
 ---
 
-## 🚦 Current Development Status (v0.45.0, 2026-09-12)
+## 🚦 Current Development Status (v0.45.1, 2026-09-14)
 
-**Live on production** (OKX X-Perp, `BTC/USDC` + `ETH/USDC`). "Faza 3" (hardening + optimization
-workstream) is merged to `main` — see `task.md` for the full chronological decision log and
-`CHANGELOG.md` for a per-version summary.
+**Live on production** (OKX X-Perp, `BTC/USDC` + `ETH/USDC`). Inactivity Giveback Protection & Live Price Feed (PR #60, v0.45.1) merged to `main`. See `task.md` for the chronological decision log and `CHANGELOG.md` for per-version release notes.
 
 | Area | Status |
 |---|---|
-| Core engine, SSOT, Portfolio Margin Guard, Midline TP / Inactivity Manager | Stable, in production |
+| Inactivity Manager: Live Price Feed & Giveback Protection | **Shipped (v0.45.1, PR #60)** — intra-candle price feed via `candles[-1].close`, fast reversal guard (`peak >= 1.0` ATR, >50% giveback -> `SPLIT_50`). |
+| Core engine, SSOT, Portfolio Margin Guard, Midline TP | Stable, in production |
 | P3 V2 stop-loss SSOT (base-entry-pinned SL, no separate addon SL) | Shipped, production default |
 | SCOUT_MODE risk reduction (position size, not leverage) | Shipped, production default |
 | Backtest harness ↔ production parity (`addon_sl_variant="V2"` default) | Fixed (was silently defaulting to pre-P3 `"V0"`) |
 | H4 directional-bias gate (`htf_directional_gate_enabled`) | Implemented, **default OFF** — strongest measured signal to date (10/10 independent windows improved, sign test p=0.0020), reduces trend-regime losses ~25-30% without making the strategy net-profitable. Enabling it per symbol is a deliberate operational decision. |
 | Rolling TMA/ATR recalibration (7-14d) | Measured and **rejected** — apparent gains are in-sample selection bias (chi-square test confirms parameter choice is statistically indistinguishable from random) |
 | D1 ATR exhaustion filter (blocks `HIGH_RISK_ADD`) | Measured and **rejected** — the 2.5×ATR_D1 trigger almost never fires even in strong trends, zero measurable effect across 16 independent windows |
-| HTF gate fetch fail-safe fix | One open, unmerged branch (`chore/phase3-2-htf-fetch-failsafe-fix`) — fixes a dead fail-safe found by post-merge code review |
+
 
 **Known limitation, not a bug**: this is a mean-reversion strategy, structurally vulnerable to
 sustained trends. A 24-month backtest (`task.md`, "Faza 2") found a median independent-window net

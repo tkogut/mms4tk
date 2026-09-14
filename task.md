@@ -3447,3 +3447,23 @@ Zwięźle, konkretnie, po polsku. Liczby zamiast przymiotników. Jeśli nie masz
 danych, żeby coś stwierdzić — napisz, że nie masz danych, zamiast szacować.
 Nie dopisuj rekomendacji, o które nikt nie prosił.
 ```
+
+---
+
+## 🔹 Incydent 2026-09-14: Inactivity Giveback Protection & Live Price Feed (PR #60, v0.45.1) — ZAIMPLEMENTOWANE I ZMERGOWANE
+
+> **STATUS: ZAMKNIĘTE, ZMERGOWANE (PR #60, commit `5365cac`, wersja `v0.45.1`).**
+
+### Kontekst incydentu (2026-09-13)
+W nocy z 13 na 14 września pozycje LONG BTC/USDC i ETH/USDC osiągnęły w szczycie zysk >3×ATR (~$5.44 uPnL), po czym w 1 świecy 1H gwałtowny odwrót oddał całość zysku do małej straty.
+
+### Zidentyfikowane przyczyny źródłowe:
+1. **Luka A (Logika Rule 0)**: `inactivity_manager.py:260-288` (Profit Stall Gate) chroniła tylko przed 4 płaskimi świecami konsolidacji w strefie $\ge 0.6\times\text{ATR}$. Przy gwałtownym spadku warunek `profit_atr < 0.6` wchodził w `else: tracker.profit_stall_candles = 0`, zerując licznik zamiast uruchamiać obronę.
+2. **Luka B (1h opóźnienie w daemonie)**: `daemon.py:1346` przekazywał `current_price=signal.price`. Zmienna `signal.price` w `analytics.py:318` pochodziła z `closed_candles[-1].close` (świeca sprzed 1 godziny). Inactivity Manager przez całą godzinę zrzutu widział zamrożoną cenę szczytu ($77,314).
+
+### Zrealizowana naprawa (PR #60):
+- `daemon.py:1348`: podmiana na `current_price=candles[-1].close if candles else signal.price` (ceny bieżące co 15s wewnątrz świecy, dyscyplina closed-candle silnika sygnałów `evaluate_signals()` nienaruszona).
+- `inactivity_manager.py`: pole `peak_profit_atr` w `PositionTracker` oraz nowa reguła **Profit Giveback Protection**: dla `peak_profit_atr >= 1.0` i cofnięcia $>50\%$ szczytowego zysku natychmiastowy `SPLIT_50` intra-candle.
+- Testy: `test_profit_giveback_protection`, `test_daemon_passes_active_candle_close_to_inactivity_manager`. Pełny suite: **427 passed, 4 deselected**.
+- Wersja podbita do `v0.45.1`.
+
