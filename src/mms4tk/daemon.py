@@ -65,6 +65,8 @@ def _pos_notional(p: Dict[str, Any], price: float, symbol: str) -> float:
             ct_size = 0.0001
         elif "ETH" in sym_u or "XAU" in sym_u:
             ct_size = 0.001
+        elif "XAG" in sym_u:
+            ct_size = 0.01
         else:
             ct_size = 1.0
     return _pos_contracts(p) * ct_size * price
@@ -477,6 +479,8 @@ class MMS4Daemon:
             return 0.0001
         if "ETH" in sym_upper or "XAU" in sym_upper:
             return 0.001
+        if "XAG" in sym_upper:
+            return 0.01
         return 1.0
 
     def reconcile_positions(

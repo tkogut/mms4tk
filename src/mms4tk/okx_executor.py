@@ -608,6 +608,8 @@ class OKXExecutor:
                 ct_val = 0.0001
             elif "ETH" in sym_u or "XAU" in sym_u:
                 ct_val = 0.001
+            elif "XAG" in sym_u:
+                ct_val = 0.01
             else:
                 ct_val = 1.0
             raw_contracts = target_usd / (price * ct_val)

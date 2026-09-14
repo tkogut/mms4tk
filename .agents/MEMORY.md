@@ -1,9 +1,9 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.46.1)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.47.0)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
 - **Stack**: Python 3.12 (FastAPI, CCXT, Pandas), SQLite3, React/Vite (UI Dashboard).
-- **Exchange**: OKX Futures (EEA Multi-Collateral X-Perp: `BTC-USD_UM_XPERP-310404`, `ETH-USD_UM_XPERP-310404`, `XAU-USD_UM_XPERP-310502`).
+- **Exchange**: OKX Futures (EEA Multi-Collateral X-Perp: `BTC-USD_UM_XPERP-310404`, `ETH-USD_UM_XPERP-310404`, `XAU-USD_UM_XPERP-310502`, `XAG-USD_UM_XPERP-310509`).
 - **VPS Server**: Hostinger Cloud (`srv1490214.hstgr.cloud`, containers `antigravity_core` + `ui_dashboard`).
   - Production DB path: `/app/.agents/swarm/logs.db`.
   - Repo on server: `/docker/mms4tk` (git-tracked, deploy = `git pull` + `docker compose up -d --build`).
@@ -69,10 +69,11 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
-## 📈 4. CURRENT PRODUCTION STATE (v0.46.1, 2026-09-14)
-- **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`, `XAU/USDC`). Pary XRP, SOL, ICP zostały trwale usunięte z konfiguracji i bazy.
-- **Capital Allocation**: $100 USD per symbol (BTC, ETH, XAU).
-- **Gold (XAU)**: OKX EEA X-Perp `XAU-USD_UM_XPERP-310502` / `XAU/USD:USD-310502`, 0.001 XAU contract size, $100 allocation (70/30 base/addon), 1h timeframe, HTF directional gate enabled, impulse negation enabled.
+## 📈 4. CURRENT PRODUCTION STATE (v0.47.0, 2026-09-14)
+- **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`, `XAU/USDC`, `XAG/USDC`).
+- **Capital Allocation**: $100 USD per symbol (BTC, ETH, XAU, XAG).
+- **Gold (XAU)**: OKX EEA X-Perp `XAU-USD_UM_XPERP-310502` / `XAU/USD:USD-310502`, 0.001 XAU contract size, $100 allocation (70/30 base/addon), 1h timeframe.
+- **Silver (XAG)**: OKX EEA X-Perp `XAG-USD_UM_XPERP-310509` / `XAG/USD:USD-310509`, 0.01 XAG contract size, $100 allocation (70/30 base/addon), 1h timeframe.
 - **Trend Filter State**: `tma_trend_filter_enabled` — **DISABLED** dla wszystkich symboli (re-zwalidowane na długiej historii w Fazie 3, decyzja "nie włączać" potwierdzona, nie tylko odziedziczona).
 - **H4 Directional-Bias Gate** (`htf_directional_gate_enabled`, Faza 3.2) — kod gotowy, wdrożony, **domyślnie OFF** dla wszystkich symboli (potwierdzone: brak wpisu w `system_settings` na produkcji). Najsilniejszy zmierzony sygnał w historii projektu (10/10 niezależnych okien poprawa, sign test p=0.0020) — redukuje straty w trendzie ~25-30%, nie czyni strategii zyskowną. Włączenie to świadoma decyzja operacyjna, nie automatyczna.
 - **Inactivity Engine (v0.45.1 / PR #60)**:

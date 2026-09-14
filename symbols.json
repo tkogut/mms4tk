@@ -19,5 +19,12 @@
     "base_ratio": 70,
     "add_ratio": 30,
     "timeframe": "1h"
+  },
+  "XAG/USDC": {
+    "is_active": true,
+    "allocation_usd": 100.0,
+    "base_ratio": 70,
+    "add_ratio": 30,
+    "timeframe": "1h"
   }
 }

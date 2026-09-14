@@ -5,12 +5,12 @@
 [![React Dashboard](https://img.shields.io/badge/React--UI-Vite-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.46.1](https://img.shields.io/badge/Version-0.46.1-emerald.svg)](VERSION)
+[![Version: 0.47.0](https://img.shields.io/badge/Version-0.47.0-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **mms4tk** is a multi-symbol adaptive algorithmic trading system for **OKX Europe (EEA) X-Perps /
-Expiry Perps & Perpetual Swaps** (BTC/USDC, ETH/USDC, XAU/USDC) and Spot markets. It
+Expiry Perps & Perpetual Swaps** (BTC/USDC, ETH/USDC, XAU/USDC, XAG/USDC) and Spot markets. It
 combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React dashboard
 (`ui_dashboard`), and an autonomous LLM strategic supervisor
 ([Hermes Agent](https://hermes-agent.nousresearch.com/)).
@@ -24,12 +24,13 @@ interactive 1-click presets (`MAX OKX`, `SUMA PAR`).
 
 ---
 
-## 🚦 Current Development Status (v0.46.0, 2026-09-14)
+## 🚦 Current Development Status (v0.47.0, 2026-09-14)
 
-**Live on production** (OKX X-Perp, `BTC/USDC`, `ETH/USDC`, `XAU/USDC`). Gold (XAU) onboarded with EEA X-Perp discovery and contract sizing. See `task.md` for the chronological decision log and `CHANGELOG.md` for per-version release notes.
+**Live on production** (OKX X-Perp, `BTC/USDC`, `ETH/USDC`, `XAU/USDC`, `XAG/USDC`). Gold (XAU) and Silver (XAG) onboarded with EEA X-Perp discovery and contract sizing. See `task.md` for the chronological decision log and `CHANGELOG.md` for per-version release notes.
 
 | Area | Status |
 |---|---|
+| Silver (XAG) Support & Commodity Expansion | **Shipped (v0.47.0)** — OKX EEA X-Perp discovery (`XAG-USD_UM_XPERP-310509`), 0.01 XAG contract sizing, $100 allocation. |
 | Gold (XAU) Support & Commodity Expansion | **Shipped (v0.46.0)** — OKX EEA X-Perp discovery (`XAU-USD_UM_XPERP-310502`), 0.001 XAU contract sizing, $100 allocation. |
 | Inactivity Manager: Live Price Feed & Giveback Protection | **Shipped (v0.45.1, PR #60)** — intra-candle price feed via `candles[-1].close`, fast reversal guard (`peak >= 1.0` ATR, >50% giveback -> `SPLIT_50`). |
 | Core engine, SSOT, Portfolio Margin Guard, Midline TP | Stable, in production |
