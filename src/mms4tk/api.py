@@ -1464,9 +1464,9 @@ SYMBOLS_CONFIG_FILE = get_symbols_file_path()
 def load_symbols_config() -> Dict[str, Dict[str, Any]]:
     """Load per-symbol configuration from SQLite database, with fallback to symbols.json and defaults."""
     defaults = {
-        "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
-        "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"},
-        "SOL/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
+        "BTC/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
+        "ETH/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
+        "XAU/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
     }
     # 1. First priority: Load from SQLite database (persistent volume, untouched by git updates)
     try:

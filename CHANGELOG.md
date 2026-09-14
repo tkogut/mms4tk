@@ -4,6 +4,12 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.46.1] - 2026-09-14
+
+### 🧹 Portfolio Cleanup: Deprecation of XRP, SOL, ICP
+- 🗑️ **Usunięcie nieużywanych par**: Trwale usunięto pary `XRP/USDC`, `SOL/USDC` i `ICP/USDC` z pliku `symbols.json`, domyślnych ustawień `api.py` oraz bazy produkcyjnej SQLite (`symbol_configurations` i `system_settings`).
+- 🎯 **Aktywny portfel**: Zestaw par produkcyjnych zredukowano ściśle do aktywnego trio `BTC/USDC`, `ETH/USDC` oraz `XAU/USDC`.
+
 ## 🚀 [0.46.0] - 2026-09-14
 
 ### 🥇 Gold (XAU) Support & Commodity Asset Class Onboarding
