@@ -106,3 +106,80 @@ def test_be_escape_rule():
     # Price touches entry within 0.2% and >= 0.12% cost allowance (10.015 vs 10.0) -> BE_ESCAPE
     action = manager.update_and_check("ICP/USDC", current_price=10.015, current_atr=1.0, new_candle_closed=True)
     assert action == StaleAction.BE_ESCAPE
+
+def test_profit_giveback_protection():
+    manager = MMS4InactivityManager()
+    manager.set_symbol_config("BTC/USDC", {
+        "giveback_min_peak_atr": 1.0,
+        "stale_candles_threshold": 12,
+        "grace_candles": 5,
+    })
+    
+    manager.track_position(
+        inst_id="BTC/USDC",
+        entry_price=60000.0,
+        entry_time=time.time(),
+        side="long",
+        atr=1000.0
+    )
+    
+    # 1. Price goes to 61500 (1.5 ATR profit)
+    action = manager.update_and_check("BTC/USDC", current_price=61500.0, current_atr=1000.0, new_candle_closed=True)
+    assert action == StaleAction.HOLD
+    
+    tracker = manager.get_tracker("BTC/USDC")
+    assert tracker.peak_profit_atr == 1.5
+    
+    # 2. Fast reversal intra-candle (no new_candle_closed). 
+    # Price drops to 60700 (0.7 ATR profit). This is < 0.75 ATR (which is 1.5 * 0.5)
+    action = manager.update_and_check("BTC/USDC", current_price=60700.0, current_atr=1000.0, new_candle_closed=False)
+    assert action == StaleAction.SPLIT_50
+    assert tracker.is_split is True
+
+
+import asyncio
+from unittest.mock import MagicMock, AsyncMock
+from mms4tk.daemon import MMS4Daemon
+from mms4tk.analytics import SignalResult, Candle
+
+def test_daemon_passes_active_candle_close_to_inactivity_manager():
+    async def _async_test():
+        daemon = MMS4Daemon()
+        daemon.inactivity_manager = MagicMock()
+        daemon.inactivity_manager.is_tracking.return_value = True
+        daemon.inactivity_manager.update_and_check.return_value = StaleAction.HOLD
+        
+        daemon.executor = AsyncMock()
+        # Provide 2 mock candles. The active candle is candles[-1], its close is 102.
+        candles = [
+            Candle(timestamp=1000, open=100, high=105, low=95, close=100, volume=10),
+            Candle(timestamp=2000, open=100, high=110, low=90, close=102, volume=10),
+        ]
+        daemon.executor.fetch_candles.return_value = candles
+        daemon.executor.fetch_positions.return_value = [{"symbol": "BTC/USDC", "side": "long", "contracts": 1.0, "entryPrice": 90}]
+        daemon.executor.fetch_mark_price.return_value = 100
+        daemon.executor.fetch_order_book_spread.return_value = (100.0, 100.1)
+        
+        daemon.signal_engine = MagicMock()
+        daemon.signal_engine.evaluate_signals.return_value = SignalResult(
+            signal_type="NONE", price=100.0, stop_loss=90.0, leverage=1.0
+        )
+        
+        daemon.state_manager = MagicMock()
+        daemon.state_manager.get_risk_profile_snapshot.return_value = {
+            "state": "BASE_MODE", "leverage": 1.0, "size_multiplier": 1.0, "notional_reduction_factor": 0.0
+        }
+        
+        daemon.logger_db = MagicMock()
+        daemon.logger_db.get_position_snapshots.return_value = []
+        
+        # Run a single cycle (we just want to see what update_and_check gets called with)
+        await daemon.execute_symbol_cycle("BTC/USDC")
+        
+        # Verify update_and_check was called with current_price=102 (candles[-1].close), NOT 100 (signal.price)
+        daemon.inactivity_manager.update_and_check.assert_called_once()
+        kwargs = daemon.inactivity_manager.update_and_check.call_args.kwargs
+        assert kwargs["current_price"] == 102.0
+
+    asyncio.run(_async_test())
+

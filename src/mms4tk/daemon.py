@@ -1345,7 +1345,7 @@ class MMS4Daemon:
                         self._last_candle_ts[target_symbol] = last_closed_ts
                 stale_action = self.inactivity_manager.update_and_check(
                     inst_id=target_symbol,
-                    current_price=signal.price,
+                    current_price=candles[-1].close if candles else signal.price,
                     current_atr=current_atr,
                     new_candle_closed=new_candle,
                 )
