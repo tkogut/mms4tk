@@ -1,9 +1,9 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.46.0)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.46.1)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
 - **Stack**: Python 3.12 (FastAPI, CCXT, Pandas), SQLite3, React/Vite (UI Dashboard).
-- **Exchange**: OKX Futures (EEA Multi-Collateral X-Perp: e.g. `BTC-USD_UM_XPERP-310404`, `ETH-USD_UM_XPERP-310404`, `XAU-USD_UM_XPERP-310502`, `SOL-USD_UM_XPERP-310404`).
+- **Exchange**: OKX Futures (EEA Multi-Collateral X-Perp: `BTC-USD_UM_XPERP-310404`, `ETH-USD_UM_XPERP-310404`, `XAU-USD_UM_XPERP-310502`).
 - **VPS Server**: Hostinger Cloud (`srv1490214.hstgr.cloud`, containers `antigravity_core` + `ui_dashboard`).
   - Production DB path: `/app/.agents/swarm/logs.db`.
   - Repo on server: `/docker/mms4tk` (git-tracked, deploy = `git pull` + `docker compose up -d --build`).
@@ -69,8 +69,8 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
-## 📈 4. CURRENT PRODUCTION STATE (v0.46.0, 2026-09-14)
-- **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`, `XAU/USDC`).
+## 📈 4. CURRENT PRODUCTION STATE (v0.46.1, 2026-09-14)
+- **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`, `XAU/USDC`). Pary XRP, SOL, ICP zostały trwale usunięte z konfiguracji i bazy.
 - **Capital Allocation**: $100 USD per symbol (BTC, ETH, XAU).
 - **Gold (XAU)**: OKX EEA X-Perp `XAU-USD_UM_XPERP-310502` / `XAU/USD:USD-310502`, 0.001 XAU contract size, $100 allocation (70/30 base/addon), 1h timeframe, HTF directional gate enabled, impulse negation enabled.
 - **Trend Filter State**: `tma_trend_filter_enabled` — **DISABLED** dla wszystkich symboli (re-zwalidowane na długiej historii w Fazie 3, decyzja "nie włączać" potwierdzona, nie tylko odziedziczona).

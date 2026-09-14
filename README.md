@@ -5,12 +5,12 @@
 [![React Dashboard](https://img.shields.io/badge/React--UI-Vite-blue.svg)](ui_dashboard/src/App.jsx)
 [![OKX CCXT](https://img.shields.io/badge/CCXT-OKX--Swap-orange.svg)](https://github.com/ccxt/ccxt)
 [![Swarm Triad](https://img.shields.io/badge/Governance-v6.5%20Swarm-purple.svg)](.agents/rules/GOVERNANCE.md)
-[![Version: 0.46.0](https://img.shields.io/badge/Version-0.46.0-emerald.svg)](VERSION)
+[![Version: 0.46.1](https://img.shields.io/badge/Version-0.46.1-emerald.svg)](VERSION)
 [![Audit: 61/61](https://img.shields.io/badge/Audit-61%2F61%20PASS-brightgreen.svg)](docs/AUDIT_MMS4_2026-08-16.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **mms4tk** is a multi-symbol adaptive algorithmic trading system for **OKX Europe (EEA) X-Perps /
-Expiry Perps & Perpetual Swaps** (BTC/USDC, ETH/USDC, XAU/USDC, SOL/USDC, XRP/USDC) and Spot markets. It
+Expiry Perps & Perpetual Swaps** (BTC/USDC, ETH/USDC, XAU/USDC) and Spot markets. It
 combines an asynchronous execution daemon (`mms4tk`), a Traefik-secured React dashboard
 (`ui_dashboard`), and an autonomous LLM strategic supervisor
 ([Hermes Agent](https://hermes-agent.nousresearch.com/)).

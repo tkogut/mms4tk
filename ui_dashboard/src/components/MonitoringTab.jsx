@@ -5,7 +5,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
   const [activeSymbols, setActiveSymbols] = useState([
     { symbol: 'BTC/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
     { symbol: 'ETH/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true },
-    { symbol: 'SOL/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true }
+    { symbol: 'XAU/USDC', state: 'BASE_MODE', leverage: 3.0, is_active: true }
   ]);
 
   useEffect(() => {
