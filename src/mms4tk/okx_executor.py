@@ -1010,10 +1010,18 @@ class OKXExecutor:
             logger.error(f"Error fetching positions: {type(e).__name__}: {str(e)}")
             raise
 
-    async def fetch_last_closing_order(self, symbol: str, pos_side: str) -> Optional[Dict[str, Any]]:
+    async def fetch_last_closing_order(
+        self, symbol: str, pos_side: str, min_fill_time_ms: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Fetch the most recent closing order fill from OKX order history for the specified symbol and position side.
         Used by daemon position reconciliation to obtain exact execution price and PnL.
+
+        `min_fill_time_ms` (epoch ms, optional): when given, any candidate whose `fillTime`
+        precedes it is discarded. The caller passes the position snapshot's last-confirmed-
+        alive timestamp here, so a stale, unrelated historical close of the same symbol/side
+        (sitting in the last 10 order-history rows simply because nothing newer has traded
+        yet) can never be picked up as "the" fill for a position that only just disappeared.
         """
         if not self.has_credentials or self.exchange is None:
             return None
@@ -1092,6 +1100,11 @@ class OKXExecutor:
                 avg_px = float(item.get("avgPx") or item.get("fillPx") or item.get("px") or 0.0)
                 if avg_px > 0:
                     fill_time = int(item.get("fillTime") or item.get("uTime") or item.get("cTime") or 0)
+                    if min_fill_time_ms is not None and fill_time < min_fill_time_ms:
+                        # Older than the position's last-confirmed-alive timestamp — this
+                        # cannot be the fill that closed it, it must be a stale, unrelated
+                        # earlier trade on the same symbol/side. Skip it.
+                        continue
                     candidates.append((fill_time, item, avg_px))
 
         if not candidates:
