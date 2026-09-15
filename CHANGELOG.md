@@ -4,6 +4,12 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.3] - 2026-09-15
+
+### 📝 Comprehensive System & Architecture Documentation Sync
+- 📚 **Aktualizacja SSOT Dokumentacji**: Zaktualizowano pliki `.agents/MEMORY.md`, `README.md` oraz `docs/TELEGRAM_AND_NOTIFICATIONS.md` o pełny opis architektury autorytatywnego pojednania pozycji (Authoritative Fill & PnL Reconciliation), eliminację rozjazdów cenowych na Telegramie oraz mechanizm `fetch_last_closing_order`.
+- 🔄 **Weryfikacja Triady Botów**: Potwierdzono matrycę ról i portów dla profili `default`, `masterek` oraz `senti`.
+
 ## 🚀 [0.47.2] - 2026-09-15
  
 ### 🎯 Authoritative OKX Fill Price & PnL in Position Reconciliation

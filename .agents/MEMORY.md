@@ -1,4 +1,4 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.47.1)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.47.3)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
@@ -58,6 +58,12 @@
   faktycznej awarii (np. fail-safe bramek opartych o świeże dane) MUSI wołać
   `fetch_candles(..., allow_mock_fallback=False)` — inaczej fail-safe jest
   martwym kodem (znalezione i naprawione w Fazie 3.2-followup).
+- **Pojednanie pozycji używa rzeczywistego fillu z OKX, nie tickera (v0.47.2)**:
+  `_reconcile_positions()` w `daemon.py` przy wykryciu zniknięcia pozycji odpytuje
+  `OKXExecutor.fetch_last_closing_order()` (`private_get_trade_orders_history`),
+  pobierając dokładną cenę wyjścia (`avgPx`), `pnl_usd` i `fee_usd`. Likwiduje to
+  błąd fałszywej klasyfikacji Stop-Lossa jako `Manual/TP` (spowodowany odbiciem ceny
+  tickera po zamknięciu zlecenia) oraz usuwa rozjazd PnL i dopisek `(szac.)` na Telegramie.
 - **Strategia to mean-reversion, wrażliwa strukturalnie na silny trend** — 24-
   miesięczny backtest (Faza 2, 2026-09-11) pokazał medianę okna ≈ −23% netto,
   najgorsze okno to udokumentowany, realny +64% rajd BTC (nie artefakt danych).
@@ -69,9 +75,12 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
-## 📈 4. CURRENT PRODUCTION STATE (v0.47.0, 2026-09-14)
+## 📈 4. CURRENT PRODUCTION STATE (v0.47.3, 2026-09-15)
 - **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`, `XAU/USDC`, `XAG/USDC`).
 - **Capital Allocation**: $100 USD per symbol (BTC, ETH, XAU, XAG).
+- **Authoritative Fill & PnL Reconciliation (v0.47.2)**:
+  - `OKXExecutor.fetch_last_closing_order(symbol, side)` odpytuje historię zleceń OKX.
+  - Precyzyjny fill eliminuje rozjazdy cenowe na Telegramie i fałszywe klasyfikacje SL.
 - **Gold (XAU)**: OKX EEA X-Perp `XAU-USD_UM_XPERP-310502` / `XAU/USD:USD-310502`, 0.001 XAU contract size, $100 allocation (70/30 base/addon), 1h timeframe.
 - **Silver (XAG)**: OKX EEA X-Perp `XAG-USD_UM_XPERP-310509` / `XAG/USD:USD-310509`, 0.01 XAG contract size, $100 allocation (70/30 base/addon), 1h timeframe.
 - **Trend Filter State**: `tma_trend_filter_enabled` — **DISABLED** dla wszystkich symboli (re-zwalidowane na długiej historii w Fazie 3, decyzja "nie włączać" potwierdzona, nie tylko odziedziczona).
