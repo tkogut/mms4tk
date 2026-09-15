@@ -54,6 +54,19 @@ flowchart TD
      ```
    - Dzięki temu kontener `antigravity_core` **nie wymaga** dostępu do binarki `hermes`, socketu dockera ani innych kontenerów.
 
+### Precyzyjny Odczyt Ceny Wykonania i PnL (Authoritative Fill Reconciliation — v0.47.2)
+Przed wersją v0.47.2 proces pojednania pozycji w `daemon.py` (`_reconcile_positions()`) przy wykryciu zniknięcia pozycji z giełdy odczytywał bieżącą cenę tickera z rynku (`current_price`). Jeśli cena po realizacji zlecenia Stop-Loss odbiła w górę, powodowało to dwa problemy:
+1. **Błędną klasyfikację zdarzenia**: Obliczony ruch niekorzystny (`adverse_move`) był zaniżony (np. -1.35% zamiast rzeczywistego -2.03%), przez co giełdowy Stop-Loss był fałszywie klasyfikowany jako `Manual/TP`.
+2. **Rozjazd kwot na Telegramie**: Alert wysyłał szacowany PnL i cenę tickera z dopiskiem `(szac.)`, różniący się od rzeczywistego wyniku na OKX i w Wykazie Transakcji w UI.
+
+**Od wersji v0.47.2**:
+- `_reconcile_positions()` odpytuje giełdę OKX metodą `OKXExecutor.fetch_last_closing_order(symbol, side)` (`private_get_trade_orders_history`).
+- Pobierana jest rzeczywista cena wykonania (`avgPx`), autorytatywny zrealizowany PnL (`pnl_usd`) oraz prowizja (`fee_usd`).
+- Jeśli znaleziono zlecenie giełdowe (`is_real_fill=True`):
+  - Ruch cenowy i próg Stop-Lossa wyliczane są z dokładnej ceny wyjścia, gwarantując 100% poprawną klasyfikację `🛑 STOP-LOSS`.
+  - W powiadomieniu Telegram znika dopisek `(szac.)` — kwoty Netto, Brutto i Fee są identyczne z giełdą OKX i UI Dashboardem.
+- Jeśli OKX API jest chwilowo niedostępne, system zachowuje bezpieczny fallback do ceny tickera z flagą `is_real_fill=False` i oznaczeniem `(szac.)`.
+
 ### Źródło Konfiguracji & Zasada Recreate
 - Token i Chat ID są wstrzykiwane do kontenera ze zmiennych środowiskowych:
   - `TELEGRAM_BOT_TOKEN`: Token bota **Masterek** (`8851742516:AAExUxxCqIzebCXy_OHiekAFKHklALiJJjw`).
