@@ -216,7 +216,7 @@ def main():
             try:
                 alert_msg = f"{event_title}\n\n{event_body}"
                 hermes_cli = os.getenv("HERMES_CLI_PATH", "hermes")
-                cmd = [hermes_cli, "send", "--to", "telegram", alert_msg]
+                cmd = [hermes_cli, "-p", "masterek", "send", "--to", "telegram", alert_msg]
                 subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 print(f"  💬 Telegram push notification sent for {event_type}")
                 import time
