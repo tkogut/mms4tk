@@ -4,6 +4,13 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.4] - 2026-09-15
+
+### 🛡️ Reconciliation Fill Matching: Time-Bounded Against Stale Orders
+- 🕐 **`min_fill_time_ms` w `OKXExecutor.fetch_last_closing_order`**: Dodano dolną granicę czasową do wyszukiwania zamykającego zlecenia w historii OKX — kandydat starszy niż ostatni potwierdzony moment życia pozycji (`position_snapshots.updated_at`) jest teraz odrzucany, zamiast być błędnie dopasowanym jako fill, który właśnie zamknął pozycję.
+- 🔗 **`daemon.reconcile_positions`**: liczy tę granicę z zapisanego `updated_at` snapshotu i przekazuje ją do `fetch_last_closing_order` — domyka lukę znalezioną w niezależnym audycie commitu `340ae91` (0.47.2).
+- 🧪 **Testy**: 2 nowe przypadki w `tests/test_reconciliation_fill_order.py` — odrzucenie nieaktualnego zlecenia (z dowodem, że bez granicy to samo zlecenie zostałoby błędnie wybrane) oraz weryfikacja, że `daemon.py` poprawnie liczy i przekazuje wartość graniczną z `updated_at`. Pełny `pytest -q -m "not slow"`: 432 passed, 4 deselected (brak regresji).
+
 ## 🚀 [0.47.3] - 2026-09-15
 
 ### 📝 Comprehensive System & Architecture Documentation Sync

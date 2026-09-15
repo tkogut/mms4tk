@@ -541,11 +541,27 @@ class MMS4Daemon:
 
             entry_price = float(snap["entry_price"] or 0.0)
 
+            # Lower bound for the closing-order search: the last time this snapshot was
+            # confirmed still open (refreshed every cycle while alive — see
+            # LoggerDB.save_position_snapshot). Anything closing THIS position must have
+            # a fillTime at or after that moment; without this bound, a stale unrelated
+            # historical close for the same symbol/side sitting in the last 10 order-
+            # history rows could be mistaken for the fill that just happened.
+            min_fill_time_ms: Optional[int] = None
+            try:
+                updated_at = snap.get("updated_at") if hasattr(snap, "get") else None
+                if updated_at:
+                    min_fill_time_ms = int(datetime.fromisoformat(str(updated_at)).timestamp() * 1000)
+            except (ValueError, TypeError) as pe:
+                logger.debug(f"Could not parse snapshot updated_at for {target_symbol}/{side}: {pe}")
+
             # Fetch exact closing order from OKX order history
             closing_order = None
             if hasattr(self.executor, "fetch_last_closing_order"):
                 try:
-                    res = self.executor.fetch_last_closing_order(target_symbol, side)
+                    res = self.executor.fetch_last_closing_order(
+                        target_symbol, side, min_fill_time_ms=min_fill_time_ms
+                    )
                     if inspect.isawaitable(res) or asyncio.iscoroutine(res):
                         closing_order = await res
                     elif isinstance(res, dict):
