@@ -4,6 +4,12 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.1] - 2026-09-15
+
+### 🤖 Telegram Alert Routing to Dedicated Masterek Bot
+- 🎯 **Dedykowany routing powiadomień MMS4**: Zaktualizowano zmienne środowiskowe `TELEGRAM_BOT_TOKEN` w kontenerze `antigravity_core` na dedykowany token bota Masterek (`@MMS4_masterek_bot`), eliminując wysyłkę alertów o pozycjach do bota `default`.
+- 🔄 **Hermes Event Dispatcher Profile Pinning**: Skonfigurowano `scripts/hermes/mms4tk_event_dispatcher.py` do jawnego przekazywania profilu `-p masterek` przy wywołaniach `hermes send --to telegram`.
+
 ## 🚀 [0.47.0] - 2026-09-14
 
 ### 🥈 Silver (XAG) Support & Commodity Expansion
