@@ -1,4 +1,4 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.47.0)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.47.1)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
@@ -84,7 +84,51 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
-## 📚 5. WSKAŹNIK DO POZOSTAŁEJ DOKUMENTACJI
+## 📡 6. TELEGRAM NOTIFICATIONS & HERMES TRIAD ARCHITECTURE (SSOT for all agents)
+
+### A. Dual Dispatch Architecture:
+Powiadomienia w ekosystemie MMS4TK są wysyłane dwoma całkowicie odrębnymi ścieżkami:
+
+1. **Ścieżka bezpośrednia z silnika (Daemon Direct Dispatch):**
+   - **Komponenty**: `src/mms4tk/daemon.py` → `src/mms4tk/telegram_queue.py` (`TelegramQueueManager`).
+   - **Zakres**: Natychmiastowe alerty o cyklu życia pozycji:
+     - `POSITION_OPENED` (otwarcie pozycji bazowej lub dokupki `HIGH_RISK_ADD`),
+     - `POSITION_CLOSED` (zamknięcie przez Stop Loss, Take Profit, Midline TP),
+     - `STALE_POSITION_FORCE_CLOSE` (zamknięcie z powodu limitu czasu / reguły Stale),
+     - `PROFIT_GIVEBACK_SPLIT` (podział pozycji SPLIT_50 przez Giveback Protection),
+     - Błędy krytyczne egzekucji OKX.
+   - **Mechanizm**: Asynchroniczny wątek daemona (`TelegramQueueWorker`) wykonuje bezpośrednie żądanie HTTP POST do `https://api.telegram.org/bot<TOKEN>/sendMessage`.
+   - **Źródło konfiguracji**: Plik środowiskowy kontenera `/docker/mms4tk/.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
+   - ⚠️ **KRYTYCZNA REGUŁA DLA AGENTÓW (ZAKAZ UŻYWANIA STAREGO TOKENA)**:
+     - W `/docker/mms4tk/.env` token `TELEGRAM_BOT_TOKEN` MUSI być ustawiony na dedykowanego bota **Masterek** (`8851742516:AAExUxxCqIzebCXy_OHiekAFKHklALiJJjw`, `@MMS4_masterek_bot`).
+     - **ZAKAZ**: Pod żadnym pozorem nie wpisywać tam tokena bota głównego (`default`), aby alerty tradingowe nie mieszały się z czatem Koordynatora.
+     - ⚠️ **ZASADA PRZEŁADOWANIA ŚRODOWISKA DOCKERA**: W Docker Compose polecenie `docker restart antigravity_core` **NIE przeładowuje zmiennych środowiskowych** z pliku `.env` (kontener zachowuje stary proces i stare env w pamięci). Każda modyfikacja pliku `/docker/mms4tk/.env` WYMAGA wykonania:
+       ```bash
+       cd /docker/mms4tk && docker compose up -d antigravity_core ui_dashboard
+       ```
+
+2. **Ścieżka analityczna i okresowa (Hermes Cron & Dispatcher):**
+   - **Komponenty**: Skrypty w `/opt/data/scripts/` (lub `scripts/hermes/`) uruchamiane przez cron Hermesa.
+   - **Zakres**:
+     - `mms4tk H4 Analysis` (`0 */4 * * *`, skrypt `mms4tk_h4_analysis.py`),
+     - `mms4tk D1 ATR Monitor` (`8 0 * * *`, skrypt `mms4tk_d1_atr_check.py`),
+     - `mms4tk Multi-Symbol Digest` (`30 2,6,10,14,18,22 * * *`, skrypt `mms4tk_multi_symbol_digest.py`),
+     - `mms4tk STALE Watch` (`*/15 * * * *`, skrypt `mms4tk_stale_watch.py`),
+     - `mms4tk Event Dispatcher` (`* * * * *`, skrypt `mms4tk_event_dispatcher.py`).
+   - **Profil Hermesa**: Wszystkie te 5 zadań należy rejestrować i utrzymywać **wyłącznie w profilu `masterek`** (`hermes -p masterek cron ...`).
+   - W profilu `default` zadania mms4tk są usunięte (profil `default` nie ma zadań tradingowych).
+   - W skrypcie `mms4tk_event_dispatcher.py` wywołania CLI jawnie przekazują profil: `hermes -p masterek send --to telegram ...`.
+
+### B. Matryca Triady Botów Telegram na VPS:
+| Profil | Bot Username | ID Tokena | Port API | Rola w systemie |
+| :--- | :--- | :--- | :--- | :--- |
+| **`default`** | `@hermes_h257d665t5aa7a2c_bot` | `8858946894` | `8643` | Główny Koordynator, DevOps, nadzór VPS, Docker |
+| **`masterek`** | `@MMS4_masterek_bot` | `8851742516` | `8644` | Dedykowany Trading Supervisor MMS v4 (OKX: BTC, ETH, XAU, XAG) |
+| **`senti`** | `@Senti_tk_bot` | `8638368161` | `8645` | Dedykowany Analityk GPW & Portfolio Sentinel |
+
+---
+
+## 📚 7. WSKAŹNIK DO POZOSTAŁEJ DOKUMENTACJI
 - **Strategia i algorytm (nienaruszalny fundament merytoryczny)**: `docs/MASTERMIND_STRATEGY.md`, `docs/STRATEGY_AND_ALGORITHM.md`, `docs/mms4_mastermind_full_strategy_and_architecture.md`.
 - **Reszta dokumentacji human-facing**: `docs/` (jedyny kanoniczny katalog — `.agents/docs/` zlikwidowany 2026-09-12 jako przestarzała, nielinkowana kopia).
 - **Wiedza dla agentów / Graph RAG**: `.agents/specs/` (w tym `.agents/specs/knowledge/` dla dystylacji NotebookLM).
