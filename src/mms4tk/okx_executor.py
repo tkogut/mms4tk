@@ -1010,6 +1010,110 @@ class OKXExecutor:
             logger.error(f"Error fetching positions: {type(e).__name__}: {str(e)}")
             raise
 
+    async def fetch_last_closing_order(self, symbol: str, pos_side: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch the most recent closing order fill from OKX order history for the specified symbol and position side.
+        Used by daemon position reconciliation to obtain exact execution price and PnL.
+        """
+        if not self.has_credentials or self.exchange is None:
+            return None
+
+        pos_s = str(pos_side or "").lower()
+        if pos_s not in ("long", "short"):
+            return None
+
+        closing_side = "sell" if pos_s == "long" else "buy"
+
+        target_symbol = symbol
+        try:
+            if "XPERP" not in symbol and ":" not in symbol:
+                eea_xperp = await self.discover_eea_xperp_symbol(symbol)
+                if eea_xperp:
+                    target_symbol = eea_xperp
+        except Exception as e:
+            logger.debug(f"discover_eea_xperp_symbol failed for {symbol}: {e}")
+
+        raw_symbol = self.to_native_inst_id(target_symbol)
+        norm_sym = normalize_symbol(symbol)
+
+        # Determine instrument type for OKX API
+        inst_type = "SWAP" if "-SWAP" in raw_symbol else "FUTURES"
+
+        orders_data: List[Dict[str, Any]] = []
+
+        # 1. Query OKX private_get_trade_orders_history with instId
+        for itype in [inst_type, "FUTURES", "SWAP"]:
+            params: Dict[str, Any] = {"instType": itype, "limit": "10"}
+            if raw_symbol:
+                params["instId"] = raw_symbol
+            try:
+                res = await self.exchange.private_get_trade_orders_history(params)
+                if isinstance(res, dict) and "data" in res and res["data"]:
+                    orders_data = res["data"]
+                    break
+            except Exception as e:
+                logger.debug(f"private_get_trade_orders_history failed with params {params}: {e}")
+
+        # 2. Fallback query without instId if specific instId gave no data
+        if not orders_data:
+            for itype in ["FUTURES", "SWAP"]:
+                params = {"instType": itype, "limit": "10"}
+                try:
+                    res = await self.exchange.private_get_trade_orders_history(params)
+                    if isinstance(res, dict) and "data" in res and res["data"]:
+                        orders_data = res["data"]
+                        break
+                except Exception as e:
+                    logger.debug(f"Fallback private_get_trade_orders_history failed ({itype}): {e}")
+
+        if not orders_data:
+            return None
+
+        # Filter matching closing orders
+        candidates = []
+        for item in orders_data:
+            state = item.get("state")
+            if state not in ("filled", "partially_filled"):
+                continue
+
+            item_pos_side = str(item.get("posSide") or "").lower()
+            item_side = str(item.get("side") or "").lower()
+            item_inst_id = item.get("instId", "")
+
+            # Match symbol if available
+            if norm_sym and item_inst_id:
+                if normalize_symbol(item_inst_id) != norm_sym:
+                    continue
+
+            pos_matches = (item_pos_side == pos_s) or (not item_pos_side) or (item_pos_side == "net")
+            side_matches = (item_side == closing_side)
+
+            if pos_matches and side_matches:
+                avg_px = float(item.get("avgPx") or item.get("fillPx") or item.get("px") or 0.0)
+                if avg_px > 0:
+                    fill_time = int(item.get("fillTime") or item.get("uTime") or item.get("cTime") or 0)
+                    candidates.append((fill_time, item, avg_px))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        best_fill_time, best_item, exit_px = candidates[0]
+
+        ord_id = str(best_item.get("ordId") or best_item.get("clOrdId") or "")
+        pnl = float(best_item.get("pnl") or 0.0)
+        fee = abs(float(best_item.get("fee") or best_item.get("fee_usd") or 0.0))
+
+        return {
+            "order_id": ord_id,
+            "exit_price": float(exit_px),
+            "pnl_usd": float(pnl),
+            "fee_usd": float(fee),
+            "fill_time": int(best_fill_time),
+            "is_real_fill": True
+        }
+
+
     async def set_leverage(self, leverage: float, symbol: str) -> Dict[str, Any]:
         """
         Set leverage for a specific market symbol.

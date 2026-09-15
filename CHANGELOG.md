@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.2] - 2026-09-15
+ 
+### 🎯 Authoritative OKX Fill Price & PnL in Position Reconciliation
+- 🔍 **Exact Fill Price from OKX**: Zaimplementowano metodę `OKXExecutor.fetch_last_closing_order(symbol, pos_side)` odpytującą historię zleceń OKX (`private_get_trade_orders_history`). Zastąpiono szacunkową cenę tickera z chwili wykrycia zniknięcia pozycji rzeczywistą ceną wykonania (`avgPx`), PnL oraz fee.
+- 🛑 **Poprawna klasyfikacja STOP-LOSS**: Wyeliminowano błąd fałszywej klasyfikacji SL jako `Manual/TP` wynikający ze spreadu lub odbicia ceny tickera po zamknięciu pozycji.
+- 💬 **Wiarygodne alerty Telegram**: Usunięto dopisek `(szac.)` przy potwierdzonym fillu z giełdy, a wartości Netto, Brutto i fee są w 100% spójne z giełdą OKX i Wykazem Transakcji w UI Dashboardzie.
+- 🧪 **Testy jednostkowe**: Dodano dedykowany zestaw testów `tests/test_reconciliation_fill_order.py` badający realny fill z OKX, parsowanie odpowiedzi giełdy oraz bezpieczny fallback.
+
 ## 🚀 [0.47.1] - 2026-09-15
 
 ### 🤖 Telegram Alert Routing to Dedicated Masterek Bot

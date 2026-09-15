@@ -1,6 +1,7 @@
 import os
 import time
 import asyncio
+import inspect
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
@@ -483,11 +484,11 @@ class MMS4Daemon:
             return 0.01
         return 1.0
 
-    def reconcile_positions(
+    async def _async_reconcile_positions(
         self,
-        target_symbol: str,
-        live_positions: List[Dict[str, Any]],
-        current_price: float
+        target_symbol: Optional[str] = None,
+        live_positions: Optional[List[Dict[str, Any]]] = None,
+        current_price: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         """
         Compare the exchange's open positions against the snapshot from the previous cycle.
@@ -502,6 +503,17 @@ class MMS4Daemon:
 
         Returns a list of reconciliation events (empty when nothing changed).
         """
+        if target_symbol is None:
+            target_symbol = self.symbol
+        if live_positions is None:
+            try:
+                live_positions = await self.executor.fetch_positions()
+            except Exception as pe:
+                logger.warning(f"Failed to fetch live positions for reconciliation: {pe}")
+                live_positions = []
+        if current_price is None:
+            current_price = 0.0
+
         events: List[Dict[str, Any]] = []
 
         live_by_side: Dict[str, Dict[str, Any]] = {}
@@ -528,7 +540,43 @@ class MMS4Daemon:
                 continue
 
             entry_price = float(snap["entry_price"] or 0.0)
-            exit_price = float(current_price or snap["last_price"] or 0.0)
+
+            # Fetch exact closing order from OKX order history
+            closing_order = None
+            if hasattr(self.executor, "fetch_last_closing_order"):
+                try:
+                    res = self.executor.fetch_last_closing_order(target_symbol, side)
+                    if inspect.isawaitable(res) or asyncio.iscoroutine(res):
+                        closing_order = await res
+                    elif isinstance(res, dict):
+                        closing_order = res
+                except Exception as fe:
+                    logger.warning(f"Failed to fetch last closing order for {target_symbol}/{side}: {fe}")
+
+            if not isinstance(closing_order, dict):
+                closing_order = None
+
+            is_real_fill = False
+            real_pnl_usd = None
+            real_fee_usd = None
+
+            if closing_order:
+                try:
+                    ep = float(closing_order.get("exit_price") or 0.0)
+                    if ep > 0:
+                        exit_price = ep
+                        is_real_fill = True
+                        if closing_order.get("pnl_usd") is not None:
+                            real_pnl_usd = float(closing_order["pnl_usd"])
+                        if closing_order.get("fee_usd") is not None:
+                            real_fee_usd = float(closing_order["fee_usd"])
+                    else:
+                        exit_price = float(current_price or snap.get("last_price") or 0.0)
+                except (ValueError, TypeError):
+                    exit_price = float(current_price or snap.get("last_price") or 0.0)
+            else:
+                exit_price = float(current_price or snap.get("last_price") or 0.0)
+
             if entry_price <= 0 or exit_price <= 0:
                 self.logger_db.delete_position_snapshot(target_symbol, side)
                 continue
@@ -575,11 +623,13 @@ class MMS4Daemon:
 
             contracts = float(snap["contracts"] or 0.0)
             ct_size = self._get_contract_size(target_symbol)
-            pnl_usd = pnl_pct * entry_price * contracts * ct_size
+            calc_pnl_usd = pnl_pct * entry_price * contracts * ct_size
+            pnl_usd = real_pnl_usd if (is_real_fill and real_pnl_usd is not None) else calc_pnl_usd
 
+            fill_tag = "real_fill" if is_real_fill else "est_fill"
             logger.warning(
                 f"⟲ Reconciliation: {target_symbol} {side.upper()} disappeared from OKX "
-                f"(entry=${entry_price:,.4f} exit=${exit_price:,.4f} PnL={pnl_pct*100:+.2f}%) "
+                f"(entry=${entry_price:,.4f} exit=${exit_price:,.4f} [{fill_tag}] PnL={pnl_pct*100:+.2f}%) "
                 f"→ {'STOP-LOSS' if is_stop_out else 'closed without SL trigger'}"
             )
 
@@ -628,14 +678,25 @@ class MMS4Daemon:
                 "side": side,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
+                "pnl_usd": pnl_usd,
                 "pnl_pct": pnl_pct,
                 "is_stop_loss": is_stop_out,
+                "is_real_fill": is_real_fill,
+                "order_id": closing_order.get("order_id") if closing_order else None,
                 "new_state": self.state_manager.get_symbol_state(target_symbol).value,
             })
 
             est_fee = entry_price * contracts * ct_size * 0.001
-            pnl_net_est = pnl_usd - est_fee
-            pnl_icon = "🟢" if pnl_net_est >= 0 else "🔴"
+            fee_usd = real_fee_usd if (is_real_fill and real_fee_usd is not None) else est_fee
+            pnl_net = pnl_usd - fee_usd
+            pnl_icon = "🟢" if pnl_net >= 0 else "🔴"
+
+            if is_real_fill:
+                net_label = f"- Wynik Netto: {pnl_icon} ${pnl_net:+.2f} USD ({pnl_pct*100:+.2f}%)\n"
+                fee_label = f"- Prowizje OKX: ${fee_usd:.2f} USD\n"
+            else:
+                net_label = f"- Wynik Netto (szac.): {pnl_icon} ${pnl_net:+.2f} USD ({pnl_pct*100:+.2f}%)\n"
+                fee_label = f"- Prowizje OKX (szac.): ~${fee_usd:.2f} USD\n"
 
             if is_stop_out:
                 try:
@@ -646,8 +707,8 @@ class MMS4Daemon:
                             f"Pozycja zamknięta przez Stop-Loss na giełdzie.\n"
                             f"- Wejście: `${entry_price:,.4f}`\n"
                             f"- Wyjście: `${exit_price:,.4f}`\n"
-                            f"- Wynik Netto (szac.): {pnl_icon} ${pnl_net_est:+.2f} USD ({pnl_pct*100:+.2f}%)\n"
-                            f"- Prowizje OKX (szac.): ~${est_fee:.2f} USD\n"
+                            f"{net_label}"
+                            f"{fee_label}"
                             f"- Wynik Brutto: ${pnl_usd:+.2f} USD\n"
                             f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
                         ),
@@ -665,8 +726,8 @@ class MMS4Daemon:
                             f"Pozycja zamknięta na OKX (Manual/TP).\n"
                             f"- Wejście: `${entry_price:,.4f}`\n"
                             f"- Wyjście: `${exit_price:,.4f}`\n"
-                            f"- Wynik Netto (szac.): {pnl_icon} ${pnl_net_est:+.2f} USD ({pnl_pct*100:+.2f}%)\n"
-                            f"- Prowizje OKX (szac.): ~${est_fee:.2f} USD\n"
+                            f"{net_label}"
+                            f"{fee_label}"
                             f"- Wynik Brutto: ${pnl_usd:+.2f} USD\n"
                             f"- Stan: `{self.state_manager.get_symbol_state(target_symbol).value}`"
                         ),
@@ -691,6 +752,27 @@ class MMS4Daemon:
                 logger.warning(f"Could not persist position snapshot for {target_symbol}/{side}: {e}")
 
         return events
+
+    def reconcile_positions(
+        self,
+        target_symbol: Optional[str] = None,
+        live_positions: Optional[List[Dict[str, Any]]] = None,
+        current_price: Optional[float] = None
+    ):
+        """
+        Dual sync/async entry point for position reconciliation.
+        If called inside an active asyncio event loop, returns a coroutine to be awaited.
+        If called synchronously without an active event loop (e.g. in tests),
+        runs the reconciliation via asyncio.run() and returns the event list directly.
+        """
+        coro = self._async_reconcile_positions(target_symbol, live_positions, current_price)
+        try:
+            asyncio.get_running_loop()
+            return coro
+        except RuntimeError:
+            return asyncio.run(coro)
+
+    _reconcile_positions = reconcile_positions
 
     def _get_indicator_params(self, symbol: Optional[str] = None) -> IndicatorParams:
         """Build IndicatorParams from live SQLite system_settings, falling back to
@@ -1001,7 +1083,7 @@ class MMS4Daemon:
         # so this cycle already trades under the corrected risk state.
         reconciliation_events: List[Dict[str, Any]] = []
         try:
-            reconciliation_events = self.reconcile_positions(target_symbol, live_positions, signal.price)
+            reconciliation_events = await self.reconcile_positions(target_symbol, live_positions, signal.price)
         except Exception as rec_err:
             logger.error(f"Reconciliation failed for {target_symbol}: {rec_err}", exc_info=True)
 
