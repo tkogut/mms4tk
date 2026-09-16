@@ -20,7 +20,7 @@ You are **The Builder** in the Swarm Triad:
 
 | Role | Model | Permissions |
 |---|---|---|
-| Coordinator | Gemini 3.6 Flash (High) | plan, route, review | | |
+| Coordinator | Gemini 3.6 Flash (High) | plan, route, review | | | |
 | **Builder (YOU)** | **Claude Code / VS Code** | **implement, commit, test** |
 | Auditor | Gemini 3.6 Flash (Medium) | lint, audit, block |
 
