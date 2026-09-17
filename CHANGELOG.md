@@ -4,6 +4,28 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.3] - 2026-09-17
+
+### 🔥 Fixed — Production Incident #2: Unbounded cycle_logs N+1 Scan
+- 🐛 **`LoggerDB.get_closed_trades()`**: `closed_trades` nigdy nie miało kolumn
+  `reason`/`entry_timestamp`, więc dla KAŻDEJ transakcji bez zapisanego powodu
+  wyjścia funkcja odpytywała **całą tabelę `cycle_logs`** (530 147 wierszy w
+  produkcji) zapytaniem `LIKE '%...%'` — bez indeksu, bez zapisania wyniku.
+  `GET /api/v1/history/trades` jest odpytywane co 5s przez dashboard, więc ten
+  skan powtarzał się od zera w nieskończoność. Potwierdzone na żywo przez
+  `strace -c -p <pid>`: 100% CPU, ~20 000 `pread64`/s na `logs.db`, healthcheck
+  konsekwentnie przekraczał timeout.
+- ✅ **Naprawa**: nowe kolumny `reason`/`entry_timestamp` na `closed_trades`,
+  wypełniane raz i odczytywane przy każdym kolejnym wywołaniu zamiast ponownego
+  skanu `cycle_logs`. Nowy indeks złożony `idx_cycle_logs_symbol_ts` przyspiesza
+  też sam pierwszy (jednorazowy) lookup per transakcję.
+- 🧪 Nowy test regresyjny `test_logger_db_closed_trades_cache.py` — usuwa
+  `cycle_logs` między dwoma wywołaniami i dowodzi, że drugie wywołanie i tak
+  zwraca poprawny, zcache'owany wynik (nie re-derywuje go). Pełny
+  `pytest -q -m "not slow"`: 436 passed, 4 deselected.
+- ⚠️ Niepowiązane z incydentem #1 (`0.48.2`, `trade_sync.py` overlap guard) —
+  to osobny bug w zupełnie innej ścieżce kodu, ujawniony dopiero po naprawie #1.
+
 ## 🚀 [0.48.2] - 2026-09-17
 
 ### 🔥 Fixed — Production Incident: Unbounded Concurrent Trade Sync
