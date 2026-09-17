@@ -4,6 +4,23 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.2] - 2026-09-17
+
+### 🔥 Fixed — Production Incident: Unbounded Concurrent Trade Sync
+- 🐛 **`OKXTradeSyncWorker.sync_closed_trades()`**: Dodano `asyncio.Lock` chroniący przed
+  nakładającymi się wywołaniami. Commit `0d528d1` ("non-blocking trade sync") zamienił
+  `await` na `asyncio.create_task(...)` w `GET /api/v1/history/trades` — endpoint jest
+  odpytywany przez front-end co 5s, znacznie szybciej niż pojedynczy sync (2 zapytania
+  do OKX + `initialize()`) zdąża się zakończyć. Bez blokady każde odpytanie odpalało
+  nowe, nakładające się zadanie w tle, wszystkie współdzielące ten sam obiekt
+  `executor.exchange` — to realnie powodowało "Unclosed client session" oraz kaskadowe
+  `RequestTimeout` na niepowiązanych endpointach (balance/positions), aż do przekroczenia
+  timeoutu healthchecka i oznaczenia kontenera jako `unhealthy` na żywej produkcji.
+- 🧪 Nowy test regresyjny (`test_trade_sync_worker_skips_overlapping_calls`) dowodzący,
+  że nakładające się wywołanie jest pomijane, a `initialize()` uruchamia się dokładnie
+  raz. Pełny `pytest -q -m "not slow"`: 434 passed, 4 deselected (bez regresji przed
+  poprawką) + nowy test 3/3 w `test_trade_sync.py` osobno.
+
 ## 🚀 [0.48.1] - 2026-09-17
 ### 🐛 Fixed
 - Normalization of symbols in AnalyticsTab chart overlays.
