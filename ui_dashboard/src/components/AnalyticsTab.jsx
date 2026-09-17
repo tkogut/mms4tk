@@ -4,7 +4,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 import { formatSignedUsd } from '../utils/formatters';
 
 
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label, showTma }) => {
     if (active && payload && payload.length) {
         const c = payload[0].payload;
         return (
@@ -57,6 +57,34 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
   const [filterPnl, setFilterPnl] = useState('ALL');
   const [sortOrder, setSortOrder] = useState('newest'); // 'newest', 'oldest', 'pnl_high', 'pnl_low'
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Symbol normalization utility helper — must be declared before mappedCandles/
+  // activePos below, both of which call it inside a useMemo factory (executed
+  // synchronously at that point in render, not deferred) — referencing it from
+  // its old position further down this file threw `ReferenceError: Cannot access
+  // 'normalizeSym' before initialization` on every single render of this tab.
+  const normalizeSym = (sym) => {
+    if (!sym) return '';
+    let str = String(sym).toUpperCase().trim();
+    str = str.split(':')[0];
+    str = str.replace(/-\d{6,}$/, '');
+    str = str.replace(/-\d+$/, '');
+    str = str.replace('_UM_XPERP', '');
+    str = str.replace('-USD_UM_XPERP', '');
+    str = str.replace('_XPERP', '');
+    str = str.replace('-SWAP', '');
+    str = str.replace('-SPOT', '');
+
+    if (str.includes('/')) {
+      const parts = str.split('/');
+      return `${parts[0]}/${parts[1] === 'USD' ? 'USDC' : parts[1] || 'USDC'}`;
+    }
+    if (str.includes('-')) {
+      const parts = str.split('-');
+      return `${parts[0]}/${parts[1] === 'USD' ? 'USDC' : parts[1] || 'USDC'}`;
+    }
+    return `${str}/USDC`;
+  };
 
   const timeframes = [
     { id: '4h', label: '4H', tf: '4h', limit: 60 },
@@ -145,30 +173,6 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
   }, [candles, tradesHistory, addonEvents, selectedSymbol, showTrades, showAddons]);
 
   const activePos = useMemo(() => openPositions.find(p => normalizeSym(p.symbol) === normalizeSym(selectedSymbol)), [openPositions, selectedSymbol]);
-
-  // Symbol normalization utility helper
-  const normalizeSym = (sym) => {
-    if (!sym) return '';
-    let str = String(sym).toUpperCase().trim();
-    str = str.split(':')[0];
-    str = str.replace(/-\d{6,}$/, '');
-    str = str.replace(/-\d+$/, '');
-    str = str.replace('_UM_XPERP', '');
-    str = str.replace('-USD_UM_XPERP', '');
-    str = str.replace('_XPERP', '');
-    str = str.replace('-SWAP', '');
-    str = str.replace('-SPOT', '');
-
-    if (str.includes('/')) {
-      const parts = str.split('/');
-      return `${parts[0]}/${parts[1] === 'USD' ? 'USDC' : parts[1] || 'USDC'}`;
-    }
-    if (str.includes('-')) {
-      const parts = str.split('-');
-      return `${parts[0]}/${parts[1] === 'USD' ? 'USDC' : parts[1] || 'USDC'}`;
-    }
-    return `${str}/USDC`;
-  };
 
   useEffect(() => {
     const fetchSymbols = async () => {
@@ -432,7 +436,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.6} />
                 <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} />
                 <YAxis domain={['auto', 'auto']} stroke="#64748b" tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} orientation="right" />
-                <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }} />
+                <Tooltip content={<CustomTooltip showTma={showTma} />} cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }} />
                 
                 {showTma && <Line type="monotone" dataKey="upper" stroke="#ef4444" strokeWidth={1} strokeDasharray="3 3" dot={false} name="TMA Upper" isAnimationActive={false} />}
                 {showTma && <Line type="monotone" dataKey="tma" stroke="#10b981" strokeWidth={1.5} dot={false} name="TMA Midline" isAnimationActive={false} />}
