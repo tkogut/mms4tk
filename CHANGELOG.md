@@ -4,6 +4,33 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.7] - 2026-09-17
+
+### 🔥 Fixed — Addon Markers Showed Skipped/Blocked Attempts, Not Real Fills
+- 🐛 **`LoggerDB.get_addon_events()`** (`src/mms4tk/logger_db.py`): matched any
+  `cycle_logs` row where `outcome LIKE '%ADD%' OR signal_type LIKE '%ADD%'` —
+  since `signal_type` stays e.g. `"HIGH_RISK_ADD_SHORT"` on every re-evaluation
+  of the same signal regardless of whether it was actually executed, a single
+  add-on re-checked repeatedly by the daemon's per-cycle loop (skipped by the
+  candle gate, blocked by the single-addon guard, etc.) produced one dashboard
+  marker *per re-check*, not per real fill. Confirmed live: XAU/USDC's
+  `cycle_logs` held 822 `CANDLE_GATE_SKIP_HIGH_RISK_ADD_SHORT` + 436
+  `BLOCKED_HIGH_RISK_ADD_LONG` rows against only 3 genuine
+  `EXECUTED_HIGH_RISK_ADD_SHORT` fills — the Analytics chart showed ~9 "+ADD"
+  markers clustered in a single ~50-minute window where zero real add-on
+  actually executed.
+- ✅ **Naprawa**: query narrowed to `outcome LIKE 'EXECUTED%ADD%'` — only rows
+  the daemon actually executed (`outcome = f"EXECUTED_{signal.signal_type}"`,
+  `daemon.py:1884`) now qualify as addon markers. The single-addon *trading*
+  guard (`daemon.py:1832`, max 1 add per position) was never affected by this
+  bug — this was a dashboard/query-only defect, not a risk-control defect.
+- 🧪 New `tests/test_logger_db_addon_events.py` — 2 tests, direct against a
+  real `LoggerDB`/sqlite (not mocked): proves skip/block rows for the same
+  signal are excluded, and multiple genuine fills still return in
+  recency-descending order.
+- Pure backend fix (`src/mms4tk/logger_db.py` only, plus tests) — no schema
+  change, no API contract change, no frontend change.
+
 ## 🚀 [0.48.6] - 2026-09-17
 
 ### ✨ Added — Japanese Candlestick Chart (Lightweight Charts / TradingView) + Real Time Windows
