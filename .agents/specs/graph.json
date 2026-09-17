@@ -49,6 +49,18 @@
       "label": "Architektura Systemowa Mms4Tk: Przekład Strategii Masterminda Na Logikę Agenta (Raport 10.09.2026)",
       "type": "Expert Knowledge",
       "description": "Knowledge base note synchronized from NotebookLM: Architektura Systemowa Mms4Tk: Przekład Strategii Masterminda Na Logikę Agenta (Raport 10.09.2026)"
+    },
+    {
+      "id": ".agents/specs/knowledge/mms4-dashboard-ui-ux-standards.md",
+      "label": "Kompendium Inżynieryjne: Standardy UI/UX i Refaktoryzacja Dashboardu Algotradingowego MMS4",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Kompendium Inżynieryjne: Standardy UI/UX i Refaktoryzacja Dashboardu Algotradingowego MMS4"
+    },
+    {
+      "id": ".agents/specs/knowledge/mms4-dashboard-layout-standards.md",
+      "label": "Raport Inżynieryjny: Standardy Layoutu i Refaktoryzacji Dashboardów Algotradingowych",
+      "type": "Expert Knowledge",
+      "description": "Knowledge base note synchronized from NotebookLM: Raport Inżynieryjny: Standardy Layoutu i Refaktoryzacji Dashboardów Algotradingowych"
     }
   ],
   "edges": [
@@ -91,10 +103,20 @@
       "source": ".agents/skills/notebooklm-sync",
       "target": ".agents/specs/knowledge/Architektura Systemowa mms4tk: Przekład Strategii Masterminda na Logikę Agenta (Raport 10.09.2026).md",
       "relation": "synchronizes_to"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/mms4-dashboard-ui-ux-standards.md",
+      "relation": "governs_knowledge"
+    },
+    {
+      "source": ".agents/specs/AGENTS-OS.md",
+      "target": ".agents/specs/knowledge/mms4-dashboard-layout-standards.md",
+      "relation": "governs_knowledge"
     }
   ],
   "metadata": {
-    "last_distillation": "2026-09-11",
+    "last_distillation": "2026-09-17",
     "source": "Inception Engine"
   }
 }

@@ -1,49 +1,49 @@
-import React, { useState, useEffect } from 'react';
-import { Sliders, Lock, Key, Save, Shield, CheckCircle2, Zap, Clock, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Sliders, Shield, Zap, Scale, Key, Lock, Save, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 
 export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, daemonData }) {
+  // Accordion open states
+  const [openSections, setOpenSections] = useState({
+    risk: true,
+    engine: false,
+    capital: false,
+    security: false
+  });
+
+  const toggleSection = (section) => {
+    setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  // Form states
   const [riskProfile, setRiskProfile] = useState('MODERATE');
   const [leverage, setLeverage] = useState(stateData?.leverage || 3.0);
   const [stopLoss, setStopLoss] = useState(daemonData?.stop_loss_pct ?? stateData?.stop_loss_pct ?? 2.0);
   const [isScoutMode, setIsScoutMode] = useState(stateData?.state === 'SCOUT_MODE' || stateData?.scout_mode || false);
   const [currentApiKey, setCurrentApiKey] = useState(apiKey || '');
 
-  // ── Adaptive Hybrid Engine State ──
+  // Adaptive Hybrid Engine
   const [engineMode, setEngineMode] = useState(daemonData?.engine_mode || 'CLASSIC');
   const [vrHigh, setVrHigh] = useState(daemonData?.adaptive_vr_high ?? 1.6);
   const [vrLow, setVrLow] = useState(daemonData?.adaptive_vr_low ?? 0.8);
   const [timeLockStart, setTimeLockStart] = useState(daemonData?.time_lock_start || '13:30');
   const [timeLockEnd, setTimeLockEnd] = useState(daemonData?.time_lock_end || '14:30');
+
+  // Capital & Midline TP
   const [portfolioMarginCap, setPortfolioMarginCap] = useState(daemonData?.total_max_portfolio_margin_usd ?? 0);
-  // Audit P9.1 (2026-09-08): default false — rejected 6/6 in backtest (CHANGELOG 0.42.1).
   const [midlinePartialTpEnabled, setMidlinePartialTpEnabled] = useState(daemonData?.midline_partial_tp_enabled ?? false);
   const [midlineTpFraction, setMidlineTpFraction] = useState(daemonData?.midline_tp_fraction ?? 0.50);
 
-  // ── Margin & Symbol Allocations for Quick Presets ──
-  const [symbolsTotalAllocation, setSymbolsTotalAllocation] = useState(0);
-  const [okxFreeMargin, setOkxFreeMargin] = useState(0);
-  const isInitializedRef = React.useRef(false);
+  // Password change state
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordMsg, setPasswordMsg] = useState('');
 
-  useEffect(() => {
-    // Read available margin from statsData.free_balance (OKX account) or fallback
-    const freeBal = statsData?.free_balance ?? statsData?.free_margin ?? stateData?.current_equity ?? 0;
-    setOkxFreeMargin(freeBal);
+  // UI status feedback
+  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
-    // Fetch active symbols total allocation
-    fetch('/api/v1/symbols')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (data && data.symbols) {
-          const total = data.symbols
-            .filter(s => s.is_active)
-            .reduce((sum, s) => sum + (parseFloat(s.allocation_usd) || 0), 0);
-          setSymbolsTotalAllocation(total);
-        }
-      })
-      .catch(() => {});
-  }, [statsData, stateData]);
+  const isInitializedRef = useRef(false);
 
-  // Sync state only on initial load to prevent background 5s polling from overwriting user edits
   useEffect(() => {
     if (daemonData && !isInitializedRef.current) {
       if (daemonData.engine_mode) setEngineMode(daemonData.engine_mode);
@@ -59,23 +59,12 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
     }
   }, [daemonData]);
 
-  // Keep currentApiKey in sync if apiKey prop changes
   useEffect(() => {
     if (apiKey) {
       setCurrentApiKey(apiKey);
     }
   }, [apiKey]);
 
-
-  // Password change state
-  const [newPassword, setNewPassword] = useState('');
-  const [passwordMsg, setPasswordMsg] = useState('');
-
-  const [savedSuccess, setSavedSuccess] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Leverage brackets per risk_profile
   const getLeverageRange = () => {
     switch (riskProfile) {
       case 'CONSERVATIVE': return { min: 1.0, max: 2.0, default: 1.0 };
@@ -95,7 +84,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setErrorMsg('');
     setSavedSuccess(false);
     setIsSaving(true);
@@ -143,10 +132,10 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
         body: JSON.stringify({ new_password: newPassword, username: 'admin' })
       });
       if (res.ok) {
-        setPasswordMsg('✓ Hasło panelu zaktualizowane pomyślnie!');
+        setPasswordMsg('✓ Hasło zaktualizowane pomyślnie!');
         setNewPassword('');
       } else {
-        setPasswordMsg('❌ Błąd zmiany hasła (sprawdź API Key)');
+        setPasswordMsg('❌ Błąd zmiany hasła');
       }
     } catch (err) {
       setPasswordMsg('❌ Błąd połączenia z serwerem');
@@ -154,423 +143,377 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
   };
 
   return (
-    <div className="max-w-3xl space-y-6">
-      {/* Strategy Parameters Form */}
-      <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-6 shadow-lg space-y-6">
-        <div className="flex items-center gap-3 pb-4 border-b border-slate-800">
-          <div className="p-2.5 bg-blue-500/10 text-blue-400 rounded-lg shrink-0">
-            <Sliders className="w-6 h-6" />
-          </div>
-          <div>
-            <h3 className="text-base sm:text-lg font-bold text-gray-100">Profil Ryzyka & Dźwignia Strategii</h3>
-            <p className="text-xs text-slate-400">Powiązanie poziomu ryzyka (CONSERVATIVE, MODERATE, AGGRESSIVE) z zakresem dźwigni (1x, 3x, 10x)</p>
-          </div>
+    <div className="max-w-4xl mx-auto space-y-3">
+      {/* Toast Feedback */}
+      {savedSuccess && (
+        <div className="p-2.5 bg-emerald-950/90 border border-emerald-500/50 rounded-lg text-emerald-300 text-xs font-mono font-bold flex items-center gap-2 shadow-md">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <span>✓ Parametry strategii zostały pomyślnie zapisane w SQLite & Daemonie.</span>
         </div>
+      )}
 
-        {/* Risk Profile Selection (1x, 3x, 10x) */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-3">
-            Wybierz Profil Ryzyka (Risk Profile):
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
-            <button
-              type="button"
-              onClick={() => handleRiskChange('CONSERVATIVE')}
-              className={`p-3.5 rounded-xl border text-left transition-all ${
-                riskProfile === 'CONSERVATIVE'
-                  ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-300 shadow-md shadow-emerald-500/10 font-bold'
-                  : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-              }`}
-            >
-              <div className="text-xs text-emerald-400 font-mono font-bold mb-1">CONSERVATIVE</div>
-              <div className="text-base font-extrabold text-gray-100">1.0x – 2.0x</div>
-              <div className="text-[10px] text-slate-400 mt-1">Bezpieczny SPOT</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleRiskChange('MODERATE')}
-              className={`p-3.5 rounded-xl border text-left transition-all ${
-                riskProfile === 'MODERATE'
-                  ? 'bg-blue-950/60 border-blue-500/60 text-blue-300 shadow-md shadow-blue-500/10 font-bold'
-                  : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-              }`}
-            >
-              <div className="text-xs text-blue-400 font-mono font-bold mb-1">MODERATE</div>
-              <div className="text-base font-extrabold text-gray-100">2.0x – 5.0x</div>
-              <div className="text-[10px] text-slate-400 mt-1">Standard (3.0x)</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleRiskChange('AGGRESSIVE')}
-              className={`p-3.5 rounded-xl border text-left transition-all ${
-                riskProfile === 'AGGRESSIVE'
-                  ? 'bg-amber-950/60 border-amber-500/60 text-amber-300 shadow-md shadow-amber-500/10 font-bold'
-                  : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-              }`}
-            >
-              <div className="text-xs text-amber-400 font-mono font-bold mb-1">AGGRESSIVE</div>
-              <div className="text-base font-extrabold text-gray-100">5.0x – 10.0x</div>
-              <div className="text-[10px] text-slate-400 mt-1">Maksymalny (10.0x)</div>
-            </button>
-          </div>
+      {errorMsg && (
+        <div className="p-2.5 bg-rose-950/90 border border-rose-500/50 rounded-lg text-rose-300 text-xs font-mono font-bold flex items-center gap-2 shadow-md">
+          <AlertTriangle className="w-4 h-4 text-rose-400" />
+          <span>{errorMsg}</span>
         </div>
+      )}
 
-        {/* Fine-Tuning Leverage Slider within Risk Bracket */}
-        <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-lg space-y-3">
-          <div className="flex justify-between items-center">
-            <label className="text-xs font-semibold text-slate-300">
-              Dociągnięcie Dźwigni w ramach profilu <span className="text-blue-400 font-mono">{riskProfile}</span>:
-            </label>
-            <span className="text-base font-bold font-mono tabular-nums text-blue-400 bg-blue-950 px-2.5 py-0.5 rounded border border-blue-500/30">
-              {Number(leverage).toFixed(1)}x
-            </span>
-          </div>
-          <input
-            type="range"
-            min={range.min}
-            max={range.max}
-            step="0.5"
-            value={leverage}
-            onChange={(e) => setLeverage(e.target.value)}
-            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-          />
-          <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-            <span>Minimum ({range.min.toFixed(1)}x)</span>
-            <span>Maksimum ({range.max.toFixed(1)}x)</span>
-          </div>
-        </div>
-
-        {/* Stop Loss & Scout Mode Controls */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Bazowy Stop Loss (%):
-            </label>
-            <input
-              type="number"
-              step="0.05"
-              min="0.5"
-              max="5.0"
-              value={stopLoss}
-              onChange={(e) => setStopLoss(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
-            />
-            <p className="text-[10px] text-slate-500 mt-1">Domyślnie 2.00% dla pozycji bazowej (70% alokacji). Addon SL wynosi stałe 1.25% (30% alokacji).</p>
-          </div>
-
-          <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-lg flex items-center justify-between">
-            <div>
-              <span className="font-semibold text-xs text-slate-200 block">Tryb SCOUT_MODE</span>
-              <span className="text-[10px] text-slate-400">Redukcja ryzyka po aktywacji SL</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsScoutMode(!isScoutMode)}
-              className={`w-11 h-5 flex items-center rounded-full p-0.5 transition-colors shrink-0 ${
-                isScoutMode ? 'bg-amber-500 justify-end' : 'bg-slate-800 justify-start'
-              }`}
-            >
-              <span className="w-3.5 h-3.5 rounded-full bg-white shadow-md" />
-            </button>
-          </div>
-        </div>
-
-        {/* ── Portfolio Margin Guard (Circuit Breaker) ── */}
-        <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-lg space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-            <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className="text-xs font-semibold text-slate-200">Portfolio Margin Guard ($ USD):</span>
-            </div>
-            <span className="text-[10px] text-slate-400">Globalny limit portfela (0 = wyłączony)</span>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-            <input
-              type="number"
-              step="10"
-              min="0"
-              value={portfolioMarginCap}
-              onChange={(e) => setPortfolioMarginCap(e.target.value)}
-              placeholder="0 = wyłączony"
-              className="flex-1 px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
-            />
-            
-            {/* Quick Preset Buttons */}
-            <div className="flex items-center gap-1.5 shrink-0 flex-wrap sm:flex-nowrap">
-              <button
-                type="button"
-                onClick={() => setPortfolioMarginCap(okxFreeMargin > 0 ? Math.floor(okxFreeMargin) : 100)}
-                className="px-2.5 py-2 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/40 text-emerald-300 rounded-lg text-[11px] font-semibold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
-                title="Ustaw maksymalny dostępny depozyt z OKX API"
-              >
-                <span>MAX OKX:</span>
-                <span className="font-mono tabular-nums font-bold">${okxFreeMargin > 0 ? okxFreeMargin.toFixed(0) : '0'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPortfolioMarginCap(symbolsTotalAllocation > 0 ? Math.round(symbolsTotalAllocation) : 50)}
-                className="px-2.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 border border-blue-500/40 text-blue-300 rounded-lg text-[11px] font-semibold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
-                title="Ustaw limit równy sumie alokacji wszystkich aktywnych par"
-              >
-                <span>SUMA PAR:</span>
-                <span className="font-mono tabular-nums font-bold">${symbolsTotalAllocation > 0 ? symbolsTotalAllocation.toFixed(0) : '0'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPortfolioMarginCap(0)}
-                className="px-2 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
-                title="Wyłącz limit (0)"
-              >
-                Wyłącz (0)
-              </button>
-            </div>
-          </div>
-          <p className="text-[10px] text-slate-500">
-            Zabezpiecza przed overleveragingiem – blokuje nowe zlecenia, gdy łączny wykorzystany depozyt na OKX przekroczy ten próg.
-          </p>
-        </div>
-
-        {/* ── Midline Partial Take Profit (PLAN-009) ── */}
-        <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-lg space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-200">Częściowy TP na Linii Środkowej TMA (T1):</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setMidlinePartialTpEnabled(!midlinePartialTpEnabled)}
-              className={`w-11 h-5 flex items-center rounded-full p-0.5 transition-colors shrink-0 ${
-                midlinePartialTpEnabled ? 'bg-emerald-500 justify-end' : 'bg-slate-800 justify-start'
-              }`}
-            >
-              <span className="w-3.5 h-3.5 rounded-full bg-white shadow-md" />
-            </button>
-          </div>
-
-          {midlinePartialTpEnabled && (
-            <div className="space-y-2 pt-1 border-t border-slate-800/80">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-400">Frakcja redukcji pozycji (TP %):</span>
-                <span className="font-mono tabular-nums font-bold text-emerald-400">{(midlineTpFraction * 100).toFixed(0)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.10"
-                max="0.90"
-                step="0.05"
-                value={midlineTpFraction}
-                onChange={(e) => setMidlineTpFraction(parseFloat(e.target.value))}
-                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-              />
-              <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                <span>10%</span>
-                <span>50% (Domyślnie)</span>
-                <span>90%</span>
-              </div>
-            </div>
-          )}
-          <p className="text-[10px] text-slate-500">
-            Automatyczna realizacja części zysku (T1) przy przecięciu mediany TMA. Pozostała część chroniona stałym 2.00% SL.
-          </p>
-        </div>
-
-        {/* ── Hybrydowy Silnik Adaptacyjny (Adaptive Engine Card) ── */}
-        <div className="p-4 sm:p-5 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/40 border border-indigo-500/30 rounded-xl space-y-4 shadow-inner">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-indigo-500/20">
-            <div className="flex items-start sm:items-center gap-2.5">
-              <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg border border-indigo-500/20 shrink-0 mt-0.5 sm:mt-0">
-                <Zap className="w-5 h-5" />
+      <form onSubmit={handleSubmit} className="space-y-2">
+        {/* Accordion Item 1: Profil Ryzyka & Dźwignia Strategii */}
+        <div className="bg-slate-900/95 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => toggleSection('risk')}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-850/50 transition-colors"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded">
+                <Sliders className="w-4 h-4" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-gray-100 flex flex-wrap items-center gap-2">
-                  <span>Hybrydowy Silnik Adaptacyjny</span>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                    engineMode === 'ADAPTIVE'
-                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700'
-                  }`}>
-                    {engineMode}
-                  </span>
-                </h4>
-                <p className="text-[11px] text-slate-400">Nadzór Fast-Path: Filtr Zmienności (VR) & Sesji US Open</p>
-              </div>
-            </div>
-
-            {/* Engine Mode Switch - Responsive on mobile */}
-            <select
-              value={engineMode}
-              onChange={(e) => setEngineMode(e.target.value)}
-              className="w-full sm:w-auto px-3 py-2 sm:py-1.5 bg-slate-900 border border-indigo-500/40 rounded-lg text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-400 font-mono cursor-pointer shrink-0"
-            >
-              <option value="CLASSIC">CLASSIC (Standardowy)</option>
-              <option value="ADAPTIVE">ADAPTIVE (Hybrydowy)</option>
-            </select>
-          </div>
-
-          {engineMode === 'ADAPTIVE' ? (
-            <div className="space-y-4 pt-1">
-              {/* Volatility Ratio Thresholds */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg">
-                  <label className="block text-[11px] font-semibold text-slate-300 mb-1 flex items-center justify-between">
-                    <span>Górny Próg VR (High Trend):</span>
-                    <span className="font-mono tabular-nums text-amber-400 font-bold">{vrHigh}x</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="1.0"
-                    max="5.0"
-                    value={vrHigh}
-                    onChange={(e) => setVrHigh(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-1">Blokuje HIGH_RISK_ADD w silnym trendzie</p>
-                </div>
-
-                <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg">
-                  <label className="block text-[11px] font-semibold text-slate-300 mb-1 flex items-center justify-between">
-                    <span>Dolny Próg VR (Compression):</span>
-                    <span className="font-mono tabular-nums text-blue-400 font-bold">{vrLow}x</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    max="1.5"
-                    value={vrLow}
-                    onChange={(e) => setVrLow(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-1">Wymaga knotu Sweep Rejection w marazmie</p>
-                </div>
-              </div>
-
-              {/* Time Lock Hours */}
-              <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg space-y-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-300">
-                  <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                  <span>Okno Blokady Sesyjnej US Open (Godziny UTC):</span>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-1">Start (HH:MM UTC):</label>
-                    <input
-                      type="text"
-                      pattern="[0-9]{2}:[0-9]{2}"
-                      value={timeLockStart}
-                      onChange={(e) => setTimeLockStart(e.target.value)}
-                      placeholder="13:30"
-                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-1">Koniec (HH:MM UTC):</label>
-                    <input
-                      type="text"
-                      pattern="[0-9]{2}:[0-9]{2}"
-                      value={timeLockEnd}
-                      onChange={(e) => setTimeLockEnd(e.target.value)}
-                      placeholder="14:30"
-                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                </div>
-                <p className="text-[10px] text-slate-500">
-                  Blokuje sygnały BASE_SHORT na otwarciu Wall Street, chroniąc przed polowaniem na płynność.
+                <h3 className="font-mono font-bold text-xs sm:text-sm text-gray-100 uppercase tracking-wider">
+                  1. Profil Ryzyka & Dźwignia Strategii
+                </h3>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Dźwignia bazowa: {Number(leverage).toFixed(1)}x · Profil: {riskProfile}
                 </p>
               </div>
             </div>
-          ) : (
-            <div className="p-3 bg-slate-900/50 border border-slate-800/80 rounded-lg text-xs text-slate-400">
-              Tryb CLASSIC aktywny: kalkulacje VR i blokady czasowe US Open są pomijane (Standardowa strategia MMS v4).
+            {openSections.risk ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </button>
+
+          {openSections.risk && (
+            <div className="p-4 pt-2 border-t border-slate-800/80 space-y-3">
+              {/* Risk Profile Selector Buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {[
+                  { id: 'CONSERVATIVE', title: 'CONSERVATIVE', range: '1.0x – 2.0x', desc: 'Bezpieczny SPOT', color: 'text-emerald-400', border: 'border-emerald-500/50' },
+                  { id: 'MODERATE', title: 'MODERATE', range: '2.0x – 5.0x', desc: 'Standard (3.0x)', color: 'text-blue-400', border: 'border-blue-500/50' },
+                  { id: 'AGGRESSIVE', title: 'AGGRESSIVE', range: '5.0x – 10.0x', desc: 'Maksymalny (10.0x)', color: 'text-amber-400', border: 'border-amber-500/50' }
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleRiskChange(item.id)}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      riskProfile === item.id
+                        ? `bg-slate-950 ${item.border} ${item.color} shadow-sm font-bold`
+                        : 'bg-slate-950/50 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-[10px] font-mono uppercase tracking-wider">{item.title}</div>
+                    <div className="text-sm font-extrabold font-mono text-gray-100">{item.range}</div>
+                    <div className="text-[9px] text-slate-500">{item.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Leverage Slider */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5 space-y-1.5">
+                <div className="flex justify-between items-center text-xs font-mono">
+                  <span className="text-slate-300">Dociągnięcie Dźwigni ({riskProfile}):</span>
+                  <span className="font-bold text-blue-400 tabular-nums bg-blue-950 px-2 py-0.5 rounded border border-blue-500/30">
+                    {Number(leverage).toFixed(1)}x
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={range.min}
+                  max={range.max}
+                  step="0.5"
+                  value={leverage}
+                  onChange={(e) => setLeverage(e.target.value)}
+                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-blue-500"
+                />
+              </div>
+
+              {/* Stop Loss & SCOUT Mode Toggle Switch */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] font-mono text-slate-300 mb-1">
+                    Bazowy Stop Loss (%):
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10.0"
+                    value={stopLoss}
+                    onChange={(e) => setStopLoss(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono font-bold text-gray-100 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Toggle Switch for SCOUT Mode */}
+                <div className="flex items-center justify-between p-2.5 bg-slate-950/70 border border-slate-800 rounded-lg">
+                  <div>
+                    <span className="text-xs font-mono font-bold text-slate-200 block">Tryb Obronny SCOUT</span>
+                    <span className="text-[10px] text-slate-500">Redukcja wielkości pozycji</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isScoutMode}
+                      onChange={(e) => setIsScoutMode(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500" />
+                  </label>
+                </div>
+              </div>
             </div>
           )}
         </div>
 
-        {/* API Authentication Key */}
-        <div className="pt-2 border-t border-slate-800">
-          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
-            <Key className="w-4 h-4 text-blue-400 shrink-0" />
-            <span>MMS4 REST API Key</span>
-          </label>
-          <input
-            type="password"
-            placeholder="Wprowadź MMS4_API_KEY do autoryzacji..."
-            value={currentApiKey}
-            onChange={(e) => setCurrentApiKey(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
-          />
+        {/* Accordion Item 2: Silnik Adaptacyjny & Filtry Zmienności */}
+        <div className="bg-slate-900/95 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => toggleSection('engine')}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-850/50 transition-colors"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded">
+                <Zap className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-mono font-bold text-xs sm:text-sm text-gray-100 uppercase tracking-wider">
+                  2. Silnik Adaptacyjny & Filtry Zmienności
+                </h3>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Tryb: {engineMode} · VR High: {vrHigh} · VR Low: {vrLow}
+                </p>
+              </div>
+            </div>
+            {openSections.engine ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </button>
+
+          {openSections.engine && (
+            <div className="p-4 pt-2 border-t border-slate-800/80 space-y-3">
+              {/* Engine Mode Toggle Switch */}
+              <div className="flex items-center justify-between p-2.5 bg-slate-950/70 border border-slate-800 rounded-lg">
+                <div>
+                  <span className="text-xs font-mono font-bold text-slate-200 block">
+                    Silnik: {engineMode}
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    {engineMode === 'ADAPTIVE_HYBRID' ? 'Filtry VR, trendu i okna time-lock aktywne' : 'Klasyczna strategia TMA'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEngineMode((m) => (m === 'ADAPTIVE_HYBRID' ? 'CLASSIC' : 'ADAPTIVE_HYBRID'))}
+                  className={`px-3 py-1 rounded text-xs font-mono font-bold transition-colors border ${
+                    engineMode === 'ADAPTIVE_HYBRID'
+                      ? 'bg-blue-600 text-white border-blue-500'
+                      : 'bg-slate-850 text-slate-400 border-slate-700'
+                  }`}
+                >
+                  {engineMode === 'ADAPTIVE_HYBRID' ? 'ADAPTIVE ON' : 'CLASSIC'}
+                </button>
+              </div>
+
+              {/* VR Thresholds & Time-Lock Windows */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs font-mono">
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-1">VR High Próg:</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={vrHigh}
+                    onChange={(e) => setVrHigh(e.target.value)}
+                    className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded font-bold text-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-1">VR Low Próg:</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={vrLow}
+                    onChange={(e) => setVrLow(e.target.value)}
+                    className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded font-bold text-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-1">Time Lock Start:</label>
+                  <input
+                    type="time"
+                    value={timeLockStart}
+                    onChange={(e) => setTimeLockStart(e.target.value)}
+                    className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded font-bold text-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-1">Time Lock End:</label>
+                  <input
+                    type="time"
+                    value={timeLockEnd}
+                    onChange={(e) => setTimeLockEnd(e.target.value)}
+                    className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded font-bold text-gray-100"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Save Strategy Settings Button */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
-          {savedSuccess && (
-            <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>✓ Ustawienia strategii i silnika adaptacyjnego zapisane!</span>
-            </span>
+        {/* Accordion Item 3: Alokacja Kapitału & Midline Take-Profit */}
+        <div className="bg-slate-900/95 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => toggleSection('capital')}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-850/50 transition-colors"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded">
+                <Scale className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-mono font-bold text-xs sm:text-sm text-gray-100 uppercase tracking-wider">
+                  3. Alokacja Kapitału & Midline Take-Profit
+                </h3>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Margin Cap: ${portfolioMarginCap || 'Brak'} · Midline TP: {midlinePartialTpEnabled ? `${(midlineTpFraction * 100).toFixed(0)}%` : 'Wyłączone'}
+                </p>
+              </div>
+            </div>
+            {openSections.capital ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </button>
+
+          {openSections.capital && (
+            <div className="p-4 pt-2 border-t border-slate-800/80 space-y-3">
+              <div>
+                <label className="block text-[11px] font-mono text-slate-300 mb-1">
+                  Maksymalny Łączny Depozyt Portfela (USD, 0 = bez limitu):
+                </label>
+                <input
+                  type="number"
+                  step="10"
+                  value={portfolioMarginCap}
+                  onChange={(e) => setPortfolioMarginCap(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono font-bold text-gray-100 focus:outline-none"
+                />
+              </div>
+
+              {/* Midline Partial TP Toggle Switch */}
+              <div className="flex items-center justify-between p-2.5 bg-slate-950/70 border border-slate-800 rounded-lg">
+                <div>
+                  <span className="text-xs font-mono font-bold text-slate-200 block">
+                    Częściowa Realizacja na Linii Środkowej (Midline TP)
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    Zamyka część pozycji przy dotknięciu TMA Midline
+                  </span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={midlinePartialTpEnabled}
+                    onChange={(e) => setMidlinePartialTpEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500" />
+                </label>
+              </div>
+
+              {midlinePartialTpEnabled && (
+                <div>
+                  <label className="block text-[11px] font-mono text-slate-300 mb-1">
+                    Frakcja Midline TP (np. 0.50 = 50% pozycji):
+                  </label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0.10"
+                    max="0.90"
+                    value={midlineTpFraction}
+                    onChange={(e) => setMidlineTpFraction(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono font-bold text-gray-100"
+                  />
+                </div>
+              )}
+            </div>
           )}
-          {errorMsg && (
-            <span className="text-xs font-semibold text-rose-400 flex items-center gap-1.5">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>{errorMsg}</span>
-            </span>
+        </div>
+
+        {/* Accordion Item 4: Dostęp API & Bezpieczeństwo Panelu */}
+        <div className="bg-slate-900/95 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => toggleSection('security')}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-850/50 transition-colors"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-violet-500/10 text-violet-400 border border-violet-500/20 rounded">
+                <Key className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-mono font-bold text-xs sm:text-sm text-gray-100 uppercase tracking-wider">
+                  4. Dostęp API & Bezpieczeństwo Panelu
+                </h3>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Klucz API oraz hasło dostępowe panelu
+                </p>
+              </div>
+            </div>
+            {openSections.security ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </button>
+
+          {openSections.security && (
+            <div className="p-4 pt-2 border-t border-slate-800/80 space-y-3">
+              <div>
+                <label className="block text-[11px] font-mono text-slate-300 mb-1">
+                  MMS4 REST API Key (Nagłówek X-MMS4-API-KEY):
+                </label>
+                <input
+                  type="password"
+                  value={currentApiKey}
+                  onChange={(e) => setCurrentApiKey(e.target.value)}
+                  placeholder="Wpisz klucz API..."
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs font-mono font-bold text-gray-100"
+                />
+              </div>
+
+              {/* Password Change Sub-Box */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold text-slate-200">Zmiana Hasła Panelu (admin)</span>
+                  {passwordMsg && (
+                    <span className="text-[10px] font-mono font-bold text-amber-400">{passwordMsg}</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    placeholder="Nowe hasło..."
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-2.5 py-1 bg-slate-900 border border-slate-800 rounded text-xs font-mono text-gray-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={handlePasswordChange}
+                    className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-mono text-xs font-bold shrink-0 transition-colors"
+                  >
+                    Aktualizuj
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
+        </div>
+
+        {/* Save Action Sticky / Bottom Bar */}
+        <div className="pt-2">
           <button
             type="submit"
             disabled={isSaving}
-            className="sm:ml-auto w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-colors shadow-md shadow-blue-500/20"
+            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-mono font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
           >
             <Save className="w-4 h-4" />
-            <span>{isSaving ? 'Zapisywanie...' : 'Zapisz Parametry'}</span>
-          </button>
-        </div>
-      </form>
-
-      {/* Password Change Form Card */}
-      <form onSubmit={handlePasswordChange} className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-6 shadow-lg space-y-4">
-        <div className="flex items-center gap-3 pb-3 border-b border-slate-800">
-          <div className="p-2.5 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
-            <Lock className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-gray-100">Zmiana Hasła Logowania Panelu (BasicAuth)</h3>
-            <p className="text-xs text-slate-400">Zaktualizuj hasło zabezpieczające dostęp HTTP BasicAuth w odwrotnym proxy Traefik</p>
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-            Nowe Hasło Panelu:
-          </label>
-          <input
-            type="password"
-            placeholder="Wprowadź nowe hasło logowania..."
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-amber-500 font-mono"
-            required
-          />
-        </div>
-
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
-          {passwordMsg && (
-            <span className={`text-xs font-semibold ${passwordMsg.includes('✓') ? 'text-emerald-400' : 'text-amber-400'}`}>
-              {passwordMsg}
-            </span>
-          )}
-          <button
-            type="submit"
-            className="sm:ml-auto w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors shadow-md"
-          >
-            <Lock className="w-4 h-4" />
-            <span>Zmień Hasło</span>
+            <span>{isSaving ? 'Zapisywanie w toku...' : 'Zapisz Wszystkie Ustawienia'}</span>
           </button>
         </div>
       </form>
