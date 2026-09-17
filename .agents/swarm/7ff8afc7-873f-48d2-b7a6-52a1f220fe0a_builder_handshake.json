@@ -4,7 +4,7 @@
   "status": "SUCCESS",
   "files_modified": [
     "src/mms4tk/logger_db.py",
-    "tests/test_logger_db_addon_events.py",
+    "tests/test_logger_db_closed_trades_cache.py",
     "VERSION",
     "src/mms4tk/__init__.py",
     "ui_dashboard/app.py",
@@ -13,6 +13,6 @@
     "CHANGELOG.md"
   ],
   "math_consistency_check": "PASSED",
-  "timestamp": "2026-09-17T20:59:59Z",
-  "notes": "Fixed LoggerDB.get_addon_events(): the WHERE clause matched any cycle_logs row with 'ADD' in outcome/signal_type, so SKIPPED/BLOCKED/CANDLE_GATE_SKIP re-evaluations of the same signal appeared as separate dashboard addon markers alongside real fills. Confirmed live on VPS logs.db: XAU/USDC had 822 CANDLE_GATE_SKIP_HIGH_RISK_ADD_SHORT + 436 BLOCKED_HIGH_RISK_ADD_LONG rows vs only 3 real EXECUTED_HIGH_RISK_ADD_SHORT fills -- chart showed ~9 +ADD markers in a 50-min window where 0 real adds executed. Fix narrows the query to outcome LIKE 'EXECUTED%ADD%'. Pure backend/query fix, no schema/API contract change. 2 new direct LoggerDB/sqlite tests (not mocked). Full suite: 439 passed, 2 failed -- both pre-existing/unrelated (configured_symbols_store global test-isolation issue, documented in PR #63 and CHANGELOG 0.48.6), reproduced identically before this change."
+  "timestamp": "2026-09-17T21:19:36Z",
+  "notes": "Fixed LoggerDB.get_closed_trades()'s entry_timestamp backfill query: filtered signal_type = 'EXECUTED_BASE', a literal daemon.py never logs (signal_type is always BASE_LONG/BASE_SHORT; EXECUTED_ prefix only appears in outcome). Confirmed against production logs.db: zero rows ever matched, so entry_timestamp was permanently NULL for every closed trade (cached that way by design per the 0.48.4 fix), and the Analytics chart's entry marker always fell back to '1 candle before exit' regardless of true hold duration. Found while investigating a user report of a XAG/USDC short (opened 15:05, held ~6h, closed 21:00 at OKX-verified prices 65.68->65.40) whose chart entry marker appeared right before the exit candle. Verified the trade's prices/PnL against OKX fetch_my_trades directly -- those were always correct; only the entry marker's time position was wrong. Fix: outcome LIKE 'EXECUTED_BASE%'. Also corrected a pre-existing test (test_get_closed_trades_caches_a_not_found_entry_timestamp) whose synthetic cycle_logs row used the same wrong shape the buggy query expected. New test reproduces the real production row shape and proves entry_timestamp is now found. Full suite: 440 passed, 2 failed -- same pre-existing/unrelated configured_symbols_store issue documented in PR #63/#64, reproduced identically before this change."
 }
