@@ -1335,3 +1335,49 @@ class LoggerDB:
 
 
 
+
+    def get_addon_events(self, symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve recent HIGH_RISK_ADD or ADD events."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            query = """
+                SELECT timestamp, symbol, signal_type, details, outcome, price
+                FROM cycle_logs
+                WHERE (outcome LIKE '%HIGH_RISK_ADD%' OR outcome LIKE '%ADD%' OR signal_type LIKE '%HIGH_RISK_ADD%' OR signal_type LIKE '%ADD%')
+            """
+            params: List[Any] = []
+            if symbol:
+                query += " AND symbol = ?"
+                params.append(symbol)
+            
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            events = []
+            for row in rows:
+                details_dict = {}
+                try:
+                    if row["details"]:
+                        import json
+                        details_dict = json.loads(row["details"])
+                except Exception:
+                    pass
+                
+                price = row["price"] if (row["price"] is not None and float(row["price"]) > 0) else details_dict.get("price", None)
+                if price is None and "action_price" in details_dict:
+                    price = details_dict["action_price"]
+                
+                sig = str(row["signal_type"] or "").upper()
+                side = "long" if "LONG" in sig else ("short" if "SHORT" in sig else details_dict.get("side", "unknown"))
+                
+                events.append({
+                    "timestamp": row["timestamp"],
+                    "symbol": row["symbol"],
+                    "price": float(price) if price is not None else None,
+                    "side": side
+                })
+            
+            return events

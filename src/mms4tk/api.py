@@ -1016,13 +1016,39 @@ async def get_history_trades(limit: int = 100) -> List[Dict[str, Any]]:
 
 @app.get("/api/v1/history/candles", tags=["History"])
 async def get_history_candles(symbol: str = "BTC/USDC", timeframe: str = "1h", limit: int = 100) -> List[Dict[str, Any]]:
-    """Fetch live/historical candles from OKX for technical charts."""
+    """Fetch live/historical candles from OKX for technical charts with TMA values."""
     try:
         candles = await executor.fetch_candles(symbol=symbol, timeframe=timeframe, limit=limit)
-        return [c.model_dump() for c in candles]
+        if not candles:
+            return []
+            
+        df = TMAIndicator.calculate(candles)
+        
+        result = []
+        for i, c in enumerate(candles):
+            cdict = c.model_dump()
+            
+            tma_val = df["tma"].iloc[i]
+            upper_val = df["upper_band"].iloc[i]
+            lower_val = df["lower_band"].iloc[i]
+            atr_val = df["atr"].iloc[i]
+            
+            cdict["tma"] = float(tma_val) if pd.notna(tma_val) else None
+            cdict["upper_band"] = float(upper_val) if pd.notna(upper_val) else None
+            cdict["lower_band"] = float(lower_val) if pd.notna(lower_val) else None
+            cdict["atr"] = float(atr_val) if pd.notna(atr_val) else None
+            
+            result.append(cdict)
+            
+        return result
     except Exception as e:
         logger.warning(f"Error fetching candles for {symbol} ({timeframe}): {e}")
         return []
+
+@app.get("/api/v1/history/addons", tags=["History"])
+async def get_history_addons(symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetch recent add-on events (HIGH_RISK_ADD / ADD)."""
+    return logger_db.get_addon_events(symbol=symbol, limit=limit)
 
 
 @app.get("/api/v1/hermes/kanban", tags=["Hermes Integration"])
@@ -1464,10 +1490,10 @@ SYMBOLS_CONFIG_FILE = get_symbols_file_path()
 def load_symbols_config() -> Dict[str, Dict[str, Any]]:
     """Load per-symbol configuration from SQLite database, with fallback to symbols.json and defaults."""
     defaults = {
-        "BTC/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
-        "ETH/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
-        "XAU/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
-        "XAG/USDC": {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
+        "BTC/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
+        "ETH/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
+        "XAU/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"},
+        "XAG/USDC": {"is_active": True, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
     }
     # 1. First priority: Load from SQLite database (persistent volume, untouched by git updates)
     try:
