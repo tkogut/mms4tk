@@ -34,6 +34,17 @@ class OKXTradeSyncWorker:
         self.interval_seconds = interval_seconds
         self._is_running: bool = False
         self._task: Optional[asyncio.Task] = None
+        # Guards against overlapping sync_closed_trades() calls. Callers today
+        # include api.py's GET /api/v1/history/trades (fired via asyncio.create_task
+        # on every poll — the frontend polls this every 5s, far faster than a single
+        # sync round-trip against OKX completes) alongside the 15-minute run_loop and
+        # a direct manual-trigger endpoint. Without this lock, overlapping invocations
+        # all drive the same shared `executor.exchange` concurrently (initialize()
+        # reassigns its markets/symbols mid-flight), which is what was actually
+        # producing the "Unclosed client session" warnings and cascading OKX
+        # RequestTimeouts on unrelated endpoints (balance/positions) — not a slow
+        # exchange, but unbounded concurrent self-contention on one shared instance.
+        self._sync_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     def _is_closing_fill(fill: Dict[str, Any]) -> bool:
@@ -107,6 +118,15 @@ class OKXTradeSyncWorker:
             logger.debug("OKX credentials missing. Skipping closed trades sync.")
             return 0
 
+        if self._sync_lock.locked():
+            logger.debug("Trade sync already in progress — skipping overlapping call.")
+            return 0
+
+        async with self._sync_lock:
+            return await self._sync_closed_trades_locked()
+
+    async def _sync_closed_trades_locked(self) -> int:
+        """Body of sync_closed_trades(), only ever run with `_sync_lock` held."""
         try:
             await self.executor.initialize()
             
