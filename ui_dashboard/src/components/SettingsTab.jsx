@@ -223,7 +223,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
             <label className="text-xs font-semibold text-slate-300">
               Dociągnięcie Dźwigni w ramach profilu <span className="text-blue-400 font-mono">{riskProfile}</span>:
             </label>
-            <span className="text-base font-bold font-mono text-blue-400 bg-blue-950 px-2.5 py-0.5 rounded border border-blue-500/30">
+            <span className="text-base font-bold font-mono tabular-nums text-blue-400 bg-blue-950 px-2.5 py-0.5 rounded border border-blue-500/30">
               {Number(leverage).toFixed(1)}x
             </span>
           </div>
@@ -307,7 +307,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
                 title="Ustaw maksymalny dostępny depozyt z OKX API"
               >
                 <span>MAX OKX:</span>
-                <span className="font-mono font-bold">${okxFreeMargin > 0 ? okxFreeMargin.toFixed(0) : '0'}</span>
+                <span className="font-mono tabular-nums font-bold">${okxFreeMargin > 0 ? okxFreeMargin.toFixed(0) : '0'}</span>
               </button>
 
               <button
@@ -317,7 +317,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
                 title="Ustaw limit równy sumie alokacji wszystkich aktywnych par"
               >
                 <span>SUMA PAR:</span>
-                <span className="font-mono font-bold">${symbolsTotalAllocation > 0 ? symbolsTotalAllocation.toFixed(0) : '0'}</span>
+                <span className="font-mono tabular-nums font-bold">${symbolsTotalAllocation > 0 ? symbolsTotalAllocation.toFixed(0) : '0'}</span>
               </button>
 
               <button
@@ -356,7 +356,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
             <div className="space-y-2 pt-1 border-t border-slate-800/80">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-400">Frakcja redukcji pozycji (TP %):</span>
-                <span className="font-mono font-bold text-emerald-400">{(midlineTpFraction * 100).toFixed(0)}%</span>
+                <span className="font-mono tabular-nums font-bold text-emerald-400">{(midlineTpFraction * 100).toFixed(0)}%</span>
               </div>
               <input
                 type="range"
@@ -419,7 +419,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
                 <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg">
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1 flex items-center justify-between">
                     <span>Górny Próg VR (High Trend):</span>
-                    <span className="font-mono text-amber-400 font-bold">{vrHigh}x</span>
+                    <span className="font-mono tabular-nums text-amber-400 font-bold">{vrHigh}x</span>
                   </label>
                   <input
                     type="number"
@@ -436,7 +436,7 @@ export function SettingsTab({ stateData, statsData, apiKey, onUpdateSettings, da
                 <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg">
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1 flex items-center justify-between">
                     <span>Dolny Próg VR (Compression):</span>
-                    <span className="font-mono text-blue-400 font-bold">{vrLow}x</span>
+                    <span className="font-mono tabular-nums text-blue-400 font-bold">{vrLow}x</span>
                   </label>
                   <input
                     type="number"
