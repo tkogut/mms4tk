@@ -147,6 +147,20 @@ class LoggerDB:
                 cursor.execute("ALTER TABLE closed_trades ADD COLUMN fee_usd REAL NOT NULL DEFAULT 0.0")
             if "pnl_net_usd" not in columns:
                 cursor.execute("ALTER TABLE closed_trades ADD COLUMN pnl_net_usd REAL NOT NULL DEFAULT 0.0")
+            # 2026-09-17 incident fix: get_closed_trades() derives `reason` and
+            # `entry_timestamp` from a per-row cycle_logs lookup (LIKE-pattern scan,
+            # unindexable) whenever they're missing — closed_trades never had these
+            # columns, so EVERY row was a cache miss on EVERY call. GET
+            # /api/v1/history/trades is polled every 5s by the dashboard, so this was
+            # re-running an unindexed full-table-ish scan of cycle_logs for up to 100
+            # rows every 5 seconds, permanently — confirmed live via strace on the
+            # production process (100% CPU, ~20k pread64/s against logs.db). These two
+            # columns let get_closed_trades() persist the computed value once and skip
+            # the lookup on every subsequent call.
+            if "reason" not in columns:
+                cursor.execute("ALTER TABLE closed_trades ADD COLUMN reason TEXT")
+            if "entry_timestamp" not in columns:
+                cursor.execute("ALTER TABLE closed_trades ADD COLUMN entry_timestamp TEXT")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_addons (
                     symbol TEXT NOT NULL,
@@ -202,6 +216,11 @@ class LoggerDB:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_state_logs_ts ON state_logs(timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cycle_logs_ts ON cycle_logs(timestamp)")
+            # Composite index for the entry_timestamp lookup in get_closed_trades()
+            # (exact/range match on symbol+timestamp — unlike the reason lookup's
+            # LIKE '%...%' scan, this one CAN use an index) and for the reason
+            # lookup's timestamp-range + symbol prefilter before its LIKE scan.
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cycle_logs_symbol_ts ON cycle_logs(symbol, timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_closed_trades_ts ON closed_trades(timestamp)")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS symbol_configurations (
@@ -748,6 +767,10 @@ class LoggerDB:
                         dt = None
 
                 reason = t.get("reason")
+                entry_timestamp = t.get("entry_timestamp")
+                # Only true on a freshly-migrated row where nothing was cached yet —
+                # once persisted below, every later call skips both lookups entirely.
+                needs_persist = not reason or not entry_timestamp
                 if not reason and dt is not None:
                     ts_min = (dt - timedelta(seconds=180)).isoformat()
                     ts_max = (dt + timedelta(seconds=180)).isoformat()
@@ -793,20 +816,33 @@ class LoggerDB:
 
                 t["reason"] = reason
 
-                # Find entry timestamp
-                if dt is not None:
-                    ts_iso = dt.isoformat()
-                    cursor.execute("""
-                        SELECT timestamp FROM cycle_logs 
-                        WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?)
-                        AND timestamp <= ? AND signal_type = 'EXECUTED_BASE'
-                        ORDER BY timestamp DESC LIMIT 1
-                    """, (clean_sym, sym, f"{base}/%", ts_iso))
-                    entry_row = cursor.fetchone()
-                    t["entry_timestamp"] = entry_row["timestamp"] if entry_row else None
-                else:
-                    t["entry_timestamp"] = None
+                # Find entry timestamp — skip the lookup entirely if a value was
+                # already persisted for this row on a previous call.
+                if not entry_timestamp:
+                    if dt is not None:
+                        ts_iso = dt.isoformat()
+                        cursor.execute("""
+                            SELECT timestamp FROM cycle_logs
+                            WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?)
+                            AND timestamp <= ? AND signal_type = 'EXECUTED_BASE'
+                            ORDER BY timestamp DESC LIMIT 1
+                        """, (clean_sym, sym, f"{base}/%", ts_iso))
+                        entry_row = cursor.fetchone()
+                        entry_timestamp = entry_row["timestamp"] if entry_row else None
+                    else:
+                        entry_timestamp = None
+                t["entry_timestamp"] = entry_timestamp
 
+                # Persist once so every later call (this endpoint is polled every 5s
+                # by the dashboard) hits the cached columns instead of re-running the
+                # cycle_logs lookups above — see the 2026-09-17 incident note on the
+                # `reason`/`entry_timestamp` column migration above.
+                if needs_persist:
+                    cursor.execute(
+                        "UPDATE closed_trades SET reason = ?, entry_timestamp = ? WHERE trade_id = ?",
+                        (reason, entry_timestamp, t.get("trade_id")),
+                    )
+            conn.commit()
             return trades
 
     def get_recent_closed_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
