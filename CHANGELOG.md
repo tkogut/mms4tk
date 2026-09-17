@@ -4,6 +4,26 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.4] - 2026-09-17
+
+### 🔥 Fixed — Production Incident #2 (cont'd): entry_timestamp Cache Gate Bug
+- 🐛 **`LoggerDB.get_closed_trades()`**: `0.48.3` cached `reason` correctly but gated
+  the `entry_timestamp` cycle_logs lookup on `not entry_timestamp` — indistinguishable
+  from "never looked up" when the lookup legitimately finds no match (stored as
+  NULL). Every trade with no matching `EXECUTED_BASE` row kept re-running the
+  expensive scan on every single call, forever. Confirmed live via `py-spy dump`
+  on the production process: stuck in this exact query on every sample, container
+  still pegged at ~99% CPU / unhealthy after the `0.48.3` deploy.
+- ✅ **Naprawa**: obie kosztowne wyszukiwania (`reason`, `entry_timestamp`) są teraz
+  bramkowane jednym wspólnym `already_processed = bool(reason)` — `reason` zawsze
+  kończy się wartością niepustą (fallback po PnL), więc raz przetworzony wiersz
+  nigdy więcej nie dotyka `cycle_logs`, niezależnie od tego czy `entry_timestamp`
+  zostało znalezione.
+- 🧪 Nowy test `test_get_closed_trades_caches_a_not_found_entry_timestamp` —
+  wstawia pasujący wiersz PO pierwszym wywołaniu i dowodzi, że drugie wywołanie go
+  ignoruje (bo już przetworzone), zamiast błędnie znaleźć nowe dopasowanie. Pełny
+  `pytest -q -m "not slow"`: 437 passed, 4 deselected.
+
 ## 🚀 [0.48.3] - 2026-09-17
 
 ### 🔥 Fixed — Production Incident #2: Unbounded cycle_logs N+1 Scan
