@@ -1,20 +1,18 @@
 {
   "conversation_id": "7ff8afc7-873f-48d2-b7a6-52a1f220fe0a",
   "role": "Builder Agent",
-  "status": "PARTIAL",
+  "status": "SUCCESS",
   "files_modified": [
-    "src/mms4tk/api.py",
-    "tests/test_api.py",
-    "ui_dashboard/src/components/PriceChart.jsx",
-    "ui_dashboard/src/components/AnalyticsTab.jsx",
-    "ui_dashboard/package.json",
-    "ui_dashboard/package-lock.json",
+    "src/mms4tk/logger_db.py",
+    "tests/test_logger_db_addon_events.py",
     "VERSION",
     "src/mms4tk/__init__.py",
     "ui_dashboard/app.py",
+    "ui_dashboard/package.json",
+    "ui_dashboard/package-lock.json",
     "CHANGELOG.md"
   ],
   "math_consistency_check": "PASSED",
-  "timestamp": "2026-09-17T20:19:37Z",
-  "notes": "Feature complete: entry_timestamp backend field, real-window timeframes, native Lightweight Charts candlesticks (PriceChart.jsx), markers+price-line, Brush kept only on Equity Curve. QA gate: 437 passed, 2 failed. Both failures (test_max_margin_allocation.py::test_daemon_70_30_capital_split_calculation, test_position_sizing.py::test_daemon_position_sizing_calculation) confirmed pre-existing and unrelated: daemon.py::plan_allocation() lazily imports mms4tk.api.configured_symbols_store, a global populated at import time from a local gitignored per-worktree file/DB whose BTC/USDC allocation_usd legitimately differs (10.0 on main vs 100.0 in this worktree) from daemon.py itself, verified byte-identical to main via diff. Status PARTIAL reflects the 2 unresolved-but-out-of-scope failures, not a defect in this branch's own changes."
+  "timestamp": "2026-09-17T20:59:59Z",
+  "notes": "Fixed LoggerDB.get_addon_events(): the WHERE clause matched any cycle_logs row with 'ADD' in outcome/signal_type, so SKIPPED/BLOCKED/CANDLE_GATE_SKIP re-evaluations of the same signal appeared as separate dashboard addon markers alongside real fills. Confirmed live on VPS logs.db: XAU/USDC had 822 CANDLE_GATE_SKIP_HIGH_RISK_ADD_SHORT + 436 BLOCKED_HIGH_RISK_ADD_LONG rows vs only 3 real EXECUTED_HIGH_RISK_ADD_SHORT fills -- chart showed ~9 +ADD markers in a 50-min window where 0 real adds executed. Fix narrows the query to outcome LIKE 'EXECUTED%ADD%'. Pure backend/query fix, no schema/API contract change. 2 new direct LoggerDB/sqlite tests (not mocked). Full suite: 439 passed, 2 failed -- both pre-existing/unrelated (configured_symbols_store global test-isolation issue, documented in PR #63 and CHANGELOG 0.48.6), reproduced identically before this change."
 }
