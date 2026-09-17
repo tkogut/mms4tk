@@ -4,6 +4,12 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.1] - 2026-09-17
+### 🐛 Fixed
+- Normalization of symbols in AnalyticsTab chart overlays.
+- Extraction of precise exit reasons from cycle_logs for trade registry.
+- UI: Enhanced visibility of SVG markers for trades and badges for exit reasons.
+
 ## 🚀 [0.48.0] - 2026-09-17
 
 ### ➕ Added

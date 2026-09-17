@@ -71,21 +71,41 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
 
   const mappedCandles = useMemo(() => {
     if (!candles || candles.length === 0) return [];
-    let result = [...candles];
+    let result = candles.map(c => ({ ...c }));
     
+    const candleInterval = result.length > 1 ? (result[1].timestamp - result[0].timestamp) : 3600000;
+    const minTs = result[0].timestamp - candleInterval * 0.5;
+    const maxTs = result[result.length - 1].timestamp + candleInterval * 1.5;
+
     // Add markers if shown
     const addMarker = (timestamp, type, price, meta) => {
-        const tsMatch = typeof timestamp === 'string' ? new Date(timestamp).getTime() : timestamp;
-        // find candle where tsMatch is within candle
-        // since we only have start timestamp, find the closest candle before or equal to tsMatch
+        if (!timestamp) return;
+        let tsMatch = typeof timestamp === 'string' ? new Date(timestamp).getTime() : Number(timestamp);
+        if (isNaN(tsMatch)) return;
+        if (tsMatch < 10000000000) tsMatch *= 1000; // seconds to ms
+
+        if (tsMatch < minTs || tsMatch > maxTs) {
+            return; // Outside visible chart window
+        }
+
+        // find candle where tsMatch is within candle interval
         let closestCandle = null;
         for (let i = result.length - 1; i >= 0; i--) {
-            if (result[i].timestamp <= tsMatch) {
+            if (result[i].timestamp <= tsMatch && tsMatch <= result[i].timestamp + candleInterval * 1.5) {
                 closestCandle = result[i];
                 break;
             }
         }
-        if (!closestCandle && result.length > 0) closestCandle = result[0];
+        if (!closestCandle) {
+            let minDiff = Infinity;
+            for (let i = 0; i < result.length; i++) {
+                const diff = Math.abs(result[i].timestamp - tsMatch);
+                if (diff < minDiff && diff <= candleInterval * 2) {
+                    minDiff = diff;
+                    closestCandle = result[i];
+                }
+            }
+        }
         if (closestCandle) {
             if (!closestCandle.markers) closestCandle.markers = [];
             closestCandle.markers.push({ type, price, ...meta });
@@ -93,18 +113,22 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     };
 
     if (showTrades && tradesHistory) {
-        tradesHistory.filter(t => t.symbol === selectedSymbol).forEach(t => {
+        tradesHistory.filter(t => normalizeSym(t.symbol) === normalizeSym(selectedSymbol)).forEach(t => {
             const isLong = String(t.side).toUpperCase().includes('LONG') || String(t.side).toUpperCase().includes('BUY');
             const pnl = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? Number(t.pnl_net_usd) : Number(t.pnl_usd || 0);
             
             // Entry
-            if (t.timestamp) addMarker(t.timestamp, isLong ? 'entryLong' : 'entryShort', t.entry_price, { label: `BUY @ ${t.entry_price}`, side: t.side, vol: t.volume, fee: t.fee_usd });
+            if (t.entry_timestamp) {
+                addMarker(t.entry_timestamp, isLong ? 'entryLong' : 'entryShort', t.entry_price, { label: `WEJŚCIE @ ${t.entry_price}`, side: t.side, vol: t.volume, fee: t.fee_usd });
+            } else if (t.timestamp) {
+                // If no precise entry_timestamp, fallback to 1 candle before exit
+                let exitTs = typeof t.timestamp === 'string' ? new Date(t.timestamp).getTime() : Number(t.timestamp);
+                if (exitTs < 10000000000) exitTs *= 1000;
+                addMarker(exitTs - candleInterval, isLong ? 'entryLong' : 'entryShort', t.entry_price, { label: `WEJŚCIE @ ${t.entry_price}`, side: t.side, vol: t.volume, fee: t.fee_usd });
+            }
             
             // Exit
-            if (t.timestamp) { // Ideally we'd use exit_timestamp if available, but using timestamp for now or maybe exit_time?
-                 // Let's assume t.timestamp is the close time. Then entry is just before it? 
-                 // Actually tradesHistory is closed trades. Usually timestamp is the close time.
-                 // We will just put the exit marker here.
+            if (t.timestamp) {
                  const isWin = pnl >= 0;
                  addMarker(t.timestamp, isWin ? 'exitWin' : 'exitLoss', t.exit_price, { label: isWin ? `TP +$${pnl.toFixed(2)}` : `SL -$${Math.abs(pnl).toFixed(2)}`, pnl, fee: t.fee_usd });
             }
@@ -112,7 +136,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     }
 
     if (showAddons && addonEvents) {
-        addonEvents.filter(a => a.symbol === selectedSymbol).forEach(a => {
+        addonEvents.filter(a => normalizeSym(a.symbol) === normalizeSym(selectedSymbol)).forEach(a => {
             addMarker(a.timestamp, 'addon', a.price, { label: `+ADD @ ${a.price}` });
         });
     }
@@ -370,11 +394,11 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
             </div>
             
             {chartMode === 'tma' && (
-              <div className="border-l border-slate-800 pl-1 ml-0.5 flex items-center gap-1.5 text-[9px] sm:text-[10px] text-slate-300">
-                <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showTrades} onChange={e => setShowTrades(e.target.checked)} className="accent-blue-500" /> Transakcje</label>
-                <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showAddons} onChange={e => setShowAddons(e.target.checked)} className="accent-blue-500" /> Dokupy</label>
-                <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showTma} onChange={e => setShowTma(e.target.checked)} className="accent-blue-500" /> Kanały TMA</label>
-                <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showLivePosition} onChange={e => setShowLivePosition(e.target.checked)} className="accent-blue-500" /> Pozycja Live</label>
+              <div className="border-l border-slate-800 pl-2 ml-1 flex flex-wrap items-center gap-2 text-[10px] font-medium text-slate-300">
+                <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap"><input type="checkbox" checked={showTrades} onChange={e => setShowTrades(e.target.checked)} className="accent-blue-500" /> Transakcje</label>
+                <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap"><input type="checkbox" checked={showAddons} onChange={e => setShowAddons(e.target.checked)} className="accent-blue-500" /> Dokupy</label>
+                <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap"><input type="checkbox" checked={showTma} onChange={e => setShowTma(e.target.checked)} className="accent-blue-500" /> Kanały TMA</label>
+                <label className="flex items-center gap-1 cursor-pointer whitespace-nowrap"><input type="checkbox" checked={showLivePosition} onChange={e => setShowLivePosition(e.target.checked)} className="accent-blue-500" /> Pozycja Live</label>
               </div>
             )}
           </div>
@@ -429,12 +453,22 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                         return (
                             <g>
                                 {payload.markers.map((m, i) => {
-                                    const yOff = (i * 12) - (payload.markers.length * 6);
-                                    if (m.type === 'entryLong') return <polygon points={`${cx},${cy-5+yOff} ${cx-5},${cy+5+yOff} ${cx+5},${cy+5+yOff}`} fill="#10b981" key={i}/>;
-                                    if (m.type === 'entryShort') return <polygon points={`${cx},${cy+5+yOff} ${cx-5},${cy-5+yOff} ${cx+5},${cy-5+yOff}`} fill="#ef4444" key={i}/>;
-                                    if (m.type === 'addon') return <polygon points={`${cx},${cy-4+yOff} ${cx-4},${cy+yOff} ${cx},${cy+4+yOff} ${cx+4},${cy+yOff}`} fill="#60a5fa" key={i}/>;
-                                    if (m.type === 'exitWin') return <circle cx={cx} cy={cy+yOff} r={4} fill="#10b981" key={i}/>;
-                                    if (m.type === 'exitLoss') return <path d={`M${cx-3},${cy-3+yOff} L${cx+3},${cy+3+yOff} M${cx+3},${cy-3+yOff} L${cx-3},${cy+3+yOff}`} stroke="#ef4444" strokeWidth={2} key={i}/>;
+                                    const yOff = (i * 16) - (payload.markers.length * 8);
+                                    if (m.type === 'entryLong') return <polygon points={`${cx},${cy-7+yOff} ${cx-7},${cy+7+yOff} ${cx+7},${cy+7+yOff}`} fill="#10b981" stroke="#0f172a" strokeWidth={1.5} key={i}/>;
+                                    if (m.type === 'entryShort') return <polygon points={`${cx},${cy+7+yOff} ${cx-7},${cy-7+yOff} ${cx+7},${cy-7+yOff}`} fill="#ef4444" stroke="#0f172a" strokeWidth={1.5} key={i}/>;
+                                    if (m.type === 'addon') return <polygon points={`${cx},${cy-6+yOff} ${cx-6},${cy+yOff} ${cx},${cy+6+yOff} ${cx+6},${cy+yOff}`} fill="#22d3ee" stroke="#0f172a" strokeWidth={1.5} key={i}/>;
+                                    if (m.type === 'exitWin') return (
+                                        <g key={i}>
+                                            <circle cx={cx} cy={cy+yOff} r={6} fill="#10b981" stroke="#0f172a" strokeWidth={1.5}/>
+                                            <circle cx={cx} cy={cy+yOff} r={2} fill="#ffffff" />
+                                        </g>
+                                    );
+                                    if (m.type === 'exitLoss') return (
+                                        <g key={i}>
+                                            <circle cx={cx} cy={cy+yOff} r={7} fill="#0f172a" opacity={0.5} />
+                                            <path d={`M${cx-4},${cy-4+yOff} L${cx+4},${cy+4+yOff} M${cx+4},${cy-4+yOff} L${cx-4},${cy+4+yOff}`} stroke="#ef4444" strokeWidth={2.5} strokeLinecap="round" />
+                                        </g>
+                                    );
                                     return null;
                                 })}
                             </g>
@@ -592,8 +626,17 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                           {formatSignedUsd(netPnl)}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-slate-400 text-left text-[10px] truncate max-w-[140px]">
-                        {t.reason || 'TAKE-PROFIT / SL'}
+                      <td className="px-3 py-2 text-left">
+                        {(() => {
+                          const r = t.reason || '';
+                          if (r === 'STALE_FORCE_CLOSE') return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/70 text-amber-300 border border-amber-500/40">INACTIVITY (STALE)</span>;
+                          if (r === 'STALE_SPLIT_50') return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/70 text-amber-300 border border-amber-500/40">SPLIT 50 (STALE)</span>;
+                          if (r === 'MIDLINE_PARTIAL_TP' || r === 'MIDLINE_TP') return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-teal-950/70 text-teal-300 border border-teal-500/40">MIDLINE TP</span>;
+                          if (r === 'TAKE-PROFIT' || r === 'TP') return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-500/40">TAKE-PROFIT (TP)</span>;
+                          if (r === 'STOP-LOSS' || r === 'SL') return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-950/70 text-rose-300 border border-rose-500/40">STOP-LOSS (SL)</span>;
+                          if (r === 'FORCE_CLOSE') return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/70 text-amber-300 border border-amber-500/40">FORCE CLOSE</span>;
+                          return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">{r || 'BREAK-EVEN (BE)'}</span>;
+                        })()}
                       </td>
                     </tr>
                   );
