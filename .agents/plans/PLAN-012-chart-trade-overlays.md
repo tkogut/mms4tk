@@ -99,8 +99,10 @@ flowchart TD
 ---
 
 ## 4. 🛡️ Kryteria Akceptacji (Auditor Gate)
-- [ ] Wszystkie testy `pytest -q -m "not slow"` przechodzą (min. 425 testów).
-- [ ] Endpoint `/api/v1/history/candles` zwraca pola `tma`, `upper_band`, `lower_band`.
-- [ ] Build frontendu `npm run build` w `ui_dashboard` przechodzi bez błędów.
-- [ ] Wykres w `AnalyticsTab.jsx` poprawnie renderuje punkty wejścia, wyjścia, dokupu oraz linię aktywnej pozycji.
-- [ ] Zachowana zgodność z "High Data Density Hedge-Fund Terminal".
+- [x] Wszystkie testy `pytest -q -m "not slow"` przechodzą (434 testy passed).
+- [x] Endpoint `/api/v1/history/candles` zwraca pola `tma`, `upper_band`, `lower_band`.
+- [x] Build frontendu `npm run build` w `ui_dashboard` przechodzi bez błędów.
+- [x] Wykres w `AnalyticsTab.jsx` poprawnie renderuje punkty wejścia, wyjścia, dokupu oraz linię aktywnej pozycji.
+- [x] Zachowana zgodność z "High Data Density Hedge-Fund Terminal".
+- [x] Handshake Verified: Plan-Alignment and Math-Consistency checked. Ready for Coordinator Push.
+- [x] Wdrożone na VPS (`0.48.0`), kontenery zdrowe, live trading aktywny.
