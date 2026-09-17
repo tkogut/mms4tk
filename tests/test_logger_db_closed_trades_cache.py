@@ -111,12 +111,16 @@ def test_get_closed_trades_caches_a_not_found_entry_timestamp(tmp_path):
     assert trades[0]["entry_timestamp"] is None
     assert trades[0]["reason"]
 
-    # Now insert a row that WOULD satisfy the entry_timestamp query if it ran again.
+    # Now insert a row that WOULD satisfy the entry_timestamp query if it ran
+    # again — real production shape: signal_type is "BASE_LONG"/"BASE_SHORT",
+    # outcome is "EXECUTED_BASE_LONG"/"EXECUTED_BASE_SHORT" (see
+    # test_get_closed_trades_finds_entry_timestamp_for_real_base_execution_shape
+    # for the query-correctness regression this shape exists to guard).
     with sqlite3.connect(db_file) as conn:
         conn.execute(
             "INSERT INTO cycle_logs (timestamp, symbol, signal_type, state, leverage, price, outcome, details) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (trade_ts.isoformat(), "ETH/USDC", "EXECUTED_BASE", "BASE_MODE", 1.0, 2500.0, "OPENED", ""),
+            (trade_ts.isoformat(), "ETH/USDC", "BASE_LONG", "BASE_MODE", 1.0, 2500.0, "EXECUTED_BASE_LONG", ""),
         )
         conn.commit()
 
@@ -126,3 +130,49 @@ def test_get_closed_trades_caches_a_not_found_entry_timestamp(tmp_path):
         "'not found' was cached as NULL — this is the exact regression that kept "
         "production pegged at 100% CPU after the first (incomplete) fix"
     )
+
+
+def test_get_closed_trades_finds_entry_timestamp_for_real_base_execution_shape(tmp_path):
+    """
+    Regression test for a 2026-09-17 dashboard bug: the entry_timestamp lookup
+    filtered `signal_type = 'EXECUTED_BASE'`, but daemon.py never logs that exact
+    string — `signal_type` is always "BASE_LONG"/"BASE_SHORT" and the "EXECUTED_"
+    prefix only ever appears in `outcome` (outcome = f"EXECUTED_{signal_type}").
+    Confirmed against production logs.db: `signal_type = 'EXECUTED_BASE'` matched
+    zero rows, ever — entry_timestamp was permanently NULL for every closed trade,
+    so the Analytics chart's entry marker always fell back to "1 candle before
+    exit", making every trade look like a same-candle flip regardless of the real
+    hold duration (a short held ~6h rendered as if entered on the exit candle).
+
+    Fix: match `outcome LIKE 'EXECUTED_BASE%'` instead.
+    """
+    db_file = os.path.join(tmp_path, "test_logs.db")
+    db = LoggerDB(db_path=db_file)
+
+    entry_ts = datetime(2026, 9, 17, 15, 5, 34, tzinfo=timezone.utc)
+    exit_ts = datetime(2026, 9, 17, 21, 0, 8, tzinfo=timezone.utc)
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "INSERT INTO cycle_logs (timestamp, symbol, signal_type, state, leverage, price, outcome, details) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (entry_ts.isoformat(), "XAG/USDC", "BASE_SHORT", "BASE_MODE", 3.0, 65.68, "EXECUTED_BASE_SHORT", ""),
+        )
+        conn.commit()
+
+    db.upsert_closed_trade(
+        trade_id="trade_real_shape",
+        timestamp=exit_ts.isoformat(),
+        symbol="XAG/USDC",
+        side="SHORT",
+        entry_price=65.68,
+        exit_price=65.40,
+        amount=149.0,
+        pnl_usd=0.1826,
+        pnl_pct=0.0000261,
+        is_win=True,
+        leverage=3.0,
+    )
+
+    trades = db.get_closed_trades()
+    assert trades[0]["entry_timestamp"] == entry_ts.isoformat()

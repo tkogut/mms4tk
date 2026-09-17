@@ -825,10 +825,16 @@ class LoggerDB:
 
                     if dt is not None:
                         ts_iso = dt.isoformat()
+                        # `signal_type` is only ever "BASE_LONG"/"BASE_SHORT" — the
+                        # "EXECUTED_" prefix lives in `outcome` (daemon.py sets
+                        # outcome = f"EXECUTED_{signal.signal_type}"), so a literal
+                        # `signal_type = 'EXECUTED_BASE'` never matched a single row
+                        # in production, permanently caching entry_timestamp as NULL
+                        # for every trade ever closed.
                         cursor.execute("""
                             SELECT timestamp FROM cycle_logs
                             WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?)
-                            AND timestamp <= ? AND signal_type = 'EXECUTED_BASE'
+                            AND timestamp <= ? AND outcome LIKE 'EXECUTED_BASE%'
                             ORDER BY timestamp DESC LIMIT 1
                         """, (clean_sym, sym, f"{base}/%", ts_iso))
                         entry_row = cursor.fetchone()
