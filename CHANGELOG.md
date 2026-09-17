@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.6] - 2026-09-17
+
+### 🏛️ High Data Density Hedge-Fund Terminal Dashboard Rebuild
+- 🏆 **`AggregatedPnLCard.jsx` (Nowy komponent)**: Scentralizowane Hero KPI łączące całkowity PnL portfela (`text-4xl sm:text-5xl font-mono tabular-nums`), wskaźnik zwrotu %, dynamiczny wykres SVG Sparkline trendu kapitału, reflektor live uPnL z pulsem ekspozycji rynkowej oraz skompresowaną belkę mikro-metryk (Zero-Gutter).
+- 📊 **`MonitoringTab.jsx`**: Całkowity demontaż i odbudowa — osadzenie Hero `AggregatedPnLCard`, Bento Grid par rynkowych (horyzontalny snap ribbon na smartfonach 390px), terminalowy Order Book zleceń nettingowych ze stałymi szerokościami kolumn, `tabular-nums text-right`, alertem stagnacji Inactivity Managera i modalem podwójnej autoryzacji zamknięcia pozycji.
+- 📈 **`AnalyticsTab.jsx`**: Wykres TMA rozciągnięty na 100% szerokości jako tło robocze z półprzezroczystymi nakładkami HUD (telemetria H4 Hermes w rogach wykresu), przełącznik między TMA a Krzywą Kapitału (Equity Curve), oraz skondensowana tabela historii zrealizowanych zleceń z SQLite.
+- ⚙️ **`SettingsTab.jsx`**: Architektura Accordion z 4 rozwijanymi sekcjami (Ryzyko & Dźwignia, Silnik Adaptacyjny & Filtry Zmienności, Alokacja Kapitału & Midline TP, Dostęp API & Bezpieczeństwo), nowoczesne przełączniki Toggle Switch zamiast checkboxów, rygorystyczne formatowanie numeryczne `tabular-nums font-mono`.
+
 ## 🚀 [0.47.5] - 2026-09-17
 
 ### 🎨 Dashboard: Numeric Formatting Standards (font-mono tabular-nums text-right)

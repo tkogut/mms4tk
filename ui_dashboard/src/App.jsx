@@ -166,6 +166,8 @@ export default function App() {
             kanbanCards={kanbanCards} 
             openPositions={openPositions}
             daemonData={daemonData}
+            tradesHistory={tradesHistory}
+            apiKey={apiKey}
             onRefresh={fetchDashboardData} 
           />
         )}
