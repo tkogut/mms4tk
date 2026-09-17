@@ -4,6 +4,15 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.0] - 2026-09-17
+
+### ➕ Added
+- **Chart trade overlays**: entry, exit, addons markers on Analytics Tab.
+- **Active position line**: Live reference line drawn on the TMA chart.
+- **Real TMA bands**: Integrated with `/api/v1/history/candles` endpoint.
+- **Endpoint `/api/v1/history/addons`**: for retrieving add-on events from `logger_db`.
+
+
 ## 🚀 [0.47.6] - 2026-09-17
 
 ### 🏛️ High Data Density Hedge-Fund Terminal Dashboard Rebuild

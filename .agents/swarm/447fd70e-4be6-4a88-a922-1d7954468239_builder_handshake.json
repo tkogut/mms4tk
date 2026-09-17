@@ -3,15 +3,12 @@
   "role": "Builder Agent",
   "status": "SUCCESS",
   "files_modified": [
-    "src/mms4tk/okx_executor.py",
-    "src/mms4tk/daemon.py",
-    "tests/test_reconciliation_fill_order.py",
-    "VERSION",
-    "src/mms4tk/__init__.py",
-    "ui_dashboard/app.py",
-    "CHANGELOG.md"
+    "src/mms4tk/api.py",
+    "src/mms4tk/logger_db.py",
+    "ui_dashboard/src/components/AnalyticsTab.jsx",
+    "tests/test_api.py"
   ],
   "math_consistency_check": "PASSED",
-  "timestamp": "2026-09-15T16:51:35Z",
-  "notes": "Exact fill price and PnL in position reconciliation v0.47.2"
+  "timestamp": "2026-09-17T12:53:58Z",
+  "notes": "PLAN-012 chart trade overlays, real TMA indicator feed and active position line"
 }
