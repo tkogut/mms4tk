@@ -708,22 +708,106 @@ class LoggerDB:
     def get_closed_trades(self, limit: Optional[int] = 500) -> List[Dict[str, Any]]:
         """
         Fetch historical closed trades sorted by timestamp.
-
-        limit=None returns the full history. A positive limit returns the MOST RECENT
-        `limit` trades (still in chronological order) — the previous implementation
-        combined `ORDER BY timestamp ASC` with a LIMIT, which silently froze callers on
-        the OLDEST rows once the table outgrew the cap (audit finding P2-30).
         """
+        from mms4tk.okx_executor import normalize_symbol
+        from datetime import timedelta
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if limit is None:
                 cursor.execute("SELECT * FROM closed_trades ORDER BY timestamp ASC")
-                return [dict(row) for row in cursor.fetchall()]
-            cursor.execute(
-                "SELECT * FROM (SELECT * FROM closed_trades ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC",
-                (limit,)
-            )
-            return [dict(row) for row in cursor.fetchall()]
+                rows = cursor.fetchall()
+            else:
+                cursor.execute(
+                    "SELECT * FROM (SELECT * FROM closed_trades ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC",
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+
+            trades = [dict(row) for row in rows]
+
+            for t in trades:
+                sym = t.get("symbol", "")
+                base = normalize_symbol(sym)
+                clean_sym = f"{base}/USDC" if base else sym
+                t["normalized_symbol"] = clean_sym
+
+                # Parse trade timestamp to ISO and datetime range
+                raw_ts = t.get("timestamp")
+                dt = None
+                if raw_ts:
+                    try:
+                        if isinstance(raw_ts, (int, float)):
+                            epoch_sec = raw_ts / 1000.0 if raw_ts > 1e11 else float(raw_ts)
+                            dt = datetime.fromtimestamp(epoch_sec, tz=timezone.utc)
+                        else:
+                            dt = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        dt = None
+
+                reason = t.get("reason")
+                if not reason and dt is not None:
+                    ts_min = (dt - timedelta(seconds=180)).isoformat()
+                    ts_max = (dt + timedelta(seconds=180)).isoformat()
+
+                    cursor.execute("""
+                        SELECT signal_type, outcome FROM cycle_logs 
+                        WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?) 
+                        AND timestamp BETWEEN ? AND ?
+                        AND (
+                            signal_type LIKE '%FORCE%' OR signal_type LIKE '%SPLIT%' OR signal_type LIKE '%CLOSE%'
+                            OR signal_type LIKE '%STOP%' OR signal_type LIKE '%TP%' OR signal_type LIKE '%MIDLINE%'
+                            OR outcome LIKE '%FORCE%' OR outcome LIKE '%SPLIT%' OR outcome LIKE '%CLOSE%'
+                            OR outcome LIKE '%STOP%' OR outcome LIKE '%TP%' OR outcome LIKE '%MIDLINE%'
+                        )
+                        ORDER BY timestamp DESC LIMIT 1
+                    """, (clean_sym, sym, f"{base}/%", ts_min, ts_max))
+
+                    log_row = cursor.fetchone()
+                    if log_row:
+                        sig = log_row["signal_type"] or ""
+                        out = log_row["outcome"] or ""
+
+                        if sig == "STALE_FORCE_CLOSE":
+                            reason = "STALE_FORCE_CLOSE"
+                        elif sig == "STALE_SPLIT_50":
+                            reason = "STALE_SPLIT_50"
+                        elif sig == "MIDLINE_PARTIAL_TP":
+                            reason = "MIDLINE_PARTIAL_TP"
+                        elif out == "STOP-LOSS":
+                            reason = "STOP-LOSS"
+                        elif out == "FORCE_CLOSE":
+                            reason = "FORCE_CLOSE"
+
+                if not reason:
+                    pnl_net = t.get("pnl_net_usd", 0.0) or 0.0
+                    pnl_pct = t.get("pnl_pct", 0.0) or 0.0
+                    if pnl_net > 0.05:
+                        reason = "TAKE-PROFIT"
+                    elif pnl_pct <= -0.015:
+                        reason = "STOP-LOSS"
+                    else:
+                        reason = "BREAK-EVEN"
+
+                t["reason"] = reason
+
+                # Find entry timestamp
+                if dt is not None:
+                    ts_iso = dt.isoformat()
+                    cursor.execute("""
+                        SELECT timestamp FROM cycle_logs 
+                        WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?)
+                        AND timestamp <= ? AND signal_type = 'EXECUTED_BASE'
+                        ORDER BY timestamp DESC LIMIT 1
+                    """, (clean_sym, sym, f"{base}/%", ts_iso))
+                    entry_row = cursor.fetchone()
+                    t["entry_timestamp"] = entry_row["timestamp"] if entry_row else None
+                else:
+                    t["entry_timestamp"] = None
+
+            return trades
 
     def get_recent_closed_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Fetch the most recent closed trades (sorted chronologically)."""
