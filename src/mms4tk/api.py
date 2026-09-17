@@ -1008,7 +1008,7 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
 async def get_history_trades(limit: int = 100) -> List[Dict[str, Any]]:
     """Fetch real historical closed trades from SQLite logger_db."""
     try:
-        await trade_sync_worker.sync_closed_trades()
+        asyncio.create_task(trade_sync_worker.sync_closed_trades())
     except Exception as e:
         logger.debug(f"Trade sync on history fetch notice: {e}")
     return logger_db.get_closed_trades(limit=limit)
