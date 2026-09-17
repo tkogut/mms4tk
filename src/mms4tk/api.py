@@ -400,6 +400,11 @@ class PositionItem(BaseModel):
     unrealized_pnl: float
     leverage: float
     raw_symbol: Optional[str] = None
+    # OKX already returns this (info.cTime, epoch ms) in the same fetch_positions()
+    # call below — no extra network round-trip. Lets the dashboard chart place a
+    # time-anchored marker at the moment this position was actually opened, instead
+    # of only a price-level reference line with no notion of "when".
+    entry_timestamp: Optional[int] = None
 
 
 class PositionsResponse(BaseModel):
@@ -424,6 +429,8 @@ async def get_active_positions() -> Dict[str, Any]:
                 mark_price = float(pos.get("markPrice") or pos.get("info", {}).get("markPx") or pos.get("info", {}).get("last", 0.0))
                 unrealized_pnl = float(pos.get("unrealizedPnl") or pos.get("info", {}).get("upl", 0.0))
                 leverage = float(pos.get("leverage") or pos.get("info", {}).get("lever", 1.0))
+                _c_time = pos.get("info", {}).get("cTime")
+                entry_timestamp = int(_c_time) if _c_time not in (None, "") else None
 
                 active_positions.append({
                     "symbol": symbol,
@@ -434,6 +441,7 @@ async def get_active_positions() -> Dict[str, Any]:
                     "mark_price": mark_price,
                     "unrealized_pnl": unrealized_pnl,
                     "leverage": leverage,
+                    "entry_timestamp": entry_timestamp,
                     "raw_symbol": pos.get("info", {}).get("instId", symbol)
                 })
 
