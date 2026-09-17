@@ -93,6 +93,27 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
+## 📝 5. Decisions & Key Milestones
+
+### 2026-09-17 — /grill-me: Hermes cron "Pamiętnik Masterminda" (@MastermindZX X/Twitter ingest)
+- **Cel**: godzinowy cron dla Hermesa, czytający posty @MastermindZX na X, filtrujące do
+  `#dzienniktradera`/`#algotrading`, archiwizujące jako czysto informacyjny "pamiętnik".
+- **Decyzje z wywiadu (adaptacja protokołu grill-me pod ten task)**:
+  1. **Dostęp do X**: brak — ani płatnego X API, ani istniejącego web-browsing tool po
+     stronie Hermesa. To jest **blokujący prerequisite**, nie coś do zignorowania w prompt-cie.
+  2. **Cel/zakres**: wyłącznie informacyjny log do czytania. **Zero wpływu na żywy trading**
+     — nigdy nie podłączać do `mms4_set_strategy_profile`/`directional_bias`/HITL.
+  3. **Miejsce przechowywania**: po stronie Hermesa (kanban/własna baza) — **zero zmian w
+     repo mms4tk**, zgodnie z istniejącą zasadą "Krok 1 (prompt Hermesa) dzieje się poza
+     repo".
+  4. **Backfill**: tyle, ile technicznie dostępne w ramach limitu wybranego kanału dostępu
+     na pierwszym uruchomieniu, bez sztywnej liczby dni/postów.
+- **Status**: prompt dla Hermesa przygotowany (patrz odpowiedź w tej samej sesji) —
+  **nie wdrożony**, czeka na rozwiązanie prerequisitu z punktu 1 (wybór i konfiguracja
+  kanału dostępu do X) przez usera.
+
+---
+
 ## 📡 6. TELEGRAM NOTIFICATIONS & HERMES TRIAD ARCHITECTURE (SSOT for all agents)
 
 ### A. Dual Dispatch Architecture:
