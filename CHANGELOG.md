@@ -4,6 +4,35 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.8] - 2026-09-17
+
+### 🔥 Fixed — Entry Marker Always Snapped to "1 Candle Before Exit"
+- 🐛 **`LoggerDB.get_closed_trades()`** (`src/mms4tk/logger_db.py`): the
+  `entry_timestamp` backfill query filtered `signal_type = 'EXECUTED_BASE'` —
+  but `daemon.py` never logs that literal string. `signal_type` is always
+  `"BASE_LONG"`/`"BASE_SHORT"`; the `"EXECUTED_"` prefix only ever appears in
+  `outcome` (`outcome = f"EXECUTED_{signal.signal_type}"`). Confirmed against
+  production `logs.db`: `signal_type = 'EXECUTED_BASE'` matched **zero rows,
+  ever**. Since `entry_timestamp` is cached permanently once computed (by
+  design, per the `[0.48.4]` fix), every closed trade in the system's history
+  had `entry_timestamp = NULL` — the Analytics chart's entry marker always
+  fell back to "1 candle before exit", making every trade look like it was
+  entered and closed almost instantly regardless of the real hold duration
+  (spotted live: a XAG/USDC short actually opened ~15:05, held ~6h, closed
+  ~21:00 — the chart drew "WEJŚCIE" one candle before the 21:00 close).
+- ✅ **Naprawa**: query narrowed to `outcome LIKE 'EXECUTED_BASE%'`, matching
+  the real logged shape for both long and short base entries.
+- 🧪 New `test_get_closed_trades_finds_entry_timestamp_for_real_base_execution_shape`
+  reproduces the exact production row shape (`XAG/USDC`, `BASE_SHORT` →
+  `EXECUTED_BASE_SHORT`, entry 65.68 → exit 65.40) and proves `entry_timestamp`
+  is now found. Also corrected the synthetic cycle_logs row in the existing
+  `test_get_closed_trades_caches_a_not_found_entry_timestamp` — it used the
+  same wrong `signal_type='EXECUTED_BASE'`/`outcome='OPENED'` shape the buggy
+  query expected, which no longer reflects reality after this fix.
+- Pure backend fix (`src/mms4tk/logger_db.py` + tests) — no schema/API
+  contract change. Trade prices/PnL were always correct; only the entry
+  marker's *time position* on the chart was wrong.
+
 ## 🚀 [0.48.7] - 2026-09-17
 
 ### 🔥 Fixed — Addon Markers Showed Skipped/Blocked Attempts, Not Real Fills
