@@ -4,6 +4,23 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.5] - 2026-09-17
+
+### 🔥 Fixed — Analytics Tab Crash (ReferenceError, TDZ)
+- 🐛 **`AnalyticsTab.jsx`**: `mappedCandles`/`activePos` (`useMemo`) called
+  `normalizeSym(...)` at lines 116/139/147, but `normalizeSym` was declared as a
+  `const` further down at line 150. `useMemo`'s factory runs synchronously during
+  render, so this threw `ReferenceError: Cannot access 'normalizeSym' before
+  initialization` on every single render — the Analytics tab never rendered at
+  all (confirmed live via a browser console screenshot showing the minified
+  equivalent, `Cannot access 'Re' before initialization`, inside `Array.find`
+  under `useMemo`). Fix: moved the `normalizeSym` declaration above both usages.
+- 🐛 **`CustomTooltip`**: referenced `showTma` — state local to `AnalyticsTab` —
+  from a component defined at module scope, outside that closure. Would throw on
+  the first chart hover. Fixed by passing `showTma` as an explicit prop.
+- Pure frontend fix (`ui_dashboard/src/components/AnalyticsTab.jsx` only), no
+  backend/API changes. `npm run build`: clean.
+
 ## 🚀 [0.48.4] - 2026-09-17
 
 ### 🔥 Fixed — Production Incident #2 (cont'd): entry_timestamp Cache Gate Bug
