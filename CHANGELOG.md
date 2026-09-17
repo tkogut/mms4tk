@@ -4,6 +4,14 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.47.5] - 2026-09-17
+
+### 🎨 Dashboard: Numeric Formatting Standards (font-mono tabular-nums text-right)
+- 🔢 **`ui_dashboard/src/utils/formatters.js`** (nowy plik): `formatSignedUsd()` — wyodrębnione z 3-krotnie zduplikowanego wzorca formatowania kwot ze znakiem w `MonitoringTab.jsx`/`AnalyticsTab.jsx`.
+- 📐 **`tabular-nums`**: dodane obok istniejącego `font-mono` na wszystkich kartach KPI, kafelkach per-symbol i odczytach formularza w `MonitoringTab.jsx`, `AnalyticsTab.jsx`, `SettingsTab.jsx` — eliminuje jitter szerokości cyfr przy odświeżaniu danych.
+- ➡️ **`text-right`**: kolumny liczbowe (dźwignia, alokacja, depozyt, ceny, PnL, prowizja) w obu tabelach `AnalyticsTab.jsx` (Otwarte Pozycje, Historia Transakcji) wyrównane do prawej, zgodnie z Kompendium Inżynieryjnym UI/UX (`.agents/specs/knowledge/mms4-dashboard-ui-ux-standards.md`).
+- Zakres świadomie ograniczony do klas numerycznych — bez migracji na Lightweight Charts, bez pełnej kompresji gęstości Tailwind, bez `useRef` (brak WS >10Hz dziś). Zero nowych zależności.
+
 ## 🚀 [0.47.4] - 2026-09-15
 
 ### 🛡️ Reconciliation Fill Matching: Time-Bounded Against Stale Orders

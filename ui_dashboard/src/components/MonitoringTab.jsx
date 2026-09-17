@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Wallet, ShieldAlert, CheckCircle2, RefreshCw, Zap, TrendingUp, Award, Percent, AlertOctagon, Scale, Layers } from 'lucide-react';
+import { formatSignedUsd } from '../utils/formatters';
 
 export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions = [], daemonData = null, onRefresh }) {
   const [activeSymbols, setActiveSymbols] = useState([
@@ -86,7 +87,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
                 {scoutSymbols.map(([sym, p]) => (
                   <span
                     key={sym}
-                    className="text-[10px] font-mono bg-amber-900/50 border border-amber-500/30 text-amber-200 px-2 py-0.5 rounded"
+                    className="text-[10px] font-mono tabular-nums bg-amber-900/50 border border-amber-500/30 text-amber-200 px-2 py-0.5 rounded"
                   >
                     {sym} · ${Number(p.notional_base_usd).toFixed(2)} · ↓
                     {Number(p.notional_reduction_factor).toFixed(1)}×
@@ -145,7 +146,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1.5 text-xs font-mono">
+                <div className="grid grid-cols-4 gap-1.5 text-xs font-mono tabular-nums">
                   <div>
                     <span className="text-slate-500 text-[9px] block">Alokacja ($):</span>
                     <span className="font-bold text-emerald-400">${Number(s.allocation_usd || 10.0).toFixed(2)}</span>
@@ -167,7 +168,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
                 </div>
 
                 {plan && (
-                  <div className="flex items-center justify-between text-[10px] font-mono border-t border-slate-800/80 pt-2">
+                  <div className="flex items-center justify-between text-[10px] font-mono tabular-nums border-t border-slate-800/80 pt-2">
                     <span className="text-slate-500">
                       Pozycja bazowa:{' '}
                       <span className="text-slate-300 font-bold">
@@ -202,7 +203,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
               <Wallet className={`w-4 h-4 ${statsData?.is_mock ? 'text-amber-400' : 'text-emerald-400'}`} />
             </div>
           </div>
-          <div className="text-2xl font-bold text-gray-100 font-mono flex items-baseline gap-2">
+          <div className="text-2xl font-bold text-gray-100 font-mono tabular-nums flex items-baseline gap-2">
             <span>${freeUsdc}</span>
           </div>
           <div className="text-xs text-slate-400 mt-1">
@@ -217,10 +218,10 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
             <span className="text-xs font-medium">Niezrealizowany PnL (uPnL)</span>
             <Activity className="w-4 h-4 text-blue-400" />
           </div>
-          <div className={`text-2xl font-bold font-mono ${
+          <div className={`text-2xl font-bold font-mono tabular-nums ${
             totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-red-400'
           }`}>
-            {totalUnrealizedPnl >= 0 ? `+$${totalUnrealizedPnl.toFixed(2)}` : `-$${Math.abs(totalUnrealizedPnl).toFixed(2)}`}
+            {formatSignedUsd(totalUnrealizedPnl)}
           </div>
           <div className="text-xs text-slate-400 mt-1">
             Wycena pozycji (${totalNotionalUsd.toFixed(2)} Notional)
@@ -232,7 +233,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
             <span className="text-xs font-medium">Liczba Zorganizowanych Transakcji</span>
             <Zap className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-gray-100 font-mono">
+          <div className="text-2xl font-bold text-gray-100 font-mono tabular-nums">
             {totalTrades}
           </div>
           <div className="text-xs text-slate-400 mt-1">Zamknięte w SQLite logs.db</div>
@@ -243,7 +244,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
             <span className="text-xs font-medium">Wygenerowane PnL ($)</span>
             <Award className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className={`text-2xl font-bold font-mono ${
+          <div className={`text-2xl font-bold font-mono tabular-nums ${
             Number(statsData?.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
           }`}>
             ${Number(statsData?.realized_pnl || 0).toFixed(2)}
@@ -272,7 +273,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
               <span className="text-xs font-medium">Win Rate</span>
               <Percent className="w-3.5 h-3.5 text-emerald-400" />
             </div>
-            <div className="text-xl font-bold text-emerald-400 font-mono">
+            <div className="text-xl font-bold text-emerald-400 font-mono tabular-nums">
               {hasTraded ? `${winRate}%` : '0.0%'}
             </div>
             <div className="text-[10px] text-slate-500">Skuteczność transakcji</div>
@@ -283,7 +284,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
               <span className="text-xs font-medium">Profit Factor</span>
               <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
             </div>
-            <div className="text-xl font-bold text-blue-400 font-mono">
+            <div className="text-xl font-bold text-blue-400 font-mono tabular-nums">
               {hasTraded ? profitFactor : '0.00'}
             </div>
             <div className="text-[10px] text-slate-500">Stosunek zysku do strat</div>
@@ -294,7 +295,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
               <span className="text-xs font-medium">Max Drawdown</span>
               <AlertOctagon className="w-3.5 h-3.5 text-red-400" />
             </div>
-            <div className="text-xl font-bold text-red-400 font-mono">
+            <div className="text-xl font-bold text-red-400 font-mono tabular-nums">
               {hasTraded ? `$${maxDdUsd}` : '$0.00'}
             </div>
             <div className="text-[10px] text-slate-500">
@@ -307,7 +308,7 @@ export function MonitoringTab({ stateData, statsData, kanbanCards, openPositions
               <span className="text-xs font-medium">R:R Ratio</span>
               <Scale className="w-3.5 h-3.5 text-amber-400" />
             </div>
-            <div className="text-xl font-bold text-amber-400 font-mono">
+            <div className="text-xl font-bold text-amber-400 font-mono tabular-nums">
               {hasTraded ? avgRr : '0.00'}
             </div>
             <div className="text-[10px] text-slate-500">Zysk do ryzyka</div>

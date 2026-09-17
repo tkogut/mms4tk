@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Activity, TrendingUp, Clock, FileText, Layers, RefreshCw, ChevronLeft, ChevronRight, XCircle, Search, Filter, Calendar, ArrowUpDown, CheckCircle, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line } from 'recharts';
+import { formatSignedUsd } from '../utils/formatters';
 
 export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = [], apiKey, onRefresh }) {
   const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDC');
@@ -337,7 +338,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
               </div>
             </div>
 
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs font-mono">
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs font-mono tabular-nums">
               <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
                 <span className="text-slate-400">Para Rynkowa:</span>
                 <span className="font-bold text-gray-100 text-sm">{confirmCloseTarget.cleanSym}</span>
@@ -357,7 +358,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
               <div className="flex justify-between items-center py-1">
                 <span className="text-slate-400">Niezrealizowany PnL:</span>
                 <span className={`font-bold ${confirmCloseTarget.upnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {confirmCloseTarget.upnl >= 0 ? `+$${confirmCloseTarget.upnl?.toFixed(2)}` : `-$${Math.abs(confirmCloseTarget.upnl || 0).toFixed(2)}`} USD
+                  {formatSignedUsd(confirmCloseTarget.upnl)} USD
                 </span>
               </div>
             </div>
@@ -567,16 +568,16 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                 <tr>
                   <th className="px-4 py-2.5">Para</th>
                   <th className="px-4 py-2.5">Strona</th>
-                  <th className="px-4 py-2.5">Dźwignia</th>
-                  <th className="px-4 py-2.5">Alokacja (Notional)</th>
-                  <th className="px-4 py-2.5">Depozyt (Margin)</th>
-                  <th className="px-4 py-2.5">Cena Wejścia</th>
-                  <th className="px-4 py-2.5">Cena Rynkowa</th>
-                  <th className="px-4 py-2.5">Niezrealizowany PnL</th>
+                  <th className="px-4 py-2.5 text-right">Dźwignia</th>
+                  <th className="px-4 py-2.5 text-right">Alokacja (Notional)</th>
+                  <th className="px-4 py-2.5 text-right">Depozyt (Margin)</th>
+                  <th className="px-4 py-2.5 text-right">Cena Wejścia</th>
+                  <th className="px-4 py-2.5 text-right">Cena Rynkowa</th>
+                  <th className="px-4 py-2.5 text-right">Niezrealizowany PnL</th>
                   <th className="px-4 py-2.5 text-right">Akcja / Zamknięcie</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
+              <tbody className="divide-y divide-slate-800/60 font-mono tabular-nums">
                 {openPositions.map((p, idx) => {
                   const rawSym = p.symbol || p.raw_symbol || 'N/A';
                   const cleanSym = normalizeSym(rawSym);
@@ -602,18 +603,18 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                           {side}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-bold text-blue-400">{leverage.toFixed(0)}x</td>
-                      <td className="px-4 py-3 font-bold text-gray-200">${notional.toFixed(2)} USD</td>
-                      <td className="px-4 py-3 text-amber-400 font-bold">${margin.toFixed(2)} USD</td>
-                      <td className="px-4 py-3 text-slate-300">${entryPx > 0 ? entryPx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</td>
-                      <td className="px-4 py-3 text-slate-300">${markPx > 0 ? markPx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-right font-bold text-blue-400">{leverage.toFixed(0)}x</td>
+                      <td className="px-4 py-3 text-right font-bold text-gray-200">${notional.toFixed(2)} USD</td>
+                      <td className="px-4 py-3 text-right text-amber-400 font-bold">${margin.toFixed(2)} USD</td>
+                      <td className="px-4 py-3 text-right text-slate-300">${entryPx > 0 ? entryPx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</td>
+                      <td className="px-4 py-3 text-right text-slate-300">${markPx > 0 ? markPx.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</td>
+                      <td className="px-4 py-3 text-right">
                         <span className={`font-bold px-2 py-0.5 rounded ${
-                          upnl >= 0 
-                            ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30' 
+                          upnl >= 0
+                            ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30'
                             : 'bg-red-950/80 text-red-400 border border-red-500/30'
                         }`}>
-                          {upnl >= 0 ? `+$${upnl.toFixed(2)}` : `-$${Math.abs(upnl).toFixed(2)}`} USD
+                          {formatSignedUsd(upnl)} USD
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
@@ -759,14 +760,14 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                   <th className="px-4 py-2.5">Czas Zarejestrowania</th>
                   <th className="px-4 py-2.5">Para</th>
                   <th className="px-4 py-2.5">Strona</th>
-                  <th className="px-4 py-2.5">Cena Wejścia</th>
-                  <th className="px-4 py-2.5">Cena Wyjścia</th>
-                  <th className="px-4 py-2.5">PnL Netto / Brutto ($)</th>
-                  <th className="px-4 py-2.5">Prowizja (Fee)</th>
+                  <th className="px-4 py-2.5 text-right">Cena Wejścia</th>
+                  <th className="px-4 py-2.5 text-right">Cena Wyjścia</th>
+                  <th className="px-4 py-2.5 text-right">PnL Netto / Brutto ($)</th>
+                  <th className="px-4 py-2.5 text-right">Prowizja (Fee)</th>
                   <th className="px-4 py-2.5">Wynik / Stan</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
+              <tbody className="divide-y divide-slate-800/60 font-mono tabular-nums">
                 {currentTrades.map((t, idx) => {
                   const netPnlVal = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? Number(t.pnl_net_usd) : Number(t.pnl_usd || 0);
                   const isNetWin = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? netPnlVal > 0 : (t.is_win || netPnlVal >= 0);
@@ -783,9 +784,9 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                           {t.side || 'BUY'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-200">${Number(t.entry_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-3 text-slate-200">${Number(t.exit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-right text-slate-200">${Number(t.entry_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 text-right text-slate-200">${Number(t.exit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 text-right">
                         <div className={`font-bold text-sm ${netPnlVal >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                           ${netPnlVal.toFixed(2)}
                         </div>
@@ -793,7 +794,7 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                           Brutto: ${Number(t.pnl_usd || 0).toFixed(2)}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-slate-400 text-xs">
+                      <td className="px-4 py-3 text-right text-slate-400 text-xs">
                         ${Number(t.fee_usd || 0).toFixed(4)}
                       </td>
                       <td className="px-4 py-3">
