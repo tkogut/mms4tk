@@ -1462,13 +1462,20 @@ class LoggerDB:
 
 
     def get_addon_events(self, symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        """Retrieve recent HIGH_RISK_ADD or ADD events."""
+        """Retrieve recently EXECUTED HIGH_RISK_ADD/ADD fills.
+
+        Only rows whose `outcome` starts with "EXECUTED_" qualify — the old
+        `outcome LIKE '%ADD%' OR signal_type LIKE '%ADD%'` also matched every
+        SKIPPED_/BLOCKED_/CANDLE_GATE_SKIP_ row for the same signal (all contain
+        "ADD" via signal_type), so a single re-evaluated add-on attempt could
+        surface as many chart markers as the daemon re-ran that cycle.
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             query = """
                 SELECT timestamp, symbol, signal_type, details, outcome, price
                 FROM cycle_logs
-                WHERE (outcome LIKE '%HIGH_RISK_ADD%' OR outcome LIKE '%ADD%' OR signal_type LIKE '%HIGH_RISK_ADD%' OR signal_type LIKE '%ADD%')
+                WHERE outcome LIKE 'EXECUTED%ADD%'
             """
             params: List[Any] = []
             if symbol:
