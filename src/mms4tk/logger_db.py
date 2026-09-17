@@ -768,10 +768,18 @@ class LoggerDB:
 
                 reason = t.get("reason")
                 entry_timestamp = t.get("entry_timestamp")
-                # Only true on a freshly-migrated row where nothing was cached yet —
-                # once persisted below, every later call skips both lookups entirely.
-                needs_persist = not reason or not entry_timestamp
-                if not reason and dt is not None:
+                # `reason` always ends up non-null after first processing (the
+                # pnl-based fallback a few lines down never leaves it empty) —
+                # unlike `entry_timestamp`, which legitimately stays NULL forever
+                # when no matching EXECUTED_BASE row exists. Gating on `reason`
+                # alone (not "either is falsy") is deliberate: an incident-causing
+                # bug in the first cut of this cache used `not entry_timestamp` as
+                # its own gate, which made a genuine "not found" indistinguishable
+                # from "never looked up" — re-running the expensive cycle_logs scan
+                # for that trade on every single call, forever (2026-09-17, found
+                # live via py-spy: stuck in this exact query, every request).
+                already_processed = bool(reason)
+                if not already_processed and dt is not None:
                     ts_min = (dt - timedelta(seconds=180)).isoformat()
                     ts_max = (dt + timedelta(seconds=180)).isoformat()
 
@@ -804,21 +812,17 @@ class LoggerDB:
                         elif out == "FORCE_CLOSE":
                             reason = "FORCE_CLOSE"
 
-                if not reason:
-                    pnl_net = t.get("pnl_net_usd", 0.0) or 0.0
-                    pnl_pct = t.get("pnl_pct", 0.0) or 0.0
-                    if pnl_net > 0.05:
-                        reason = "TAKE-PROFIT"
-                    elif pnl_pct <= -0.015:
-                        reason = "STOP-LOSS"
-                    else:
-                        reason = "BREAK-EVEN"
+                if not already_processed:
+                    if not reason:
+                        pnl_net = t.get("pnl_net_usd", 0.0) or 0.0
+                        pnl_pct = t.get("pnl_pct", 0.0) or 0.0
+                        if pnl_net > 0.05:
+                            reason = "TAKE-PROFIT"
+                        elif pnl_pct <= -0.015:
+                            reason = "STOP-LOSS"
+                        else:
+                            reason = "BREAK-EVEN"
 
-                t["reason"] = reason
-
-                # Find entry timestamp — skip the lookup entirely if a value was
-                # already persisted for this row on a previous call.
-                if not entry_timestamp:
                     if dt is not None:
                         ts_iso = dt.isoformat()
                         cursor.execute("""
@@ -831,17 +835,18 @@ class LoggerDB:
                         entry_timestamp = entry_row["timestamp"] if entry_row else None
                     else:
                         entry_timestamp = None
-                t["entry_timestamp"] = entry_timestamp
 
-                # Persist once so every later call (this endpoint is polled every 5s
-                # by the dashboard) hits the cached columns instead of re-running the
-                # cycle_logs lookups above — see the 2026-09-17 incident note on the
-                # `reason`/`entry_timestamp` column migration above.
-                if needs_persist:
+                    # Persist once so every later call (this endpoint is polled
+                    # every 5s by the dashboard) reads the cached columns instead of
+                    # ever re-running either lookup above for this trade_id again —
+                    # regardless of whether entry_timestamp was actually found.
                     cursor.execute(
                         "UPDATE closed_trades SET reason = ?, entry_timestamp = ? WHERE trade_id = ?",
                         (reason, entry_timestamp, t.get("trade_id")),
                     )
+
+                t["reason"] = reason
+                t["entry_timestamp"] = entry_timestamp
             conn.commit()
             return trades
 
