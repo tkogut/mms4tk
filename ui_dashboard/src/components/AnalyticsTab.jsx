@@ -1,37 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Activity, TrendingUp, Calendar, Layers, Search, Filter, ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, LineChart } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Line, ComposedChart, ReferenceLine, ReferenceDot } from 'recharts';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Brush } from 'recharts';
 import { formatSignedUsd } from '../utils/formatters';
-
-
-const CustomTooltip = ({ active, payload, label, showTma }) => {
-    if (active && payload && payload.length) {
-        const c = payload[0].payload;
-        return (
-            <div className="bg-slate-950/95 border border-slate-800 rounded-lg p-2 shadow-xl text-[11px] font-mono tabular-nums min-w-[150px]">
-                <div className="text-slate-400 mb-1 border-b border-slate-800 pb-1">{label}</div>
-                <div className="flex justify-between gap-3"><span className="text-slate-500">Price:</span> <span className="text-slate-200 font-bold">{c.price}</span></div>
-                {showTma && c.tma && <div className="flex justify-between gap-3"><span className="text-slate-500">TMA:</span> <span className="text-emerald-400">{c.tma}</span></div>}
-                
-                {c.markers && c.markers.length > 0 && (
-                    <div className="mt-2 pt-1 border-t border-slate-800">
-                        <div className="text-slate-500 mb-1 text-[9px] uppercase">Zdarzenia:</div>
-                        {c.markers.map((m, i) => (
-                            <div key={i} className="mb-1 last:mb-0">
-                                {m.type === 'entryLong' && <span className="text-emerald-400">▲ {m.label}</span>}
-                                {m.type === 'entryShort' && <span className="text-rose-400">▼ {m.label}</span>}
-                                {m.type === 'addon' && <span className="text-blue-400">◆ {m.label}</span>}
-                                {m.type === 'exitWin' && <span className="text-emerald-400 bg-emerald-950/50 px-1 rounded">● {m.label}</span>}
-                                {m.type === 'exitLoss' && <span className="text-rose-400 bg-rose-950/50 px-1 rounded">✕ {m.label}</span>}
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-        );
-    }
-    return null;
-};
+import { PriceChart } from './PriceChart';
 
 export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = [], apiKey, onRefresh }) {
   const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDC');
@@ -58,8 +29,8 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
   const [sortOrder, setSortOrder] = useState('newest'); // 'newest', 'oldest', 'pnl_high', 'pnl_low'
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Symbol normalization utility helper — must be declared before mappedCandles/
-  // activePos below, both of which call it inside a useMemo factory (executed
+  // Symbol normalization utility helper — must be declared before activePos/
+  // chartMarkers below, both of which call it inside a useMemo factory (executed
   // synchronously at that point in render, not deferred) — referencing it from
   // its old position further down this file threw `ReferenceError: Cannot access
   // 'normalizeSym' before initialization` on every single render of this tab.
@@ -86,93 +57,114 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
     return `${str}/USDC`;
   };
 
+  // Each entry is a real VISIBLE TIME WINDOW (label = window, not candle size).
+  // `tf` (candle interval) is chosen per window so `limit` (candle count) stays
+  // safely under OKX's single-request cap (~300, no pagination) while still
+  // covering the whole window: 4H@5m=48, 1D@15m=96, 1W@1h=168, 1M@4h=180,
+  // 3M@1d=90, 1Y@1d=365 (unchanged — this one was already a real window before).
   const timeframes = [
-    { id: '4h', label: '4H', tf: '4h', limit: 60 },
-    { id: '1d', label: '1D', tf: '1d', limit: 60 },
-    { id: '1w', label: '1W', tf: '1w', limit: 52 },
-    { id: '1m', label: '1M', tf: '1d', limit: 30 },
+    { id: '4h', label: '4H', tf: '5m', limit: 48 },
+    { id: '1d', label: '1D', tf: '15m', limit: 96 },
+    { id: '1w', label: '1W', tf: '1h', limit: 168 },
+    { id: '1m', label: '1M', tf: '4h', limit: 180 },
     { id: '3m', label: '3M', tf: '1d', limit: 90 },
     { id: '1y', label: '1Y', tf: '1d', limit: 365 },
   ];
 
   const currentTfObj = timeframes.find((t) => t.id === timeframe) || timeframes[0];
 
-  const mappedCandles = useMemo(() => {
-    if (!candles || candles.length === 0) return [];
-    let result = candles.map(c => ({ ...c }));
-    
-    const candleInterval = result.length > 1 ? (result[1].timestamp - result[0].timestamp) : 3600000;
-    const minTs = result[0].timestamp - candleInterval * 0.5;
-    const maxTs = result[result.length - 1].timestamp + candleInterval * 1.5;
+  const activePos = useMemo(() => openPositions.find(p => normalizeSym(p.symbol) === normalizeSym(selectedSymbol)), [openPositions, selectedSymbol]);
 
-    // Add markers if shown
-    const addMarker = (timestamp, type, price, meta) => {
+  // Trade/addon/active-position markers, in Lightweight Charts' own SeriesMarker
+  // shape ({time (epoch seconds), position, shape, color, text}) — this replaces
+  // the old Recharts-era approach of mutating candle.markers[] and hand-drawing
+  // SVG shapes via a custom dot renderer, now that the price panel itself is a
+  // native PriceChart (see PriceChart.jsx) instead of a Recharts ComposedChart.
+  const chartMarkers = useMemo(() => {
+    if (!candles || candles.length === 0) return [];
+    const sorted = [...candles].sort((a, b) => a.timestamp - b.timestamp);
+    const candleInterval = sorted.length > 1 ? (sorted[1].timestamp - sorted[0].timestamp) : 3600000;
+    const minTs = sorted[0].timestamp - candleInterval * 0.5;
+    const maxTs = sorted[sorted.length - 1].timestamp + candleInterval * 1.5;
+
+    const markers = [];
+    const SHAPE = { entryLong: 'arrowUp', entryShort: 'arrowDown', addon: 'circle', exitWin: 'circle', exitLoss: 'square' };
+    const COLOR = { entryLong: '#10b981', entryShort: '#f43f5e', addon: '#22d3ee', exitWin: '#10b981', exitLoss: '#f43f5e' };
+    const POSITION = { entryLong: 'belowBar', entryShort: 'aboveBar', addon: 'inBar', exitWin: 'aboveBar', exitLoss: 'belowBar' };
+
+    // Same "snap to nearest candle" behavior as before the PriceChart rewrite —
+    // Lightweight Charts markers are placed by `time`, so we still need to land
+    // exactly on one of the series' own candle times, not an arbitrary instant.
+    const addMarker = (timestamp, type, text) => {
         if (!timestamp) return;
         let tsMatch = typeof timestamp === 'string' ? new Date(timestamp).getTime() : Number(timestamp);
         if (isNaN(tsMatch)) return;
         if (tsMatch < 10000000000) tsMatch *= 1000; // seconds to ms
+        if (tsMatch < minTs || tsMatch > maxTs) return; // outside visible chart window
 
-        if (tsMatch < minTs || tsMatch > maxTs) {
-            return; // Outside visible chart window
-        }
-
-        // find candle where tsMatch is within candle interval
-        let closestCandle = null;
-        for (let i = result.length - 1; i >= 0; i--) {
-            if (result[i].timestamp <= tsMatch && tsMatch <= result[i].timestamp + candleInterval * 1.5) {
-                closestCandle = result[i];
+        let closestTs = null;
+        for (let i = sorted.length - 1; i >= 0; i--) {
+            if (sorted[i].timestamp <= tsMatch && tsMatch <= sorted[i].timestamp + candleInterval * 1.5) {
+                closestTs = sorted[i].timestamp;
                 break;
             }
         }
-        if (!closestCandle) {
+        if (closestTs === null) {
             let minDiff = Infinity;
-            for (let i = 0; i < result.length; i++) {
-                const diff = Math.abs(result[i].timestamp - tsMatch);
+            for (let i = 0; i < sorted.length; i++) {
+                const diff = Math.abs(sorted[i].timestamp - tsMatch);
                 if (diff < minDiff && diff <= candleInterval * 2) {
                     minDiff = diff;
-                    closestCandle = result[i];
+                    closestTs = sorted[i].timestamp;
                 }
             }
         }
-        if (closestCandle) {
-            if (!closestCandle.markers) closestCandle.markers = [];
-            closestCandle.markers.push({ type, price, ...meta });
-        }
+        if (closestTs === null) return;
+
+        markers.push({
+            time: Math.floor(closestTs / 1000),
+            position: POSITION[type] || 'inBar',
+            shape: SHAPE[type] || 'circle',
+            color: COLOR[type] || '#94a3b8',
+            text: text || '',
+        });
     };
 
     if (showTrades && tradesHistory) {
         tradesHistory.filter(t => normalizeSym(t.symbol) === normalizeSym(selectedSymbol)).forEach(t => {
             const isLong = String(t.side).toUpperCase().includes('LONG') || String(t.side).toUpperCase().includes('BUY');
             const pnl = t.pnl_net_usd !== undefined && t.pnl_net_usd !== null ? Number(t.pnl_net_usd) : Number(t.pnl_usd || 0);
-            
-            // Entry
+
             if (t.entry_timestamp) {
-                addMarker(t.entry_timestamp, isLong ? 'entryLong' : 'entryShort', t.entry_price, { label: `WEJŚCIE @ ${t.entry_price}`, side: t.side, vol: t.volume, fee: t.fee_usd });
+                addMarker(t.entry_timestamp, isLong ? 'entryLong' : 'entryShort', `WEJŚCIE @ ${t.entry_price}`);
             } else if (t.timestamp) {
                 // If no precise entry_timestamp, fallback to 1 candle before exit
                 let exitTs = typeof t.timestamp === 'string' ? new Date(t.timestamp).getTime() : Number(t.timestamp);
                 if (exitTs < 10000000000) exitTs *= 1000;
-                addMarker(exitTs - candleInterval, isLong ? 'entryLong' : 'entryShort', t.entry_price, { label: `WEJŚCIE @ ${t.entry_price}`, side: t.side, vol: t.volume, fee: t.fee_usd });
+                addMarker(exitTs - candleInterval, isLong ? 'entryLong' : 'entryShort', `WEJŚCIE @ ${t.entry_price}`);
             }
-            
-            // Exit
+
             if (t.timestamp) {
-                 const isWin = pnl >= 0;
-                 addMarker(t.timestamp, isWin ? 'exitWin' : 'exitLoss', t.exit_price, { label: isWin ? `TP +$${pnl.toFixed(2)}` : `SL -$${Math.abs(pnl).toFixed(2)}`, pnl, fee: t.fee_usd });
+                const isWin = pnl >= 0;
+                addMarker(t.timestamp, isWin ? 'exitWin' : 'exitLoss', isWin ? `TP +$${pnl.toFixed(2)}` : `SL -$${Math.abs(pnl).toFixed(2)}`);
             }
         });
     }
 
     if (showAddons && addonEvents) {
         addonEvents.filter(a => normalizeSym(a.symbol) === normalizeSym(selectedSymbol)).forEach(a => {
-            addMarker(a.timestamp, 'addon', a.price, { label: `+ADD @ ${a.price}` });
+            addMarker(a.timestamp, 'addon', `+ADD @ ${a.price}`);
         });
     }
 
-    return result;
-  }, [candles, tradesHistory, addonEvents, selectedSymbol, showTrades, showAddons]);
+    if (showLivePosition && activePos?.entry_timestamp) {
+        addMarker(activePos.entry_timestamp, activePos.side === 'long' ? 'entryLong' : 'entryShort', `AKTYWNA POZYCJA @ ${activePos.entry_price}`);
+    }
 
-  const activePos = useMemo(() => openPositions.find(p => normalizeSym(p.symbol) === normalizeSym(selectedSymbol)), [openPositions, selectedSymbol]);
+    // createSeriesMarkers requires its input sorted ascending by time.
+    markers.sort((a, b) => a.time - b.time);
+    return markers;
+  }, [candles, tradesHistory, addonEvents, selectedSymbol, showTrades, showAddons, showLivePosition, activePos]);
 
   useEffect(() => {
     const fetchSymbols = async () => {
@@ -201,8 +193,12 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
           if (Array.isArray(data) && data.length > 0) {
             const sorted = [...data].sort((a, b) => a.timestamp - b.timestamp);
             setCandles(sorted.map((c) => {
-              const ts = Number(c.timestamp);
-              const dateObj = new Date(ts > 1e11 ? ts : ts * 1000);
+              const rawTs = Number(c.timestamp);
+              // Normalize once here so every downstream consumer (PriceChart,
+              // marker-time snapping) can assume epoch MILLISECONDS — ccxt/OKX
+              // already return ms, this only guards a theoretical seconds input.
+              const tsMs = rawTs > 1e11 ? rawTs : rawTs * 1000;
+              const dateObj = new Date(tsMs);
               const isIntraDay = currentTfObj.id === '4h';
               const dateLabel = isIntraDay
                 ? dateObj.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -210,11 +206,15 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
 
               return {
                 time: dateLabel,
-                timestamp: ts, // required for mapping trades later
-                price: Number(c.close),
-                tma: c.tma ? Number(Number(c.tma).toFixed(2)) : Number((c.close * 0.998).toFixed(2)),
-                upper: c.upper_band ? Number(Number(c.upper_band).toFixed(2)) : Number((c.high * 1.002).toFixed(2)),
-                lower: c.lower_band ? Number(Number(c.lower_band).toFixed(2)) : Number((c.low * 0.998).toFixed(2))
+                timestamp: tsMs, // epoch ms — required for PriceChart + trade marker mapping
+                open: Number(c.open),
+                high: Number(c.high),
+                low: Number(c.low),
+                close: Number(c.close),
+                price: Number(c.close), // kept for the Equity Curve / any legacy consumer
+                tma: c.tma != null ? Number(Number(c.tma).toFixed(2)) : null,
+                upper: c.upper_band != null ? Number(Number(c.upper_band).toFixed(2)) : null,
+                lower: c.lower_band != null ? Number(Number(c.lower_band).toFixed(2)) : null
               };
             }));
           }
@@ -422,65 +422,13 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
           </div>
         </div>
 
-        {/* 100% Width Canvas Area (Recharts) */}
+        {/* 100% Width Canvas Area — native candlesticks (Lightweight Charts) for
+            'tma', Recharts for 'equity' (a plain line, no OHLC needed there). */}
         <div className="w-full h-[360px] sm:h-[440px] pt-12 pb-1 px-1">
-          <ResponsiveContainer width="100%" height="100%">
-            {chartMode === 'tma' ? (
-              <ComposedChart data={mappedCandles} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.6} />
-                <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} />
-                <YAxis domain={['auto', 'auto']} stroke="#64748b" tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} orientation="right" />
-                <Tooltip content={<CustomTooltip showTma={showTma} />} cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }} />
-                
-                {showTma && <Line type="monotone" dataKey="upper" stroke="#ef4444" strokeWidth={1} strokeDasharray="3 3" dot={false} name="TMA Upper" isAnimationActive={false} />}
-                {showTma && <Line type="monotone" dataKey="tma" stroke="#10b981" strokeWidth={1.5} dot={false} name="TMA Midline" isAnimationActive={false} />}
-                {showTma && <Line type="monotone" dataKey="lower" stroke="#10b981" strokeWidth={1} strokeDasharray="3 3" dot={false} name="TMA Lower" isAnimationActive={false} />}
-                
-                <Area type="monotone" dataKey="price" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#priceGradient)" name="Cena" isAnimationActive={false} />
-                
-                {/* Active Position Live Line */}
-                {showLivePosition && activePos && (
-                    <ReferenceLine y={activePos.entry_price} stroke={activePos.side === 'long' ? '#10b981' : '#ef4444'} strokeDasharray="4 4" strokeWidth={1.5} 
-                        label={{ value: `AKTYWNY ${activePos.side.toUpperCase()} @ ${activePos.entry_price} (uPnL: ${activePos.unrealized_pnl >= 0 ? '+' : ''}${activePos.unrealized_pnl?.toFixed(2)}$)`, fill: activePos.side === 'long' ? '#34d399' : '#f87171', position: 'insideTopLeft', fontSize: 10, fontFamily: 'monospace' }} />
-                )}
-                
-                {/* Render markers */}
-                {showTrades && (
-                    <Line type="monotone" dataKey="price" dot={({cx, cy, payload}) => {
-                        if (!payload.markers || payload.markers.length === 0) return null;
-                        return (
-                            <g>
-                                {payload.markers.map((m, i) => {
-                                    const yOff = (i * 16) - (payload.markers.length * 8);
-                                    if (m.type === 'entryLong') return <polygon points={`${cx},${cy-7+yOff} ${cx-7},${cy+7+yOff} ${cx+7},${cy+7+yOff}`} fill="#10b981" stroke="#0f172a" strokeWidth={1.5} key={i}/>;
-                                    if (m.type === 'entryShort') return <polygon points={`${cx},${cy+7+yOff} ${cx-7},${cy-7+yOff} ${cx+7},${cy-7+yOff}`} fill="#ef4444" stroke="#0f172a" strokeWidth={1.5} key={i}/>;
-                                    if (m.type === 'addon') return <polygon points={`${cx},${cy-6+yOff} ${cx-6},${cy+yOff} ${cx},${cy+6+yOff} ${cx+6},${cy+yOff}`} fill="#22d3ee" stroke="#0f172a" strokeWidth={1.5} key={i}/>;
-                                    if (m.type === 'exitWin') return (
-                                        <g key={i}>
-                                            <circle cx={cx} cy={cy+yOff} r={6} fill="#10b981" stroke="#0f172a" strokeWidth={1.5}/>
-                                            <circle cx={cx} cy={cy+yOff} r={2} fill="#ffffff" />
-                                        </g>
-                                    );
-                                    if (m.type === 'exitLoss') return (
-                                        <g key={i}>
-                                            <circle cx={cx} cy={cy+yOff} r={7} fill="#0f172a" opacity={0.5} />
-                                            <path d={`M${cx-4},${cy-4+yOff} L${cx+4},${cy+4+yOff} M${cx+4},${cy-4+yOff} L${cx-4},${cy+4+yOff}`} stroke="#ef4444" strokeWidth={2.5} strokeLinecap="round" />
-                                        </g>
-                                    );
-                                    return null;
-                                })}
-                            </g>
-                        );
-                    }} stroke="none" isAnimationActive={false} />
-                )}
-              </ComposedChart>
-            ) : (
+          {chartMode === 'tma' ? (
+            <PriceChart candles={candles} markers={chartMarkers} activePos={showLivePosition ? activePos : null} showTma={showTma} />
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={equityCurveData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
@@ -496,9 +444,10 @@ export function AnalyticsTab({ statsData, tradesHistory = [], openPositions = []
                   formatter={(value) => [`$${Number(value).toFixed(2)}`, 'Krzywa Kapitału']}
                 />
                 <Area type="monotone" dataKey="balance" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#equityGradient)" name="Realized PnL" />
+                <Brush dataKey="time" height={22} stroke="#3b82f6" fill="#0f172a" travellerWidth={8} />
               </AreaChart>
-            )}
-          </ResponsiveContainer>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 

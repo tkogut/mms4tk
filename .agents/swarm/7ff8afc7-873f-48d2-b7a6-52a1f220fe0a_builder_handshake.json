@@ -1,16 +1,20 @@
 {
   "conversation_id": "7ff8afc7-873f-48d2-b7a6-52a1f220fe0a",
   "role": "Builder Agent",
-  "status": "SUCCESS",
+  "status": "PARTIAL",
   "files_modified": [
-    "src/mms4tk/backtest_engine.py",
-    "src/mms4tk/logger_db.py",
     "src/mms4tk/api.py",
-    "tests/test_backtest_engine.py",
-    "tests/test_epoch_kpi.py",
-    "task.md"
+    "tests/test_api.py",
+    "ui_dashboard/src/components/PriceChart.jsx",
+    "ui_dashboard/src/components/AnalyticsTab.jsx",
+    "ui_dashboard/package.json",
+    "ui_dashboard/package-lock.json",
+    "VERSION",
+    "src/mms4tk/__init__.py",
+    "ui_dashboard/app.py",
+    "CHANGELOG.md"
   ],
   "math_consistency_check": "PASSED",
-  "timestamp": "2026-09-10T22:09:52Z",
-  "notes": "A1: ROUND_TRIP_FEE_PCT calibrated on production closed_trades.fee_usd (n=52, 2026-08-30..2026-09-10, blended 0.00100029 -> 0.0010003), replacing the assumed TAKER_FEE_PCT*2. P2 slow regression re-run: no verdict flipped (Midline TP 0/6, high-vol filter exactly BTC_H2+ETH_H2). A2: get_kpi_summary(since=) epoch filtering + since_epoch block on /api/v1/stats, full backward compat. Suite 340/340 PASS (-m not slow)."
+  "timestamp": "2026-09-17T20:19:37Z",
+  "notes": "Feature complete: entry_timestamp backend field, real-window timeframes, native Lightweight Charts candlesticks (PriceChart.jsx), markers+price-line, Brush kept only on Equity Curve. QA gate: 437 passed, 2 failed. Both failures (test_max_margin_allocation.py::test_daemon_70_30_capital_split_calculation, test_position_sizing.py::test_daemon_position_sizing_calculation) confirmed pre-existing and unrelated: daemon.py::plan_allocation() lazily imports mms4tk.api.configured_symbols_store, a global populated at import time from a local gitignored per-worktree file/DB whose BTC/USDC allocation_usd legitimately differs (10.0 on main vs 100.0 in this worktree) from daemon.py itself, verified byte-identical to main via diff. Status PARTIAL reflects the 2 unresolved-but-out-of-scope failures, not a defect in this branch's own changes."
 }

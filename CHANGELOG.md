@@ -4,6 +4,40 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.6] - 2026-09-17
+
+### ✨ Added — Japanese Candlestick Chart (Lightweight Charts / TradingView) + Real Time Windows
+- 🕯️ **`ui_dashboard/src/components/PriceChart.jsx`** (new): native OHLC candlestick
+  panel built on `lightweight-charts@5.2.1` (TradingView's own library, pinned exact
+  version). Replaces the Recharts `<ComposedChart>` line-only price panel with real
+  candles (wick + body), 3 overlay lines (TMA/upper/lower band, still computed
+  server-side, unchanged), native `createSeriesMarkers` for trade/addon/entry
+  markers, `createPriceLine` for the active-position price level, and built-in
+  pan/zoom (no `<Brush>` needed on this panel).
+- 🕐 **Timeframe buttons now mean actual visible windows** (`AnalyticsTab.jsx`,
+  `timeframes` array): "4H" = last ~4h (5m candles), "1D" = last ~24h (15m candles),
+  "1W"/"1M"/"3M"/"1Y" similarly — previously the label was the single-candle
+  interval, so "4H" silently rendered ~10 days of history (60 × 4h candles).
+- 📍 **`entry_timestamp` on open positions** (`src/mms4tk/api.py`,
+  `PositionItem`/`get_active_positions()`): surfaces OKX's own position-open time
+  (`info.cTime`, epoch ms, already present in the `fetch_positions()` payload — zero
+  extra network calls) so the chart can place a time-anchored entry marker, not just
+  a price-level reference line. `None` when absent (never fabricated). 2 new tests
+  in `tests/test_api.py`.
+- 📊 Equity Curve (unaffected `chartMode==='equity'` Recharts `<AreaChart>`) gains a
+  `<Brush>` slider for pan/zoom, since it's not migrated to Lightweight Charts.
+- 🧪 QA gate: `437 passed, 2 failed` (full suite). The 2 failures
+  (`test_max_margin_allocation.py::test_daemon_70_30_capital_split_calculation`,
+  `test_position_sizing.py::test_daemon_position_sizing_calculation`) are **pre-existing,
+  unrelated to this branch's changes** — confirmed root cause: `daemon.py::plan_allocation()`
+  lazily imports `mms4tk.api.configured_symbols_store`, a module-level global populated
+  at import time from a **local, gitignored, per-worktree** file (`.agents/swarm/symbols.json`
+  or a `logger_db` table, cwd-relative path) that legitimately differs in content between
+  `main` and this worktree (`allocation_usd=10.0` vs `100.0` for `BTC/USDC`) — an
+  architectural test-isolation gap (same class of issue as the archived
+  `010-global-okx-executor-test-mock.md` plan), not a regression from `entry_timestamp`
+  or the frontend chart rewrite. `daemon.py` is byte-identical to `main` on this branch.
+
 ## 🚀 [0.48.5] - 2026-09-17
 
 ### 🔥 Fixed — Analytics Tab Crash (ReferenceError, TDZ)
