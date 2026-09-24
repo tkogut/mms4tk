@@ -433,3 +433,63 @@ def test_get_contract_size_helper():
     executor.exchange.markets = {"SOL/USDC": {"contractSize": 0.1}}
     executor.exchange.market = MagicMock(return_value={"contractSize": 0.1})
     assert daemon._get_contract_size("SOL/USDC") == 0.1
+
+
+def test_reconciliation_writes_stop_loss_reason_for_provisional_row(temp_db: LoggerDB):
+    """reconcile_positions() must persist reason="STOP-LOSS" on the provisional
+    recon_* row it writes when the adverse move clears the stop-out threshold —
+    previously no reason was set at all, so get_closed_trades()' pnl_pct-based
+    fallback had to guess (and, before the ctVal fix, guessed wrong almost every
+    time)."""
+    executor = OKXExecutor()
+    executor.exchange = MagicMock()
+    executor.exchange.markets = {"BTC/USDC": {"contractSize": 0.0001}}
+    executor.exchange.market = MagicMock(return_value={"contractSize": 0.0001})
+
+    state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+    state_mgr.record_trade = MagicMock()
+
+    daemon = MMS4Daemon(executor=executor, state_manager=state_mgr, logger_db=temp_db, symbol="BTC/USDC")
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="long", contracts=37.0,
+        entry_price=79542.0, last_price=79542.0,
+    )
+
+    # Adverse move of ~2% (79542 -> 77951) clears the 0.75 * base_sl_pct(2%) threshold.
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=77951.0,
+    )
+
+    trades = temp_db.get_closed_trades()
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "STOP-LOSS"
+
+
+def test_reconciliation_writes_closed_external_reason_when_not_stop_out(temp_db: LoggerDB):
+    """A position that disappears from OKX WITHOUT clearing the stop-out threshold
+    (e.g. closed manually, or by a TP the daemon didn't itself execute) must not be
+    mislabeled STOP-LOSS."""
+    executor = OKXExecutor()
+    executor.exchange = MagicMock()
+    executor.exchange.markets = {"BTC/USDC": {"contractSize": 0.0001}}
+    executor.exchange.market = MagicMock(return_value={"contractSize": 0.0001})
+
+    state_mgr = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+    state_mgr.record_trade = MagicMock()
+
+    daemon = MMS4Daemon(executor=executor, state_manager=state_mgr, logger_db=temp_db, symbol="BTC/USDC")
+
+    temp_db.save_position_snapshot(
+        symbol="BTC/USDC", side="long", contracts=37.0,
+        entry_price=79542.0, last_price=79542.0,
+    )
+
+    # Small adverse move (~0.23%), well under the stop-out threshold.
+    daemon.reconcile_positions(
+        target_symbol="BTC/USDC", live_positions=[], current_price=79359.0,
+    )
+
+    trades = temp_db.get_closed_trades()
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "CLOSED_EXTERNAL"

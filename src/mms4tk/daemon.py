@@ -675,7 +675,8 @@ class MMS4Daemon:
                     pnl_usd=pnl_usd,
                     pnl_pct=pnl_pct,
                     is_win=pnl_usd > 0,
-                    leverage=float(snap.get("leverage", 1.0)) if snap else 1.0
+                    leverage=float(snap.get("leverage", 1.0)) if snap else 1.0,
+                    reason="STOP-LOSS" if is_stop_out else "CLOSED_EXTERNAL",
                 )
             except Exception as e:
                 logger.error(f"Failed to record reconciled trade for {target_symbol}: {e}")

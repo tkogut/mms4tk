@@ -499,28 +499,66 @@ class LoggerDB:
         is_win: bool,
         leverage: float = 1.0,
         fee_usd: float = 0.0,
-        pnl_net_usd: Optional[float] = None
+        pnl_net_usd: Optional[float] = None,
+        reason: Optional[str] = None,
     ) -> None:
-        """Upsert a closed trade into closed_trades table."""
+        """Upsert a closed trade into closed_trades table.
+
+        `reason`, when given, is written at close time instead of relying on
+        get_closed_trades()'s later best-effort cycle_logs/pnl_pct classification —
+        callers that already know the outcome (e.g. reconcile_positions() knows
+        whether a disappeared position was a stop-out) should pass it explicitly.
+        `COALESCE(excluded.reason, closed_trades.reason)` on conflict means a plain
+        re-upsert with reason=None (the common case) never clobbers a reason set by
+        an earlier call for the same trade_id.
+        """
         if pnl_net_usd is None:
             pnl_net_usd = pnl_usd - fee_usd
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO closed_trades (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, is_win, leverage, fee_usd, pnl_net_usd)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO closed_trades (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, is_win, leverage, fee_usd, pnl_net_usd, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trade_id) DO UPDATE SET
                     exit_price=excluded.exit_price,
                     pnl_usd=excluded.pnl_usd,
                     pnl_pct=excluded.pnl_pct,
                     is_win=excluded.is_win,
                     fee_usd=excluded.fee_usd,
-                    pnl_net_usd=excluded.pnl_net_usd
+                    pnl_net_usd=excluded.pnl_net_usd,
+                    reason=COALESCE(excluded.reason, closed_trades.reason)
                 """,
-                (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, 1 if is_win else 0, leverage, fee_usd, pnl_net_usd)
+                (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, 1 if is_win else 0, leverage, fee_usd, pnl_net_usd, reason)
             )
             conn.commit()
+
+    def peek_provisional_reason(self, symbol: str, side: str, entry_price: float, tolerance_pct: float = 0.001) -> Optional[str]:
+        """
+        Look up the `reason` of a `recon_*` provisional row matching the same
+        symbol/side/entry_price criteria `delete_provisional_closed_trade` uses,
+        WITHOUT deleting it. Callers (OKXTradeSyncWorker) use this to carry a
+        reconciliation-time reason (e.g. "STOP-LOSS") forward onto the authoritative
+        row before the provisional one is superseded and removed — otherwise that
+        classification is lost and the authoritative row falls back to
+        get_closed_trades()'s generic post-hoc guess.
+        """
+        from mms4tk.okx_executor import normalize_symbol
+
+        target_norm = normalize_symbol(symbol)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, side, entry_price, reason FROM closed_trades WHERE trade_id LIKE 'recon\\_%' ESCAPE '\\'")
+            for row in cursor.fetchall():
+                if normalize_symbol(row["symbol"]) != target_norm:
+                    continue
+                if str(row["side"]).upper() != str(side).upper():
+                    continue
+                row_entry = float(row["entry_price"] or 0.0)
+                if row_entry <= 0 or abs(row_entry - entry_price) > abs(entry_price) * tolerance_pct:
+                    continue
+                return row["reason"]
+        return None
 
     def delete_provisional_closed_trade(self, symbol: str, side: str, entry_price: float, tolerance_pct: float = 0.001) -> int:
         """Delete a `recon_*` provisional row left by MMS4Daemon.reconcile_positions()
@@ -790,8 +828,10 @@ class LoggerDB:
                         AND (
                             signal_type LIKE '%FORCE%' OR signal_type LIKE '%SPLIT%' OR signal_type LIKE '%CLOSE%'
                             OR signal_type LIKE '%STOP%' OR signal_type LIKE '%TP%' OR signal_type LIKE '%MIDLINE%'
+                            OR signal_type LIKE '%ESCAPE%'
                             OR outcome LIKE '%FORCE%' OR outcome LIKE '%SPLIT%' OR outcome LIKE '%CLOSE%'
                             OR outcome LIKE '%STOP%' OR outcome LIKE '%TP%' OR outcome LIKE '%MIDLINE%'
+                            OR outcome LIKE '%ESCAPE%'
                         )
                         ORDER BY timestamp DESC LIMIT 1
                     """, (clean_sym, sym, f"{base}/%", ts_min, ts_max))
@@ -805,6 +845,18 @@ class LoggerDB:
                             reason = "STALE_FORCE_CLOSE"
                         elif sig == "STALE_SPLIT_50":
                             reason = "STALE_SPLIT_50"
+                        elif sig == "STALE_FORCE_CLOSE_BE":
+                            # daemon.py logs signal_type=f"STALE_{stale_action.value}"
+                            # and InactivityManager.StaleAction.FORCE_CLOSE_BE ==
+                            # "FORCE_CLOSE_BE" — this exact string never matched any
+                            # branch here before, silently falling through to the
+                            # pnl_pct-based fallback below (usually landing on
+                            # "BREAK-EVEN" anyway, but without the distinct label that
+                            # tells a forced timeout-close apart from a genuine
+                            # accidental break-even).
+                            reason = "STALE_FORCE_CLOSE_BE"
+                        elif sig == "STALE_BE_ESCAPE":
+                            reason = "STALE_BE_ESCAPE"
                         elif sig == "MIDLINE_PARTIAL_TP":
                             reason = "MIDLINE_PARTIAL_TP"
                         elif out == "STOP-LOSS":
