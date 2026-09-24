@@ -155,3 +155,47 @@ def test_sync_closed_trades_cleans_up_matching_provisional_row(db, monkeypatch):
     assert len(trades) == 1
     assert trades[0]["trade_id"] == "3873208213551452160"
     assert trades[0]["exit_price"] == pytest.approx(77942.0)
+
+
+def test_sync_carries_reason_from_provisional_row_onto_authoritative_row(db, monkeypatch):
+    """The recon_ row's `reason` (set by reconcile_positions when it detects a
+    stop-out) must survive onto the authoritative trade_sync row, not get dropped
+    when the provisional row is deleted — otherwise get_closed_trades() falls back
+    to its generic post-hoc pnl_pct guess and can mislabel a real stop-loss."""
+    monkeypatch.setenv("MMS4_TRADE_SYNC_START_ISO", "2020-01-01T00:00:00+00:00")
+
+    db.upsert_closed_trade(
+        trade_id="recon_BTC/USDC_long_1787933006982",
+        timestamp="2026-08-28T16:03:26.999444+00:00",
+        symbol="BTC/USDC", side="LONG", entry_price=79668.8, exit_price=78335.3,
+        amount=26.0, pnl_usd=-3.4671, pnl_pct=-0.0167, is_win=False,
+        reason="STOP-LOSS",
+    )
+
+    mock_executor = MagicMock()
+    mock_executor.has_credentials = True
+    mock_executor.initialize = AsyncMock()
+    mock_executor.exchange = MagicMock()
+    mock_executor.exchange.private_get_trade_orders_history_archive = AsyncMock(return_value={
+        "data": [
+            {
+                "ordId": "open_leg_1", "state": "filled",
+                "instId": "BTC-USD_UM_XPERP-310404", "side": "buy", "posSide": "long",
+                "avgPx": "79668.8", "sz": "26.0", "pnl": "0", "uTime": "1787932000000",
+            },
+            {
+                "ordId": "3873208213551452160", "state": "filled",
+                "instId": "BTC-USD_UM_XPERP-310404", "side": "sell", "posSide": "long",
+                "avgPx": "77942.0", "sz": "26.0", "pnl": "-4.48968", "uTime": "1787933000000",
+            }
+        ]
+    })
+
+    worker = OKXTradeSyncWorker(executor=mock_executor, logger_db=db, interval_seconds=10.0)
+    synced = asyncio.run(worker.sync_closed_trades())
+
+    assert synced == 1
+    trades = db.get_closed_trades()
+    assert len(trades) == 1
+    assert trades[0]["trade_id"] == "3873208213551452160"
+    assert trades[0]["reason"] == "STOP-LOSS"
