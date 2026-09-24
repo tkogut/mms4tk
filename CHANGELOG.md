@@ -4,6 +4,39 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.9] - 2026-09-24
+
+### 🔥 Fixed — Stop-Losses Mislabeled as "BREAK-EVEN" in Trade History
+- 🐛 **`OKXTradeSyncWorker` (`src/mms4tk/trade_sync.py`)**: OKX reports fill
+  `size` in **contracts**, not coins. `pnl_pct`/notional (and the PnL-derived
+  entry-price inference for positions opened before the sync window) were
+  computed without scaling by `contractSize` — for BTC this inflated
+  notional/margin by ~10000x, ETH/XAU by ~1000x, XAG by ~100x, driving every
+  real stop-loss's `pnl_pct` toward zero. `LoggerDB.get_closed_trades()`'s
+  `pnl_pct <= -0.015` fallback therefore never tripped, and the
+  `outcome == "STOP-LOSS"` branch it also relied on was dead code
+  (`daemon.py` never logs that literal `outcome` for a reconciled stop-out) —
+  so every real SL fell through to the generic `"BREAK-EVEN"` label.
+- ✅ **Naprawa**: `trade_sync.py` now scales notional/margin/`pnl_pct` by
+  `contractSize` (mirrors `daemon._get_contract_size`). `reconcile_positions()`
+  (`daemon.py`) now sets `reason="STOP-LOSS"`/`"CLOSED_EXTERNAL"` on the
+  provisional row it writes at detection time instead of relying entirely on
+  the post-hoc `pnl_pct` guess; `upsert_closed_trade()` gained a `reason`
+  param (preserved across `ON CONFLICT` via `COALESCE`), and `trade_sync.py`
+  carries that reason onto the authoritative row before the provisional one
+  is superseded. `STALE_FORCE_CLOSE_BE`/`STALE_BE_ESCAPE` signal types are now
+  mapped to their own explicit reasons instead of silently falling through.
+- 🧹 One-time migration (`scripts/reclassify_break_even_reason.py`, dry-run by
+  default) recomputes `pnl_pct` for historical `reason='BREAK-EVEN'` rows and
+  reclassifies where the corrected value clears the STOP-LOSS threshold. Run
+  against production `logs.db` 2026-09-24: 72 BREAK-EVEN rows inspected, 21
+  reclassified to STOP-LOSS.
+- 🧪 New/updated tests: `test_trade_sync.py`, `test_reconciliation_pnl.py`,
+  `test_dedupe_closed_trades.py`, `test_logger_db_closed_trades_cache.py`,
+  `test_reclassify_break_even_reason.py`.
+- Pure backend/data-quality fix — no schema/API contract change. Real PnL in
+  USD was always correct; only the `reason` label was wrong.
+
 ## 🚀 [0.48.8] - 2026-09-17
 
 ### 🔥 Fixed — Entry Marker Always Snapped to "1 Candle Before Exit"
