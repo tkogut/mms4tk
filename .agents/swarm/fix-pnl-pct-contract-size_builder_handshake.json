@@ -1,0 +1,19 @@
+{
+  "conversation_id": "fix-pnl-pct-contract-size",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/trade_sync.py",
+    "src/mms4tk/logger_db.py",
+    "src/mms4tk/daemon.py",
+    "scripts/reclassify_break_even_reason.py",
+    "tests/test_trade_sync.py",
+    "tests/test_dedupe_closed_trades.py",
+    "tests/test_reconciliation_pnl.py",
+    "tests/test_logger_db_closed_trades_cache.py",
+    "tests/test_reclassify_break_even_reason.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-24T15:47:02Z",
+  "notes": "Full BREAK-EVEN mislabeling fix: (1) ctVal scaling in trade_sync.py pnl_pct/notional, (2) reason persisted at close time (reconcile_positions -> upsert_closed_trade -> carried through trade_sync supersede), (3) STALE_FORCE_CLOSE_BE/STALE_BE_ESCAPE mapped explicitly, (4) one-time dry-run-by-default migration script for historical rows (not auto-run against prod). Full suite (QA gate test command): 452 passed, 1 pre-existing unrelated failure (test_position_sizing.py::test_daemon_position_sizing_calculation) plus a second instance of the same class (test_max_margin_allocation.py) confirmed independently on unmodified main -- both read the real committed symbols.json (allocation_usd=100) via configured_symbols_store instead of the test's mocked state, an existing test-isolation gap unrelated to and not touched by this PR. All tests targeting the changed files pass (41/41)."
+}
