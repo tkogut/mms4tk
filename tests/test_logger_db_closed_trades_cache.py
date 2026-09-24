@@ -176,3 +176,46 @@ def test_get_closed_trades_finds_entry_timestamp_for_real_base_execution_shape(t
 
     trades = db.get_closed_trades()
     assert trades[0]["entry_timestamp"] == entry_ts.isoformat()
+
+
+def test_get_closed_trades_maps_stale_be_signal_types_to_own_reason(tmp_path):
+    """
+    Regression test: daemon.py logs signal_type=f"STALE_{stale_action.value}" and
+    InactivityManager.StaleAction has values FORCE_CLOSE_BE / BE_ESCAPE, so the
+    literal strings produced are "STALE_FORCE_CLOSE_BE" / "STALE_BE_ESCAPE". The
+    classifier's elif chain only matched "STALE_FORCE_CLOSE" / "STALE_SPLIT_50" —
+    neither of these matched, so both fell through to the generic pnl_pct-based
+    "BREAK-EVEN" fallback, indistinguishable from a genuine accidental break-even.
+    """
+    db_file = os.path.join(tmp_path, "test_logs.db")
+    db = LoggerDB(db_path=db_file)
+
+    ts = datetime(2026, 9, 20, 10, 0, 0, tzinfo=timezone.utc)
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "INSERT INTO cycle_logs (timestamp, symbol, signal_type, state, leverage, price, outcome, details) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts.isoformat(), "ETH/USDC", "STALE_FORCE_CLOSE_BE", "BASE_MODE", 3.0, 2650.0, "STALE_FORCE_CLOSE_BE", ""),
+        )
+        conn.execute(
+            "INSERT INTO cycle_logs (timestamp, symbol, signal_type, state, leverage, price, outcome, details) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts.isoformat(), "SOL/USDC", "STALE_BE_ESCAPE", "BASE_MODE", 3.0, 140.0, "STALE_BE_ESCAPE", ""),
+        )
+        conn.commit()
+
+    db.upsert_closed_trade(
+        trade_id="trade_force_close_be", timestamp=ts.isoformat(), symbol="ETH/USDC",
+        side="LONG", entry_price=2650.0, exit_price=2650.5, amount=1.0,
+        pnl_usd=0.01, pnl_pct=0.0001, is_win=True, leverage=3.0,
+    )
+    db.upsert_closed_trade(
+        trade_id="trade_be_escape", timestamp=ts.isoformat(), symbol="SOL/USDC",
+        side="SHORT", entry_price=140.0, exit_price=139.9, amount=1.0,
+        pnl_usd=0.01, pnl_pct=0.0001, is_win=True, leverage=3.0,
+    )
+
+    trades = {t["trade_id"]: t for t in db.get_closed_trades()}
+    assert trades["trade_force_close_be"]["reason"] == "STALE_FORCE_CLOSE_BE"
+    assert trades["trade_be_escape"]["reason"] == "STALE_BE_ESCAPE"
