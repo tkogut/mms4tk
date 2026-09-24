@@ -548,7 +548,13 @@ class LoggerDB:
         target_norm = normalize_symbol(symbol)
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT symbol, side, entry_price, reason FROM closed_trades WHERE trade_id LIKE 'recon\\_%' ESCAPE '\\'")
+            # DESC: if more than one recon_* row matches (rapid open/close on the
+            # same symbol/side/entry_price), prefer the most recently written one —
+            # an unordered first-match could otherwise carry a stale reason forward.
+            cursor.execute(
+                "SELECT symbol, side, entry_price, reason FROM closed_trades "
+                "WHERE trade_id LIKE 'recon\\_%' ESCAPE '\\' ORDER BY timestamp DESC"
+            )
             for row in cursor.fetchall():
                 if normalize_symbol(row["symbol"]) != target_norm:
                     continue
