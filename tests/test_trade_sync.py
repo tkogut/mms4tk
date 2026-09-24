@@ -95,6 +95,63 @@ def test_trade_sync_worker(tmp_path, monkeypatch):
     asyncio.run(_async_test())
 
 
+def test_trade_sync_worker_pnl_pct_scales_by_contract_size(tmp_path, monkeypatch):
+    """
+    Regression test: OKX reports `size` in contracts, not coins. A close-only fill
+    (no matching open leg, so entry is inferred from PnL) with no ctVal scaling
+    inflates notional/margin by 1/ctVal, driving pnl_pct toward zero and making a
+    real ~2% stop-loss get misclassified downstream as "BREAK-EVEN" instead of
+    "STOP-LOSS" (LoggerDB.get_closed_trades' pnl_pct <= -0.015 fallback never trips).
+    """
+    import asyncio
+
+    monkeypatch.setenv("MMS4_TRADE_SYNC_START_ISO", "2020-01-01T00:00:00+00:00")
+
+    async def _async_test():
+        db_file = os.path.join(tmp_path, "test_logs.db")
+        db = LoggerDB(db_path=db_file)
+
+        mock_executor = MagicMock()
+        mock_executor.has_credentials = True
+        mock_executor.initialize = AsyncMock()
+        mock_executor.exchange = MagicMock()
+        # No markets loaded -> _get_contract_size falls back to the per-asset
+        # default instead of MagicMock's auto-`__float__` (which returns 1.0 and
+        # would silently defeat this test's ctVal scaling).
+        mock_executor.exchange.markets = None
+        # BTC SHORT stop-out: 19 contracts (ctVal=0.0001 -> ~0.0019 BTC, ~$150
+        # notional at this price), lever 3x, a ~2% adverse move -> ~$3 loss.
+        mock_executor.exchange.private_get_trade_orders_history_archive = AsyncMock(return_value={
+            "data": [
+                {
+                    "ordId": "ord_sl_1",
+                    "state": "filled",
+                    "instId": "BTC-USD_UM_XPERP-310404",
+                    "side": "buy",
+                    "posSide": "short",
+                    "avgPx": "78984.6",
+                    "sz": "19",
+                    "pnl": "-3.0",
+                    "lever": "3",
+                    "uTime": "1786525312271"
+                }
+            ]
+        })
+
+        worker = OKXTradeSyncWorker(executor=mock_executor, logger_db=db, interval_seconds=10.0)
+        synced = await worker.sync_closed_trades()
+
+        assert synced == 1
+        trades = db.get_closed_trades()
+        assert len(trades) == 1
+        pnl_pct = trades[0]["pnl_pct"]
+        # Correctly scaled: notional ~$150, margin ~$50, pnl_pct ~ -0.06.
+        # Buggy (unscaled) calc gives notional ~$1.5M, pnl_pct ~ -0.000006.
+        assert pnl_pct <= -0.015, f"pnl_pct={pnl_pct} would misclassify as BREAK-EVEN, not STOP-LOSS"
+
+    asyncio.run(_async_test())
+
+
 def test_trade_sync_worker_skips_overlapping_calls(tmp_path, monkeypatch):
     """
     Regression test for the resource-leak fixed alongside 0d528d1: api.py's

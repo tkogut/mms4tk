@@ -96,8 +96,30 @@ class OKXTradeSyncWorker:
         """
         return cls._consume_open_legs(open_queue, size)[0]
 
-    @staticmethod
-    def _infer_entry_price(fill: Dict[str, Any]) -> float:
+    def _get_contract_size(self, symbol: str) -> float:
+        """
+        Return contract size (ctVal) for symbol from executor markets, falling back to
+        per-asset defaults. Mirrors MMS4Daemon._get_contract_size (daemon.py) — OKX
+        reports fill sizes in contracts, not coins, so every USD notional/margin
+        computation from a fill's `size` must scale by this factor.
+        """
+        try:
+            if getattr(self.executor, "exchange", None) and getattr(self.executor.exchange, "markets", None):
+                m = self.executor.exchange.market(symbol)
+                if m and m.get("contractSize"):
+                    return float(m["contractSize"])
+        except Exception:
+            pass
+        sym_upper = symbol.upper()
+        if "BTC" in sym_upper:
+            return 0.0001
+        if "ETH" in sym_upper or "XAU" in sym_upper:
+            return 0.001
+        if "XAG" in sym_upper:
+            return 0.01
+        return 1.0
+
+    def _infer_entry_price(self, fill: Dict[str, Any]) -> float:
         """
         Reconstruct the entry price from the exit price and realized PnL when the opening
         fill predates the sync window. Falls back to the exit price if PnL is zero.
@@ -105,7 +127,9 @@ class OKXTradeSyncWorker:
         exit_price, size, pnl = fill["price"], fill["size"], fill["pnl_usd"]
         if size <= 0 or exit_price <= 0 or abs(pnl) < 1e-12:
             return exit_price
-        delta = pnl / size
+        ct_size = self._get_contract_size(fill["symbol"])
+        coin_size = size * ct_size
+        delta = pnl / coin_size
         entry = exit_price - delta if fill["pos_side"] == "long" else exit_price + delta
         return entry if entry > 0 else exit_price
 
@@ -221,7 +245,13 @@ class OKXTradeSyncWorker:
 
                 exit_price = f["price"]
                 lever = f["lever"] or 1.0
-                notional = exit_price * f["size"]
+                # `size` is in OKX contracts, not coins — scale by ctVal or notional
+                # (and therefore margin and pnl_pct) comes out 100x-10000x too large,
+                # which drives every real stop-loss's pnl_pct toward zero and makes it
+                # misclassify as "BREAK-EVEN" downstream (LoggerDB.get_closed_trades'
+                # pnl_pct <= -0.015 fallback never trips).
+                ct_size = self._get_contract_size(f["symbol"])
+                notional = exit_price * f["size"] * ct_size
                 margin = (notional / lever) if lever > 0 else notional
                 # Return on the capital actually committed, not on notional.
                 pnl_pct = (pnl_net / margin) if margin > 0 else 0.0
