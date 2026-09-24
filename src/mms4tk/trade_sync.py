@@ -264,6 +264,19 @@ class OKXTradeSyncWorker:
                 # trade_id schemes mean upsert_closed_trade's ON CONFLICT would never
                 # dedupe them on its own, leaving the same real close duplicated in
                 # Wykaz Transakcji with two different exit prices/pnl.
+                # Carry the provisional row's reason (e.g. "STOP-LOSS", set at
+                # reconciliation time by MMS4Daemon.reconcile_positions) onto the
+                # authoritative row before deleting it — otherwise this classification
+                # is lost and the row falls back to get_closed_trades()' generic
+                # post-hoc pnl_pct guess.
+                carried_reason: Optional[str] = None
+                try:
+                    carried_reason = self.logger_db.peek_provisional_reason(
+                        symbol=f["symbol"], side=trade_side, entry_price=entry_price,
+                    )
+                except Exception as peek_err:
+                    logger.warning(f"Failed to peek provisional reason for {f['symbol']}: {peek_err}")
+
                 try:
                     removed = self.logger_db.delete_provisional_closed_trade(
                         symbol=f["symbol"], side=trade_side, entry_price=entry_price,
@@ -290,6 +303,7 @@ class OKXTradeSyncWorker:
                     leverage=lever,
                     fee_usd=total_fee,
                     pnl_net_usd=pnl_net,
+                    reason=carried_reason,
                 )
                 synced_count += 1
 
