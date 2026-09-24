@@ -1,0 +1,12 @@
+{
+  "conversation_id": "fix-pnl-pct-contract-size",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/trade_sync.py",
+    "tests/test_trade_sync.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-24T15:27:59Z",
+  "notes": "ctVal scaling fix for pnl_pct/notional in trade_sync.py; SL trades were misclassified as BREAK-EVEN due to unscaled contract size (up to 10000x error). Regression test added. Unrelated pre-existing flaky test in test_max_margin_allocation.py found (reads real configured_symbols_store/symbols.json instead of mocked state) - out of scope, not touched."
+}
