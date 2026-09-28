@@ -15,8 +15,11 @@ import logging
 import os
 import time
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
+
+if TYPE_CHECKING:
+    from mms4tk.logger_db import LoggerDB
 
 logger = logging.getLogger("mms4tk.inactivity")
 
@@ -103,10 +106,16 @@ class MMS4InactivityManager:
     # the `impulse_min_atr` config key when an instrument whipsaws out of positions.
     DEFAULT_IMPULSE_MIN_ATR: float = float(os.getenv("MMS4_IMPULSE_MIN_ATR", "0.3"))
 
-    def __init__(self):
+    def __init__(self, logger_db: Optional["LoggerDB"] = None):
         self._trackers: Dict[str, PositionTracker] = {}
         # Per-symbol config overrides: {symbol: {max_stale_candles, vol_threshold, ...}}
         self._symbol_configs: Dict[str, Dict[str, Any]] = {}
+        # Issue #71: optional persistence so a restart/deploy doesn't silently
+        # reset an open position's protection (observed extremes, is_split,
+        # candle_count, ...) back to zero. None (the default) keeps this class
+        # fully in-memory, as before — every call site below is a no-op when
+        # `logger_db` isn't provided.
+        self._logger_db = logger_db
 
     # ── Configuration ───────────────────────────────────────────────
 
@@ -121,6 +130,15 @@ class MMS4InactivityManager:
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
+    # A persisted row is only trusted as "the same live position" when its
+    # entry_price matches the caller's within this fraction — otherwise a
+    # closed-then-reopened position at a different price would inherit a
+    # stale tracker's observed extremes and could fire a false Impulse
+    # Negation immediately. Matches the tolerance convention already used
+    # elsewhere for this exact kind of identity check (e.g.
+    # LoggerDB.delete_provisional_closed_trade's tolerance_pct).
+    _RESTORE_IDENTITY_TOLERANCE_PCT = 0.001
+
     def track_position(
         self,
         inst_id: str,
@@ -129,17 +147,124 @@ class MMS4InactivityManager:
         side: str,
         atr: float
     ) -> None:
-        """Start tracking a newly opened position."""
-        self._trackers[inst_id] = PositionTracker(
+        """Start tracking a newly opened position — or, if a persisted tracker
+        for the same (inst_id, side) survives from before a restart AND its
+        entry_price confirms it's the SAME live position, restore it instead
+        of starting from zero (issue #71)."""
+        side_lower = side.lower()
+        restored = self._restore_from_persisted(inst_id, side_lower, entry_price, entry_time, atr)
+        if not restored:
+            self._trackers[inst_id] = PositionTracker(
+                inst_id=inst_id,
+                entry_price=entry_price,
+                entry_time=entry_time,
+                side=side_lower,
+                atr_at_entry=atr,
+            )
+            logger.info(
+                f"▶ Tracking position {inst_id} | side={side} "
+                f"entry=${entry_price:,.2f} ATR=${atr:,.2f}"
+            )
+            self._persist(inst_id)
+
+    def _restore_from_persisted(
+        self, inst_id: str, side_lower: str, entry_price: float, entry_time: float, atr: float
+    ) -> bool:
+        """Returns True and populates self._trackers[inst_id] iff a persisted
+        row exists for (inst_id, side_lower) and its entry_price identifies it
+        as the same live position. Clears a non-matching row (a different
+        position instance that happened to reuse the key) so it can't confuse
+        a later restore."""
+        if self._logger_db is None:
+            return False
+        try:
+            persisted = self._logger_db.get_inactivity_tracker_state(inst_id, side_lower)
+        except Exception as e:
+            logger.error(f"Failed to load persisted inactivity tracker state for {inst_id}: {e}")
+            return False
+        if persisted is None:
+            return False
+
+        persisted_entry = float(persisted.get("entry_price") or 0.0)
+        tolerance = abs(entry_price) * self._RESTORE_IDENTITY_TOLERANCE_PCT
+        if persisted_entry <= 0 or abs(persisted_entry - entry_price) > tolerance:
+            logger.info(
+                f"Discarding stale persisted Inactivity tracker for {inst_id} — "
+                f"entry_price mismatch (persisted=${persisted_entry:,.4f}, current=${entry_price:,.4f})"
+            )
+            try:
+                self._logger_db.delete_inactivity_tracker_state(inst_id, side_lower)
+            except Exception:
+                pass
+            return False
+
+        tracker = PositionTracker(
             inst_id=inst_id,
-            entry_price=entry_price,
-            entry_time=entry_time,
-            side=side.lower(),
-            atr_at_entry=atr,
+            entry_price=persisted_entry,
+            entry_time=float(persisted.get("entry_time") or entry_time),
+            side=side_lower,
+            atr_at_entry=float(persisted.get("atr_at_entry") or atr),
         )
-        logger.info(
-            f"▶ Tracking position {inst_id} | side={side} "
-            f"entry=${entry_price:,.2f} ATR=${atr:,.2f}"
+        tracker.candle_count = int(persisted.get("candle_count") or 0)
+        tracker.max_observed_price = float(persisted.get("max_observed_price") or tracker.max_observed_price)
+        tracker.min_observed_price = float(persisted.get("min_observed_price") or tracker.min_observed_price)
+        tracker.is_split = bool(persisted.get("is_split"))
+        tracker.split_at_candle = int(persisted.get("split_at_candle") or 0)
+        tracker.stale_detected = bool(persisted.get("stale_detected"))
+        tracker.profit_stall_candles = int(persisted.get("profit_stall_candles") or 0)
+        tracker.last_peak_price = float(persisted.get("last_peak_price") or 0.0)
+        tracker.peak_profit_atr = float(persisted.get("peak_profit_atr") or 0.0)
+        tracker.last_action_candle = int(persisted.get("last_action_candle") or -1)
+        tracker.last_action = str(persisted.get("last_action") or "")
+        self._trackers[inst_id] = tracker
+        logger.warning(
+            f"↻ Restored persisted Inactivity tracker for {inst_id} after restart | "
+            f"candle_count={tracker.candle_count} is_split={tracker.is_split} "
+            f"peak_profit_atr={tracker.peak_profit_atr:.2f}"
+        )
+        return True
+
+    def _persist(self, inst_id: str) -> None:
+        """Write the current tracker state for `inst_id` to LoggerDB, if
+        persistence is enabled. Called by track_position (initial write) and
+        update_and_check (on every meaningful state change) — never
+        unconditionally on every ~15s poll cycle."""
+        if self._logger_db is None:
+            return
+        tracker = self._trackers.get(inst_id)
+        if tracker is None:
+            return
+        try:
+            self._logger_db.save_inactivity_tracker_state(
+                symbol=inst_id,
+                side=tracker.side,
+                entry_price=tracker.entry_price,
+                entry_time=tracker.entry_time,
+                atr_at_entry=tracker.atr_at_entry,
+                candle_count=tracker.candle_count,
+                max_observed_price=tracker.max_observed_price,
+                min_observed_price=tracker.min_observed_price,
+                is_split=tracker.is_split,
+                split_at_candle=tracker.split_at_candle,
+                stale_detected=tracker.stale_detected,
+                profit_stall_candles=tracker.profit_stall_candles,
+                last_peak_price=tracker.last_peak_price,
+                peak_profit_atr=tracker.peak_profit_atr,
+                last_action_candle=tracker.last_action_candle,
+                last_action=tracker.last_action,
+            )
+        except Exception as e:
+            logger.error(f"Failed to persist inactivity tracker state for {inst_id}: {e}")
+
+    @staticmethod
+    def _persisted_fields_snapshot(tracker: PositionTracker) -> tuple:
+        """Cheap tuple of every field `_persist` writes, used to detect whether
+        a call to update_and_check actually changed anything worth a write."""
+        return (
+            tracker.candle_count, tracker.max_observed_price, tracker.min_observed_price,
+            tracker.is_split, tracker.split_at_candle, tracker.stale_detected,
+            tracker.profit_stall_candles, tracker.last_peak_price, tracker.peak_profit_atr,
+            tracker.last_action_candle, tracker.last_action,
         )
 
     def stop_tracking(self, inst_id: str) -> None:
@@ -150,6 +275,11 @@ class MMS4InactivityManager:
                 f"■ Stopped tracking {inst_id} after {t.candle_count} candles "
                 f"(split={t.is_split})"
             )
+            if self._logger_db is not None:
+                try:
+                    self._logger_db.delete_inactivity_tracker_state(inst_id, t.side)
+                except Exception as e:
+                    logger.error(f"Failed to delete persisted inactivity tracker state for {inst_id}: {e}")
 
     def is_tracking(self, inst_id: str) -> bool:
         """Check if a position is currently being tracked."""
@@ -220,11 +350,32 @@ class MMS4InactivityManager:
 
         Called by daemon.execute_symbol_cycle() after fetching fresh candles.
         Returns the recommended protective action.
+
+        Persists tracker state (issue #71) when this call actually changed
+        anything worth writing (a new extreme, a candle tick, a latched
+        is_split, or any non-HOLD action) — not unconditionally on every ~15s
+        poll. The write happens BEFORE returning the action, so it lands in
+        SQLite before daemon.py ever issues the corresponding exchange order.
         """
         tracker = self._trackers.get(inst_id)
         if tracker is None:
             return StaleAction.HOLD
 
+        before = self._persisted_fields_snapshot(tracker)
+        action = self._update_and_check_impl(inst_id, tracker, current_price, current_atr, new_candle_closed)
+        after = self._persisted_fields_snapshot(tracker)
+        if self._logger_db is not None and (before != after or action != StaleAction.HOLD):
+            self._persist(inst_id)
+        return action
+
+    def _update_and_check_impl(
+        self,
+        inst_id: str,
+        tracker: PositionTracker,
+        current_price: float,
+        current_atr: float,
+        new_candle_closed: bool
+    ) -> StaleAction:
         # ── Reject non-prices ──
         # A degenerate cycle (empty candle response) yields price 0.0. Folding that into
         # the observed extremes permanently poisons the impulse maths: for a short,
