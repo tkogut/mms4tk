@@ -832,11 +832,20 @@ class OKXExecutor:
         side: str,
         entry_price: float,
         stop_loss_pct: float = 0.02,
-        pos_side: Optional[str] = None
+        pos_side: Optional[str] = None,
+        trigger_price: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Attach a conditional Stop Loss algo order on OKX for a position.
         Uses private_post_trade_order_algo with closeFraction='1' to protect the entire position.
+
+        `trigger_price`, when given, is used verbatim instead of deriving the
+        price from `entry_price × stop_loss_pct` — issue #69: ratcheting the
+        exchange-side SL toward a protective split's Impulse Negation level
+        needs an explicit price this method doesn't otherwise compute (that
+        level sits between entry and the position's peak/trough, not at a
+        fixed percentage from entry). Every other caller is unaffected —
+        omitting it reproduces exactly today's behavior.
         """
         if not self.has_credentials or self.exchange is None:
             return {"status": "mock_sl_attached"}
@@ -850,7 +859,7 @@ class OKXExecutor:
         pos_s = pos_side or ("short" if side.lower() in ["sell", "short"] else "long")
         order_s = "buy" if pos_s == "short" else "sell"
 
-        sl_price = self._compute_sl_trigger_price(pos_s, entry_price, stop_loss_pct)
+        sl_price = trigger_price if trigger_price is not None else self._compute_sl_trigger_price(pos_s, entry_price, stop_loss_pct)
 
         try:
             sl_px_str = self.exchange.price_to_precision(target_symbol, sl_price)
