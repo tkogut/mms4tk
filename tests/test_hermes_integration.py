@@ -99,17 +99,9 @@ def test_hermes_endpoints_integration():
         assert "signal" in calc_res
         assert calc_res["signal"].signal_type == "NONE"
 
-        # 5. Emergency killall tool
-        kill_res = await emergency_killall()
-        assert kill_res["status"] == "success"
-        assert "message" in kill_res
-        assert "action_taken" in kill_res
-
-        # 6. Emergency reverse tool — fail-closed (audit P9.3, 2026-09-08): not yet
-        # implemented, so the endpoint always raises 501 rather than reporting a
-        # fake success. A bare-bones fake Request stands in for the real ASGI one
-        # this handler gets in production (this test calls handlers directly,
-        # bypassing the FastAPI router entirely).
+        # A bare-bones fake Request stands in for the real ASGI one these handlers
+        # get in production (this test calls handlers directly, bypassing the
+        # FastAPI router entirely).
         class _FakeRequest:
             client = None
             query_params: dict = {}
@@ -117,6 +109,21 @@ def test_hermes_endpoints_integration():
             async def body(self) -> bytes:
                 return b""
 
+        # 5. Emergency killall tool — now also engages Maintenance Mode (issue #67),
+        # so disable it again afterward to avoid leaking into later tests.
+        try:
+            kill_res = await emergency_killall(_FakeRequest())
+            assert kill_res["status"] == "success"
+            assert "message" in kill_res
+            assert "action_taken" in kill_res
+            assert kill_res["maintenance_mode_engaged"] is True
+        finally:
+            from mms4tk.okx_executor import set_maintenance_lock
+            set_maintenance_lock(False)
+
+        # 6. Emergency reverse tool — fail-closed (audit P9.3, 2026-09-08): not yet
+        # implemented, so the endpoint always raises 501 rather than reporting a
+        # fake success.
         with pytest.raises(HTTPException) as exc_info:
             await emergency_reverse(_FakeRequest())
         assert exc_info.value.status_code == 501

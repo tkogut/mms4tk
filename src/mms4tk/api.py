@@ -253,6 +253,9 @@ class EmergencyKillallResponse(BaseModel):
     status: str
     message: str
     action_taken: str
+    positions_closed: List[Dict[str, Any]] = Field(default_factory=list)
+    positions_failed: List[Dict[str, Any]] = Field(default_factory=list)
+    maintenance_mode_engaged: bool = False
 
 # EmergencyReverseResponse removed (audit P9.3, 2026-09-08): /api/v1/emergency/reverse
 # now always raises HTTPException(501) — fail-closed, never returns a success shape —
@@ -639,16 +642,92 @@ async def get_latest_signal_alias() -> SignalResult:
 
 
 @app.post("/api/v1/emergency/killall", response_model=EmergencyKillallResponse, tags=["Emergency"], dependencies=[Depends(verify_api_key)])
-async def emergency_killall() -> Dict[str, str]:
+async def emergency_killall(request: Request) -> Dict[str, Any]:
     """
-    Emergency stop endpoint triggered by parent controller (Hermes).
-    Cancels all open orders, closes active positions, and locks execution.
+    Emergency stop endpoint triggered by parent controller (Hermes) or manual
+    operator action. Cancels all open (non-algo) orders, closes every open
+    position via a reduce-only market order, and engages Maintenance Mode so
+    the daemon does not immediately re-enter.
+
+    Audit finding (2026-09-28, XAG protection-gaps review, issue #67): the
+    previous version of this endpoint only called cancel_all_orders() — which
+    the bot rarely has anything queued for, since it trades with market
+    orders — never actually closed a position, never engaged Maintenance Mode,
+    and unconditionally reported "position close triggered" regardless of
+    what happened. This is the only declared emergency-stop path in the
+    system and had never once been exercised in production
+    (emergency_action_log was empty) — the same false-success failure mode
+    already fixed for /emergency/reverse under audit P9.3.
     """
-    await executor.cancel_all_orders()
+    client_ip = request.client.host if request.client else "unknown"
+
+    try:
+        cancel_result = await executor.cancel_all_orders()
+    except Exception as cancel_err:
+        logger.error(f"emergency_killall: cancel_all_orders failed: {cancel_err}")
+        cancel_result = {"error": str(cancel_err)}
+
+    positions_closed: List[Dict[str, Any]] = []
+    positions_failed: List[Dict[str, Any]] = []
+    try:
+        raw_positions = await executor.fetch_positions()
+    except Exception as fetch_err:
+        logger.error(f"emergency_killall: fetch_positions failed: {fetch_err}")
+        raw_positions = []
+
+    for pos in raw_positions:
+        contracts = float(pos.get("contracts") or pos.get("amount") or pos.get("info", {}).get("pos", 0.0) or 0.0)
+        if abs(contracts) <= 0:
+            continue
+        pos_symbol = pos.get("symbol", "N/A")
+        pos_side = str(pos.get("side") or pos.get("info", {}).get("posSide", "long")).lower()
+        try:
+            reduce_result = await executor.reduce_position(
+                symbol=pos_symbol, side=pos_side, reduction_pct=1.0, reason="EMERGENCY_KILLALL"
+            )
+            status_val = (reduce_result or {}).get("status", "executed")
+            if status_val in ("no_position", "not_divisible"):
+                positions_failed.append({"symbol": pos_symbol, "side": pos_side, "reason": status_val})
+            else:
+                positions_closed.append({"symbol": pos_symbol, "side": pos_side, "contracts": abs(contracts)})
+        except Exception as close_err:
+            logger.error(f"emergency_killall: failed to close {pos_symbol} {pos_side}: {close_err}")
+            positions_failed.append({"symbol": pos_symbol, "side": pos_side, "reason": str(close_err)})
+
+    maintenance_engaged = False
+    try:
+        maintenance_engaged = set_maintenance_lock(True, reason="Emergency killall")
+    except Exception as maint_err:
+        logger.error(f"emergency_killall: failed to engage maintenance lock: {maint_err}")
+
+    all_ok = not positions_failed and maintenance_engaged
+    message = (
+        f"Closed {len(positions_closed)} position(s), {len(positions_failed)} failed. "
+        f"Maintenance mode {'engaged' if maintenance_engaged else 'FAILED TO ENGAGE'}."
+    )
+
+    try:
+        logger_db.log_emergency_attempt(
+            endpoint="/api/v1/emergency/killall",
+            outcome="SUCCESS" if all_ok else "PARTIAL_OR_FAILED",
+            client_ip=client_ip,
+            request_params=json.dumps({
+                "positions_closed": positions_closed,
+                "positions_failed": positions_failed,
+                "maintenance_engaged": maintenance_engaged,
+                "cancel_result": str(cancel_result)[:500],
+            }),
+        )
+    except Exception as log_err:
+        logger.error(f"Failed to persist emergency/killall attempt to SQLite: {log_err}")
+
     return {
-        "status": "success",
-        "message": "Emergency killall signal processed successfully.",
-        "action_taken": "All open orders cancelled, position close triggered."
+        "status": "success" if all_ok else "partial",
+        "message": message,
+        "action_taken": message,
+        "positions_closed": positions_closed,
+        "positions_failed": positions_failed,
+        "maintenance_mode_engaged": maintenance_engaged,
     }
 
 
