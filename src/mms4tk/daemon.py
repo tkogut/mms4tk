@@ -1494,6 +1494,49 @@ class MMS4Daemon:
                                 f"Inactivity Manager: Split 50% of {t_side.upper()} position for {target_symbol} "
                                 f"after {t_candles} candles stagnation. ATR=${current_atr:,.2f}"
                             )
+                            # Issue #69: ratchet the exchange-side hard SL toward the
+                            # Impulse Negation level whenever it's more protective than
+                            # the original base_sl_pct anchor — SPLIT_50 previously left
+                            # the SL at -2% from base_entry_price regardless of how much
+                            # of the position's gain a protective split (e.g. Profit
+                            # Giveback Protection) was reacting to. Only ever moves the
+                            # SL toward profit, never away from it (mathematically the
+                            # negation level always sits between entry and the
+                            # observed peak/trough, so it is always at least as
+                            # protective as the fixed 2% anchor — this guard is a
+                            # defensive check, not load-bearing for that property).
+                            try:
+                                new_level = self.inactivity_manager.compute_negation_level(
+                                    target_symbol, current_atr
+                                )
+                                base_entry_px = self._base_entry_price(target_symbol, t_side, fallback=t_entry)
+                                # Loss side is BELOW entry for a LONG, ABOVE entry for a SHORT.
+                                old_sl_level = (
+                                    base_entry_px * (1.0 - self.base_sl_pct) if t_side == "long"
+                                    else base_entry_px * (1.0 + self.base_sl_pct)
+                                )
+                                more_protective = (
+                                    new_level is not None and (
+                                        (t_side == "long" and new_level > old_sl_level) or
+                                        (t_side == "short" and new_level < old_sl_level)
+                                    )
+                                )
+                                if more_protective:
+                                    await self.executor.attach_stop_loss(
+                                        symbol=target_symbol,
+                                        side="sell" if t_side == "long" else "buy",
+                                        entry_price=base_entry_px,
+                                        stop_loss_pct=self.base_sl_pct,
+                                        pos_side=t_side,
+                                        trigger_price=new_level,
+                                    )
+                                    details += f" SL ratcheted to ${new_level:,.4f}."
+                                    logger.warning(
+                                        f"🔒 Ratcheted exchange SL for {target_symbol} {t_side.upper()} "
+                                        f"to ${new_level:,.4f} after protective split (was ~${old_sl_level:,.4f})."
+                                    )
+                            except Exception as ratchet_err:
+                                logger.error(f"Failed to ratchet SL after SPLIT_50 for {target_symbol}: {ratchet_err}")
                     elif stale_action in (StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE, StaleAction.FORCE_CLOSE):
                         reduce_result = await self.executor.reduce_position(
                             symbol=target_symbol, side=t_side,
