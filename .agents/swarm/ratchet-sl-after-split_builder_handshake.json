@@ -1,0 +1,16 @@
+{
+  "conversation_id": "ratchet-sl-after-split",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/inactivity_manager.py",
+    "src/mms4tk/okx_executor.py",
+    "src/mms4tk/daemon.py",
+    "tests/test_inactivity_manager.py",
+    "tests/test_okx_sl_algo_instid.py",
+    "tests/test_midline_inactivity_tp.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-28T18:13:47Z",
+  "notes": "Fixes #69: SPLIT_50 now ratchets the exchange-side hard SL toward the Impulse Negation level (InactivityManager.compute_negation_level, new public accessor sharing _negation_level_for with _check_impulse_negation) via a new attach_stop_loss(trigger_price=...) override, whenever it's more protective than the existing base_sl_pct anchor. Never loosens. PLAN-008/010 epoch bump is a post-deploy operational step (system_settings), not code. 15 new/updated tests, full suite 477 passed (1 new but confirmed pre-existing/unrelated flaky test test_recalibration_history_lists_most_recent_first -- passes in isolation, timing-sensitive under full-suite load, same class as the 2 previously documented flakes in PR #66/#73)."
+}
