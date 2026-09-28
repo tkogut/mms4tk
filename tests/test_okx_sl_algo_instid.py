@@ -333,3 +333,64 @@ def test_daemon_self_healing_sl_hedge_mode_uses_independent_base_entry_price_per
         assert calls_by_pos_side["short"]["slTriggerPx"] == "1836.00"
 
     asyncio.run(_run())
+
+
+def test_attach_stop_loss_uses_explicit_trigger_price_when_given():
+    """Issue #69: an explicit `trigger_price` must be used verbatim, not the
+    entry_price × stop_loss_pct derivation — this is what the SPLIT_50 SL
+    ratchet relies on to place the SL at the Impulse Negation level instead
+    of the fixed 2% anchor."""
+    async def _run():
+        executor = OKXExecutor()
+        executor.has_credentials = True
+
+        mock_exchange = MagicMock()
+        mock_exchange.markets = {}
+        mock_exchange.market = lambda sym: {}
+        mock_exchange.price_to_precision = MagicMock(side_effect=lambda sym, px: f"{px:.4f}")
+        mock_exchange.private_get_trade_orders_algo_pending = AsyncMock(return_value={"data": []})
+        mock_exchange.private_post_trade_cancel_algos = AsyncMock(return_value={"code": "0"})
+        mock_exchange.private_post_trade_order_algo = AsyncMock(return_value={"code": "0", "data": [{"algoId": "algo_1"}]})
+        executor.exchange = mock_exchange
+
+        await executor.attach_stop_loss(
+            symbol="XAG/USDC",
+            side="buy",
+            entry_price=64.2498,
+            stop_loss_pct=0.02,
+            pos_side="short",
+            trigger_price=62.14,
+        )
+
+        called_with = mock_exchange.private_post_trade_order_algo.await_args.args[0]
+        # NOT 64.2498 * 1.02 = 65.5348 — the explicit ratchet level must win.
+        assert called_with["slTriggerPx"] == "62.1400"
+
+    asyncio.run(_run())
+
+
+def test_attach_stop_loss_derives_price_when_trigger_price_omitted():
+    """Every existing caller (self-heal guard, midline TP re-attach, initial
+    entry) omits `trigger_price` and must see byte-identical behavior to
+    before this parameter existed."""
+    async def _run():
+        executor = OKXExecutor()
+        executor.has_credentials = True
+
+        mock_exchange = MagicMock()
+        mock_exchange.markets = {}
+        mock_exchange.market = lambda sym: {}
+        mock_exchange.price_to_precision = MagicMock(side_effect=lambda sym, px: f"{px:.2f}")
+        mock_exchange.private_get_trade_orders_algo_pending = AsyncMock(return_value={"data": []})
+        mock_exchange.private_post_trade_cancel_algos = AsyncMock(return_value={"code": "0"})
+        mock_exchange.private_post_trade_order_algo = AsyncMock(return_value={"code": "0", "data": [{"algoId": "algo_1"}]})
+        executor.exchange = mock_exchange
+
+        await executor.attach_stop_loss(
+            symbol="BTC/USDC", side="buy", entry_price=2000.0, stop_loss_pct=0.02, pos_side="long",
+        )
+
+        called_with = mock_exchange.private_post_trade_order_algo.await_args.args[0]
+        assert called_with["slTriggerPx"] == "1960.00"  # 2000 * (1 - 0.02), unchanged
+
+    asyncio.run(_run())
