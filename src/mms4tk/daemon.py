@@ -123,7 +123,7 @@ class MMS4Daemon:
         self.last_cycle_timestamp: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
         self.last_signal: Optional[SignalResult] = None
-        self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager()
+        self.inactivity_manager: MMS4InactivityManager = MMS4InactivityManager(logger_db=self.logger_db)
         self._last_candle_ts: Dict[str, int] = {}  # per-symbol: timestamp of last known closed candle
         self._last_signal_candle_ts: Dict[str, int] = {}  # PLAN-008 Ph2: per-symbol, last closed-candle ts an entry signal was dispatched on
         self._sl_cooldown_until: Dict[str, int] = {}  # PLAN-008 Ph2: per-symbol, candle ts (ms) until which new entries are blocked after a reconciled SL

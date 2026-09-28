@@ -200,6 +200,37 @@ class LoggerDB:
                 cursor.execute(
                     "ALTER TABLE position_snapshots ADD COLUMN base_entry_price REAL NOT NULL DEFAULT 0.0"
                 )
+            # Issue #71: persist InactivityManager's per-position tracker state
+            # (candle_count, observed price extremes, is_split, etc.) — previously
+            # in-memory only (`MMS4InactivityManager._trackers`), so any restart or
+            # deploy while a position was open silently reset its protection (the
+            # 2026-09-28 XAG incident's contributing factors, project memory
+            # xag-protection-gaps-audit). PK (symbol, side) mirrors
+            # position_snapshots; `entry_price` is used at restore time to confirm
+            # a reloaded row still belongs to the SAME live position, not a stale
+            # row from a different instance that happened to reuse the key.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS inactivity_tracker_state (
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    entry_time REAL NOT NULL,
+                    atr_at_entry REAL NOT NULL DEFAULT 0.0,
+                    candle_count INTEGER NOT NULL DEFAULT 0,
+                    max_observed_price REAL NOT NULL DEFAULT 0.0,
+                    min_observed_price REAL NOT NULL DEFAULT 0.0,
+                    is_split INTEGER NOT NULL DEFAULT 0,
+                    split_at_candle INTEGER NOT NULL DEFAULT 0,
+                    stale_detected INTEGER NOT NULL DEFAULT 0,
+                    profit_stall_candles INTEGER NOT NULL DEFAULT 0,
+                    last_peak_price REAL NOT NULL DEFAULT 0.0,
+                    peak_profit_atr REAL NOT NULL DEFAULT 0.0,
+                    last_action_candle INTEGER NOT NULL DEFAULT -1,
+                    last_action TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (symbol, side)
+                )
+            """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tp_midline_ledger (
                     symbol TEXT NOT NULL,
@@ -1366,6 +1397,88 @@ class LoggerDB:
         with self._get_connection() as conn:
             conn.execute(
                 "DELETE FROM position_snapshots WHERE symbol = ? AND side = ?", (symbol, side.lower())
+            )
+            conn.commit()
+
+    # ── Inactivity Tracker State (issue #71) ────────────────────────────
+
+    def save_inactivity_tracker_state(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        entry_time: float,
+        atr_at_entry: float,
+        candle_count: int,
+        max_observed_price: float,
+        min_observed_price: float,
+        is_split: bool,
+        split_at_candle: int,
+        stale_detected: bool,
+        profit_stall_candles: int,
+        last_peak_price: float,
+        peak_profit_atr: float,
+        last_action_candle: int,
+        last_action: str,
+    ) -> None:
+        """Upsert the persisted state of an InactivityManager PositionTracker,
+        keyed by (symbol, side) like position_snapshots. Called by
+        MMS4InactivityManager itself (not daemon.py) whenever a persisted field
+        actually changes, so the write happens before daemon.py ever sees the
+        resulting action and issues the corresponding exchange order."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO inactivity_tracker_state (
+                    symbol, side, entry_price, entry_time, atr_at_entry, candle_count,
+                    max_observed_price, min_observed_price, is_split, split_at_candle,
+                    stale_detected, profit_stall_candles, last_peak_price, peak_profit_atr,
+                    last_action_candle, last_action, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, side) DO UPDATE SET
+                    entry_price=excluded.entry_price,
+                    entry_time=excluded.entry_time,
+                    atr_at_entry=excluded.atr_at_entry,
+                    candle_count=excluded.candle_count,
+                    max_observed_price=excluded.max_observed_price,
+                    min_observed_price=excluded.min_observed_price,
+                    is_split=excluded.is_split,
+                    split_at_candle=excluded.split_at_candle,
+                    stale_detected=excluded.stale_detected,
+                    profit_stall_candles=excluded.profit_stall_candles,
+                    last_peak_price=excluded.last_peak_price,
+                    peak_profit_atr=excluded.peak_profit_atr,
+                    last_action_candle=excluded.last_action_candle,
+                    last_action=excluded.last_action,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    symbol, side.lower(), entry_price, entry_time, atr_at_entry, candle_count,
+                    max_observed_price, min_observed_price, 1 if is_split else 0, split_at_candle,
+                    1 if stale_detected else 0, profit_stall_candles, last_peak_price, peak_profit_atr,
+                    last_action_candle, last_action, datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+
+    def get_inactivity_tracker_state(self, symbol: str, side: str) -> Optional[Dict[str, Any]]:
+        """Return the persisted tracker state for (symbol, side), or None if
+        nothing was ever persisted (fresh position, or never restarted since
+        this feature shipped)."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM inactivity_tracker_state WHERE symbol = ? AND side = ?",
+                (symbol, side.lower()),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_inactivity_tracker_state(self, symbol: str, side: str) -> None:
+        """Remove persisted tracker state once InactivityManager stops tracking
+        the position (closed, or a stale/mismatched row found at restore time)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM inactivity_tracker_state WHERE symbol = ? AND side = ?",
+                (symbol, side.lower()),
             )
             conn.commit()
 
