@@ -159,6 +159,48 @@ class MMS4InactivityManager:
         """Return tracker state for external inspection (dashboard, API)."""
         return self._trackers.get(inst_id)
 
+    def compute_negation_level(self, inst_id: str, atr: float) -> Optional[float]:
+        """
+        Public accessor for the Rule I (Impulse Negation) trigger price this
+        instrument's tracker would currently negate at — the same 38.2%/50%
+        Fibonacci level `_check_impulse_negation` computes internally, exposed
+        so callers (daemon.py's SPLIT_50 handling, issue #69: ratchet the
+        exchange-side SL toward this level after a protective split) can read
+        it without re-deriving the formula.
+
+        Returns None when there's no tracker for `inst_id`, or the relevant
+        extreme was never observed (0.0) — both mean "no usable level yet".
+        """
+        tracker = self._trackers.get(inst_id)
+        if tracker is None or atr <= 0:
+            return None
+        if tracker.side == "long":
+            if tracker.max_observed_price <= 0:
+                return None
+            return self._negation_level_for(
+                "long", tracker.entry_price, tracker.min_observed_price, tracker.max_observed_price, atr
+            )
+        else:
+            if tracker.min_observed_price <= 0 or tracker.min_observed_price == float("inf"):
+                return None
+            return self._negation_level_for(
+                "short", tracker.entry_price, tracker.min_observed_price, tracker.max_observed_price, atr
+            )
+
+    @staticmethod
+    def _negation_level_for(side: str, entry_price: float, min_observed_price: float,
+                             max_observed_price: float, atr: float) -> float:
+        """Pure Rule I math, shared by `_check_impulse_negation` and the public
+        `compute_negation_level` — kept in one place so the two can never drift."""
+        if side == "long":
+            local_impulse = max_observed_price - entry_price
+            fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
+            return max_observed_price - (local_impulse * fib_ratio)
+        else:
+            local_impulse = entry_price - min_observed_price
+            fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
+            return min_observed_price + (local_impulse * fib_ratio)
+
     @property
     def active_trackers(self) -> Dict[str, PositionTracker]:
         """Return all active trackers (read-only snapshot)."""
@@ -404,18 +446,18 @@ class MMS4InactivityManager:
             min_impulse_atr = self.DEFAULT_IMPULSE_MIN_ATR
         min_impulse = min_impulse_atr * atr
 
+        negation_level = self._negation_level_for(
+            tracker.side, tracker.entry_price, tracker.min_observed_price, tracker.max_observed_price, atr
+        )
         if tracker.side == "long":
             local_impulse = tracker.max_observed_price - tracker.entry_price
-            fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
-            negation_level = tracker.max_observed_price - (local_impulse * fib_ratio)
             negated = local_impulse >= min_impulse and current_price < negation_level
             peak_label, peak_value = "peak", tracker.max_observed_price
         else:
             local_impulse = tracker.entry_price - tracker.min_observed_price
-            fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
-            negation_level = tracker.min_observed_price + (local_impulse * fib_ratio)
             negated = local_impulse >= min_impulse and current_price > negation_level
             peak_label, peak_value = "trough", tracker.min_observed_price
+        fib_ratio = 0.382 if local_impulse >= 0.8 * atr else 0.5
 
         if not negated:
             return StaleAction.HOLD

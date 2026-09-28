@@ -183,3 +183,57 @@ def test_daemon_passes_active_candle_close_to_inactivity_manager():
 
     asyncio.run(_async_test())
 
+
+# ---------------------------------------------------------------------------
+# compute_negation_level (issue #69: ratchet the exchange-side SL after a
+# protective split toward this level). Public accessor for the same Rule I
+# math `_check_impulse_negation` uses internally — must never drift from it.
+# ---------------------------------------------------------------------------
+
+def test_compute_negation_level_short_matches_real_production_example():
+    """Real production tracker state (XAG/USDC short, 2026-09-28 incident):
+    entry=64.2498, min_observed=60.83, small ATR -> negation level ~62.14."""
+    manager = MMS4InactivityManager()
+    manager.track_position(inst_id="XAG/USDC", entry_price=64.2498, entry_time=time.time(), side="short", atr=0.058)
+    tracker = manager.get_tracker("XAG/USDC")
+    tracker.min_observed_price = 60.83
+
+    level = manager.compute_negation_level("XAG/USDC", atr=0.058)
+    assert level == pytest.approx(62.136, abs=0.01)
+
+
+def test_compute_negation_level_long_matches_check_impulse_negation():
+    """The public accessor and the internal check must agree exactly — same
+    formula, same inputs."""
+    manager = MMS4InactivityManager()
+    manager.track_position(inst_id="BTC/USDC", entry_price=60000.0, entry_time=time.time(), side="long", atr=500.0)
+    tracker = manager.get_tracker("BTC/USDC")
+    tracker.max_observed_price = 62000.0
+
+    level = manager.compute_negation_level("BTC/USDC", atr=500.0)
+    expected = manager._negation_level_for("long", 60000.0, tracker.min_observed_price, 62000.0, 500.0)
+    assert level == pytest.approx(expected)
+
+
+def test_compute_negation_level_returns_none_when_not_tracking():
+    manager = MMS4InactivityManager()
+    assert manager.compute_negation_level("BTC/USDC", atr=500.0) is None
+
+
+def test_compute_negation_level_returns_none_when_extreme_zeroed_out():
+    """Defensive guard: a tracker whose relevant extreme reads as 0.0 (e.g. a
+    deserialized/partially-restored tracker, not one built via track_position
+    — that always seeds the extreme to entry_price in __post_init__) must not
+    produce a nonsense negation level."""
+    manager = MMS4InactivityManager()
+    manager.track_position(inst_id="ETH/USDC", entry_price=3000.0, entry_time=time.time(), side="short", atr=50.0)
+    manager.get_tracker("ETH/USDC").min_observed_price = 0.0
+    assert manager.compute_negation_level("ETH/USDC", atr=50.0) is None
+
+
+def test_compute_negation_level_returns_none_for_nonpositive_atr():
+    manager = MMS4InactivityManager()
+    manager.track_position(inst_id="BTC/USDC", entry_price=60000.0, entry_time=time.time(), side="long", atr=500.0)
+    manager.get_tracker("BTC/USDC").max_observed_price = 62000.0
+    assert manager.compute_negation_level("BTC/USDC", atr=0.0) is None
+
