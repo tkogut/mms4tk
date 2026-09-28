@@ -1,0 +1,13 @@
+{
+  "conversation_id": "watchdog-daemon-liveness",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "scripts/hermes/mms4tk_daemon_liveness_watchdog.py",
+    "tests/test_watchdog_daemon_liveness.py",
+    "docs/WATCHDOG_RUNBOOK.md"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-28T17:41:14Z",
+  "notes": "Fixes #68: external Hermes cron watchdog detecting stalled/dead antigravity_core daemon, alerting via Telegram (hermes CLI, matching existing scripts/hermes/*.py pattern) with a computed suggested manual SL price (same Fibonacci Impulse Negation formula as inactivity_manager.py, reimplemented standalone since this script runs outside the mms4tk package). State persisted to host file per run. Alerts only when a position has floating profit >= MMS4TK_WATCHDOG_MIN_PROFIT_USD, once per stall episode. 13 new unit tests + full suite 467 passed (2 known pre-existing unrelated flaky tests excluded, same as PR #66/#73)."
+}
