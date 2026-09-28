@@ -407,3 +407,100 @@ def test_state_manager_scout_mode_lock():
     )
     # Transitions to BASE_MODE
     assert sm.get_symbol_state("BTC/USDC") == MMS4State.BASE_MODE
+
+
+# ── 7. SL Ratchet After Protective Split (issue #69) ─────────────────────
+
+def _daemon_with_mocked_inactivity_manager(tmp_path, side="short", entry=64.2498, contracts=305.0):
+    """A daemon whose InactivityManager is a MagicMock returning a real
+    StaleAction.SPLIT_50 (so daemon.py's `stale_action == StaleAction.SPLIT_50`
+    branch runs for real) with a controllable `compute_negation_level`."""
+    db = LoggerDB(db_path=os.path.join(tmp_path, "ratchet.db"))
+    db.save_position_snapshot(symbol="XAG/USDC", side=side, contracts=contracts, entry_price=entry, last_price=entry)
+    sm = MMS4StateManager(trading_symbol="XAG/USDC")
+
+    ex = MagicMock(spec=OKXExecutor)
+    ex.fetch_candles = AsyncMock(return_value=flat_candles(price=61.0))
+    ex.fetch_positions = AsyncMock(return_value=[
+        position_dict("XAG/USDC", side, contracts=contracts, entry=entry, notional=20.0)
+    ])
+    ex.reduce_position = AsyncMock(return_value={"id": "red_1", "status": "executed"})
+    ex.attach_stop_loss = AsyncMock(return_value={"status": "attached"})
+
+    sig = SignalResult(signal_type="NONE", price=61.0, stop_loss=0.0, leverage=3.0)
+    d = MMS4Daemon(executor=ex, state_manager=sm, signal_engine=StubEngine(sig), logger_db=db, symbol="XAG/USDC")
+
+    d.inactivity_manager = MagicMock()
+    d.inactivity_manager.is_tracking = MagicMock(return_value=True)
+    d.inactivity_manager.update_and_check = MagicMock(return_value=StaleAction.SPLIT_50)
+    tracker = MagicMock()
+    tracker.side = side
+    tracker.entry_price = entry
+    tracker.candle_count = 18
+    tracker.is_split = True
+    d.inactivity_manager.get_tracker = MagicMock(return_value=tracker)
+
+    return d, ex
+
+
+def test_split_50_ratchets_sl_to_negation_level_when_more_protective(tmp_path):
+    """The real bug this closes: SPLIT_50 previously left the exchange SL at
+    the original -2% anchor no matter how much profit the split was reacting
+    to. A SHORT split via Profit Giveback Protection (real 2026-09-28 incident
+    shape) must ratchet the SL toward the computed Impulse Negation level."""
+    d, ex = _daemon_with_mocked_inactivity_manager(tmp_path, side="short", entry=64.2498)
+    d.inactivity_manager.compute_negation_level = MagicMock(return_value=62.14)  # more protective than 64.2498*1.02=65.53
+
+    res = asyncio.run(d.execute_symbol_cycle("XAG/USDC"))
+
+    assert res["outcome"] == "STALE_SPLIT_50"
+    ex.attach_stop_loss.assert_awaited_once()
+    call_kwargs = ex.attach_stop_loss.call_args.kwargs
+    assert call_kwargs["trigger_price"] == 62.14
+    assert call_kwargs["pos_side"] == "short"
+    assert call_kwargs["side"] == "buy"  # closing a short = buy
+
+
+def test_split_50_does_not_ratchet_when_negation_level_less_protective(tmp_path):
+    """Defensive guard: a computed level worse than the existing -2% anchor
+    (e.g. a near-entry stagnation split with a noisy ATR) must never be
+    applied — the split itself still executes."""
+    d, ex = _daemon_with_mocked_inactivity_manager(tmp_path, side="short", entry=64.2498)
+    # 66.0 is ABOVE the existing 65.5348 anchor for a short -> LESS protective, must be rejected.
+    d.inactivity_manager.compute_negation_level = MagicMock(return_value=66.0)
+
+    res = asyncio.run(d.execute_symbol_cycle("XAG/USDC"))
+
+    assert res["outcome"] == "STALE_SPLIT_50"
+    ex.attach_stop_loss.assert_not_awaited()
+
+
+def test_split_50_does_not_ratchet_when_no_negation_level_available(tmp_path):
+    """compute_negation_level returning None (e.g. no extreme observed yet)
+    must not raise and must not attempt to attach a nonsense SL."""
+    d, ex = _daemon_with_mocked_inactivity_manager(tmp_path, side="short", entry=64.2498)
+    d.inactivity_manager.compute_negation_level = MagicMock(return_value=None)
+
+    res = asyncio.run(d.execute_symbol_cycle("XAG/USDC"))
+
+    assert res["outcome"] == "STALE_SPLIT_50"
+    ex.attach_stop_loss.assert_not_awaited()
+
+
+def test_split_50_ratchets_long_side_correctly():
+    """LONG side: the negation level must be ABOVE the existing -2% anchor to
+    count as more protective (loss side is below entry for a long)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp_path:
+        d, ex = _daemon_with_mocked_inactivity_manager(tmp_path, side="long", entry=100.0)
+        # existing anchor = 100 * 0.98 = 98.0; 99.5 is more protective (closer to entry/profit).
+        d.inactivity_manager.compute_negation_level = MagicMock(return_value=99.5)
+
+        res = asyncio.run(d.execute_symbol_cycle("XAG/USDC"))
+
+        assert res["outcome"] == "STALE_SPLIT_50"
+        ex.attach_stop_loss.assert_awaited_once()
+        call_kwargs = ex.attach_stop_loss.call_args.kwargs
+        assert call_kwargs["trigger_price"] == 99.5
+        assert call_kwargs["pos_side"] == "long"
+        assert call_kwargs["side"] == "sell"  # closing a long = sell
