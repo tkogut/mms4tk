@@ -1,0 +1,14 @@
+{
+  "conversation_id": "persist-inactivity-tracker",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/logger_db.py",
+    "src/mms4tk/inactivity_manager.py",
+    "src/mms4tk/daemon.py",
+    "tests/test_inactivity_tracker_persistence.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-28T18:42:31Z",
+  "notes": "Fixes #71: InactivityManager tracker state (candle_count, observed extremes, is_split, peak_profit_atr, etc.) persisted to new inactivity_tracker_state table, keyed (symbol,side) like position_snapshots. track_position restores on match (0.1% entry_price identity check), clears mismatched rows. update_and_check persists only on actual state change, before returning the action (ordering guarantee). Fully backward compatible (logger_db=None default = pure in-memory, unchanged for all existing callers/tests). Did not implement OHLCV-based reconstruction (rejected in audit -- candle wicks would give false tight extremes). 7 new tests + full suite 485 passed."
+}
