@@ -34,6 +34,20 @@ from urllib.error import URLError
 logger = logging.getLogger("mms4tk.hermes_webhook")
 
 
+def _connect(db_path: str) -> sqlite3.Connection:
+    """sqlite3.connect wrapper shared by every call site in this module.
+
+    Issue #72: this module writes to the SAME logs.db file LoggerDB and
+    ui_dashboard/app.py also open concurrently — without WAL mode + a real
+    busy_timeout, contention surfaces as "database is locked" instead of a
+    short, automatic wait.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
 class HermesWebhookEvent:
     """Represents a webhook event to be dispatched to Hermes Kanban."""
 
@@ -76,7 +90,7 @@ class HermesWebhookClient:
     def _init_webhook_table(self) -> None:
         """Create webhook_events table if it doesn't exist."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with _connect(self.db_path) as conn:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS webhook_events (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +117,7 @@ class HermesWebhookClient:
         Returns the event ID.
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with _connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO webhook_events
@@ -372,7 +386,7 @@ class HermesWebhookClient:
     def get_pending_events(self, limit: int = 10) -> list:
         """Retrieve undispatched webhook events."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with _connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     "SELECT * FROM webhook_events WHERE dispatched = 0 ORDER BY id ASC LIMIT ?",
@@ -386,7 +400,7 @@ class HermesWebhookClient:
     def mark_dispatched(self, event_id: int, kanban_task_id: str = "") -> None:
         """Mark an event as dispatched after Kanban card creation."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with _connect(self.db_path) as conn:
                 conn.execute(
                     """
                     UPDATE webhook_events
@@ -404,7 +418,7 @@ class HermesWebhookClient:
     def mark_error(self, event_id: int, error: str) -> None:
         """Record dispatch error for an event."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with _connect(self.db_path) as conn:
                 conn.execute(
                     "UPDATE webhook_events SET error = ? WHERE id = ?",
                     (error, event_id)

@@ -70,9 +70,20 @@ class LoggerDB:
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
 
+    # Issue #72: default SQLite journal mode allows only one writer at a time
+    # and has no wait window of its own — under concurrent access (this class
+    # from antigravity_core, plus ui_dashboard/app.py opening the same file
+    # directly) that surfaces as "database is locked" instead of a short,
+    # automatic wait. WAL lets readers and the writer proceed concurrently;
+    # busy_timeout gives any operation that still contends a real wait window
+    # before erroring out.
+    _BUSY_TIMEOUT_MS = 5000
+
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     def _init_db(self) -> None:

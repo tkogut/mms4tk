@@ -145,6 +145,8 @@ def fetch_kanban_cards():
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("PRAGMA journal_mode = WAL")
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             # Only fetch undispatched (pending) events! Events already sent & completed by Hermes are ignored.
@@ -182,6 +184,8 @@ def fetch_closed_trades_df():
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("PRAGMA journal_mode = WAL")
             df = pd.read_sql_query("SELECT * FROM closed_trades ORDER BY timestamp ASC", conn)
             conn.close()
             return df

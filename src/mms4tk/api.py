@@ -1178,6 +1178,8 @@ async def get_kanban_cards() -> Dict[str, Any]:
         # Fallback to undispatched actionable events only if kanban.db is missing
         try:
             with sqlite3.connect(hermes_webhook.db_path) as conn:
+                conn.execute("PRAGMA busy_timeout = 5000")
+                conn.execute("PRAGMA journal_mode = WAL")
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     "SELECT * FROM webhook_events WHERE dispatched = 0 AND initial_status NOT IN ('done', 'archived') ORDER BY id DESC LIMIT 20"
