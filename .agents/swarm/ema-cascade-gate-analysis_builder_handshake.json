@@ -1,0 +1,12 @@
+{
+  "conversation_id": "ema-cascade-gate-analysis",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "scripts/ema_cascade_gate_analysis.py",
+    "tests/test_ema_cascade_gate_analysis.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-30T15:22:27Z",
+  "notes": "Issue #83 step 1 executed: EMA 26/50/144/200 cascade backtested against the current, already-enabled H4 directional gate using exact Phase 3.2 methodology (causal H4 resampling, same lag, 122-day windows). Harness self-verified by reproducing the cited H4-vs-off baseline exactly. Result: criterion NOT met (EMA_CASCADE beats H4 in only 7/16 warmed windows, not a majority on both symbols; EMA_CASCADE+zone worse almost everywhere; no result significant, n=4/symbol). EMA also blocks ~4x more TP-and-flip exits than H4 on USDT fixtures -- confirms #83's own concern. 24 unit tests for the classifier. Zero changes to src/ or DB schema -- classifier injected via runtime monkeypatch of backtest_engine._htf_directional_bias_series, restored after. Recommendation: do not proceed to live classifier swap. Closes #83."
+}
