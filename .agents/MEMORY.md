@@ -1,4 +1,4 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.47.3)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.48.9, verified 2026-09-30)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
@@ -7,11 +7,18 @@
 - **VPS Server**: Hostinger Cloud (`srv1490214.hstgr.cloud`, containers `antigravity_core` + `ui_dashboard`).
   - Production DB path: `/app/.agents/swarm/logs.db`.
   - Repo on server: `/docker/mms4tk` (git-tracked, deploy = `git pull` + `docker compose up -d --build`).
-  - SSH access: the key at `~/.ssh/tkogut_ssh_key` authenticates directly, no
-    running `ssh-agent`/`SSH_AUTH_SOCK` needed (verified 2026-09-11 — a prior
-    documented `SSH_AUTH_SOCK=...` value here was a dead, session-specific
-    socket; don't chase reviving an agent, just use the key directly):
-    `ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i ~/.ssh/tkogut_ssh_key root@srv1490214.hstgr.cloud "docker exec antigravity_core ..."`
+  - SSH access: the key at `~/.ssh/tkogut_ssh_key` is passphrase-protected —
+    direct `-i` auth without an agent **fails** (`Permission denied
+    (publickey)`, re-verified 2026-09-30). A prior version of this note
+    claimed direct-key auth worked; it doesn't — don't repeat that claim.
+    Use the `vps-ops` skill protocol (`.agents/skills/vps-ops/SKILL.md`):
+    ask the user to run `ssh-add ~/.ssh/tkogut_ssh_key` in their own terminal
+    (they enter the passphrase there, never in this session) and paste back
+    the resulting `SSH_AUTH_SOCK=...` value, then use it for every SSH call
+    this session:
+    `SSH_AUTH_SOCK=<value> ssh -o StrictHostKeyChecking=no root@srv1490214.hstgr.cloud "docker exec antigravity_core ..."`
+    The socket is only valid for that terminal's lifetime — if it stops
+    working, ask the user to repeat the `ssh-add` step and give you a fresh one.
 - **Test suite**: `MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest -q -m "not slow"` (393+ passed as of Faza 3; grows over time — treat any exact count here as stale, run it fresh).
 - **Never run pytest against the production container** (`docker exec antigravity_core pytest ...`) — even with `tests/conftest.py`'s DB/maintenance-lock isolation fix (2026-09-10, see §2), prefer a local checkout or CI. Full context: `git log` for the P3 conftest-hygiene commit.
 
@@ -75,7 +82,7 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
 
 ---
 
-## 📈 4. CURRENT PRODUCTION STATE (v0.47.3, 2026-09-15)
+## 📈 4. CURRENT PRODUCTION STATE (v0.48.9, verified 2026-09-30 — see `DECISIONS.md` for the full, living source of truth)
 - **Live Trading**: Active na OKX X-Perp (`BTC/USDC`, `ETH/USDC`, `XAU/USDC`, `XAG/USDC`).
 - **Capital Allocation**: $100 USD per symbol (BTC, ETH, XAU, XAG).
 - **Authoritative Fill & PnL Reconciliation (v0.47.2)**:
@@ -83,8 +90,8 @@ wersja). Zarchiwizowane plany operacyjne: `.agents/plans/archive/`.
   - Precyzyjny fill eliminuje rozjazdy cenowe na Telegramie i fałszywe klasyfikacje SL.
 - **Gold (XAU)**: OKX EEA X-Perp `XAU-USD_UM_XPERP-310502` / `XAU/USD:USD-310502`, 0.001 XAU contract size, $100 allocation (70/30 base/addon), 1h timeframe.
 - **Silver (XAG)**: OKX EEA X-Perp `XAG-USD_UM_XPERP-310509` / `XAG/USD:USD-310509`, 0.01 XAG contract size, $100 allocation (70/30 base/addon), 1h timeframe.
-- **Trend Filter State**: `tma_trend_filter_enabled` — **DISABLED** dla wszystkich symboli (re-zwalidowane na długiej historii w Fazie 3, decyzja "nie włączać" potwierdzona, nie tylko odziedziczona).
-- **H4 Directional-Bias Gate** (`htf_directional_gate_enabled`, Faza 3.2) — kod gotowy, wdrożony, **domyślnie OFF** dla wszystkich symboli (potwierdzone: brak wpisu w `system_settings` na produkcji). Najsilniejszy zmierzony sygnał w historii projektu (10/10 niezależnych okien poprawa, sign test p=0.0020) — redukuje straty w trendzie ~25-30%, nie czyni strategii zyskowną. Włączenie to świadoma decyzja operacyjna, nie automatyczna.
+- **Trend Filter State**: `tma_trend_filter_enabled` — kod: `False` domyślnie. ⚠️ **Status sporny, nierozstrzygnięty** — `task.md` (archiwum) mówi wprost że nigdy nie był testowany na pełnej 24-miesięcznej historii i decyzja pozostaje otwarta; ten wpis wcześniej twierdził "re-zwalidowane w Fazie 3, potwierdzone" bez znalezionego dowodu (żaden skrypt w `scripts/` tego nie testuje). Nie powtarzaj żadnego z tych dwóch twierdzeń jako pewnika — patrz `DECISIONS.md` sekcja 4.
+- **H4 Directional-Bias Gate** (`htf_directional_gate_enabled`, Faza 3.2) — **zweryfikowane bezpośrednio na produkcyjnym `system_settings` 2026-09-30: `true` dla WSZYSTKICH 4 aktywnych symboli** (BTC/ETH/XAU/XAG), włączone ręcznie 2026-09-13/14. Ten wpis wcześniej błędnie twierdził "domyślnie OFF dla wszystkich symboli" — nieaktualne od momentu włączenia. Najsilniejszy zmierzony sygnał w historii projektu (10/10 niezależnych okien poprawa, sign test p=0.0020) — redukuje straty w trendzie ~25-30%, nie czyni strategii zyskowną. Alternatywny klasyfikator (kaskada EMA) przetestowany i odrzucony w PR #84 — patrz `DECISIONS.md`.
 - **Inactivity Engine (v0.45.1 / PR #60)**:
   - **Live Price Feed**: `daemon.py` przekazuje `candles[-1].close` do `inactivity_manager.update_and_check()`, likwidując 1h lag.
   - **Profit Giveback Protection**: nowa reguła (`peak_profit_atr >= 1.0` i retracement >50% ze szczytu -> natychmiastowy `SPLIT_50` intra-candle).
@@ -130,7 +137,7 @@ Powiadomienia w ekosystemie MMS4TK są wysyłane dwoma całkowicie odrębnymi ś
    - **Mechanizm**: Asynchroniczny wątek daemona (`TelegramQueueWorker`) wykonuje bezpośrednie żądanie HTTP POST do `https://api.telegram.org/bot<TOKEN>/sendMessage`.
    - **Źródło konfiguracji**: Plik środowiskowy kontenera `/docker/mms4tk/.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
    - ⚠️ **KRYTYCZNA REGUŁA DLA AGENTÓW (ZAKAZ UŻYWANIA STAREGO TOKENA)**:
-     - W `/docker/mms4tk/.env` token `TELEGRAM_BOT_TOKEN` MUSI być ustawiony na dedykowanego bota **Masterek** (`REDACTED_TELEGRAM_TOKEN`, `@MMS4_masterek_bot`).
+     - W `/docker/mms4tk/.env` token `TELEGRAM_BOT_TOKEN` MUSI być ustawiony na dedykowanego bota **Masterek** (`<REDACTED_ROTATE_IF_NOT_ALREADY>`, `@MMS4_masterek_bot`).
      - **ZAKAZ**: Pod żadnym pozorem nie wpisywać tam tokena bota głównego (`default`), aby alerty tradingowe nie mieszały się z czatem Koordynatora.
      - ⚠️ **ZASADA PRZEŁADOWANIA ŚRODOWISKA DOCKERA**: W Docker Compose polecenie `docker restart antigravity_core` **NIE przeładowuje zmiennych środowiskowych** z pliku `.env` (kontener zachowuje stary proces i stare env w pamięci). Każda modyfikacja pliku `/docker/mms4tk/.env` WYMAGA wykonania:
        ```bash
@@ -139,11 +146,12 @@ Powiadomienia w ekosystemie MMS4TK są wysyłane dwoma całkowicie odrębnymi ś
 
 2. **Ścieżka analityczna i okresowa (Hermes Cron & Dispatcher):**
    - **Komponenty**: Skrypty w `/opt/data/scripts/` (lub `scripts/hermes/`) uruchamiane przez cron Hermesa.
-   - **Zakres**:
+   - **Zakres** (lista skryptów zweryfikowana 2026-09-30 przeciw rzeczywistej zawartości `scripts/hermes/` — poprzednia wersja tej listy cytowała nieistniejący `mms4tk_stale_watch.py` i pomijała dwa realne skrypty):
      - `mms4tk H4 Analysis` (`0 */4 * * *`, skrypt `mms4tk_h4_analysis.py`),
      - `mms4tk D1 ATR Monitor` (`8 0 * * *`, skrypt `mms4tk_d1_atr_check.py`),
      - `mms4tk Multi-Symbol Digest` (`30 2,6,10,14,18,22 * * *`, skrypt `mms4tk_multi_symbol_digest.py`),
-     - `mms4tk STALE Watch` (`*/15 * * * *`, skrypt `mms4tk_stale_watch.py`),
+     - `mms4tk Position Close Monitor`, skrypt `mms4tk_position_close_monitor.py` (harmonogram cron do potwierdzenia u operatora),
+     - `mms4tk Daemon Liveness Watchdog` (`* * * * *`, skrypt `mms4tk_daemon_liveness_watchdog.py`, issue #68/PR #74, 2026-09-28) — alert Telegram + sugerowana cena SL gdy `antigravity_core` wygląda na martwy,
      - `mms4tk Event Dispatcher` (`* * * * *`, skrypt `mms4tk_event_dispatcher.py`).
    - **Profil Hermesa**: Wszystkie te 5 zadań należy rejestrować i utrzymywać **wyłącznie w profilu `masterek`** (`hermes -p masterek cron ...`).
    - W profilu `default` zadania mms4tk są usunięte (profil `default` nie ma zadań tradingowych).

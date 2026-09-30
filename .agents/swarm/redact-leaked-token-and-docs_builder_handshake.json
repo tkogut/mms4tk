@@ -1,0 +1,12 @@
+{
+  "conversation_id": "redact-leaked-token-and-docs",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    ".agents/MEMORY.md",
+    "docs/TELEGRAM_AND_NOTIFICATIONS.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-09-30T16:28:42Z",
+  "notes": "Security: redacted the leaked Telegram bot token (pattern-matched by shape, never typed manually) from .agents/MEMORY.md and docs/TELEGRAM_AND_NOTIFICATIONS.md -- current tree only, git history still contains it and requires a separate owner-run filter-repo + force-push (I don't force-push to main/master per my own constraints). Also fixed 4 stale/contradictory claims found during verification: SSH direct-key claim (disproven live, replaced with the working vps-ops agent-forwarding protocol), htf_directional_gate_enabled status (was 'off for all', verified live as 'true for all 4 symbols'), TMA-slope status (was falsely asserted 'revalidated', now flagged as an unresolved contradiction against task.md/DECISIONS.md), and the Hermes cron script list (cited a nonexistent script, missing two real ones incl. the new watchdog from #74). No 'live Hermes prompt' file exists separately from the now-archived task.md -- the actual code Hermes reads (hermes_tools.py's killall description) is already accurate since #73, confirmed, no code change needed."
+}
