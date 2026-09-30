@@ -1,5 +1,22 @@
 # 📋 TASK BACKLOG: mms4tk Profitability & Hardening Workstream
 
+> ## 🗄️ ARCHIWUM — obowiązuje tylko do 2026-09-14 (v0.45.1)
+> Ten dokument przestał być aktualizowany 2026-09-14 (commit `26414cd`). Od tego
+> momentu main przeszedł ~45 dalszych commitów (v0.45.1 → v0.48.9+): PR #61-66,
+> #73-84, cała naprawa ochrony pozycji po incydencie XAG (2026-09-28), porównanie
+> ze strategią "EMA Alerts" (#80-83), i odrzucenie kaskady EMA jako źródła bias
+> (#84) — **żaden z tych faktów nie jest tu odzwierciedlony.**
+>
+> **Wszystkie numery linii kodu cytowane w tym pliku są historyczne** — kod się
+> przesunął, cytaty poniżej opisują stan z połowy września, nie stan obecny.
+>
+> **Aktualne, obowiązujące decyzje i stan flag: [`DECISIONS.md`](./DECISIONS.md).**
+> Ten plik zostaje jako zapis historyczny rozumowania (dlaczego odrzucono Midline
+> TP, jak wyglądała siatka `sl_grid_analysis.py` itd.) — czytaj go dla kontekstu
+> historycznego, nie jako źródło prawdy o bieżącym stanie systemu.
+
+---
+
 **Status aktualny (2026-09-12): v0.45.0 na produkcji, Faza 3 zmergowana do `main`.**
 Jeden otwarty follow-up: branch `chore/phase3-2-htf-fetch-failsafe-fix` (fail-safe
 bramki H4 — naprawiony realny bug znaleziony przez `/code-review` post-merge,
