@@ -1,0 +1,12 @@
+{
+  "conversation_id": "archive-taskmd-add-decisions",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "task.md",
+    "DECISIONS.md"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-09-30T15:48:40Z",
+  "notes": "Docs-only: task.md archived with a banner (last real edit 2026-09-14, ~45 commits since with zero trace -- confirmed dead by an independent Opus verification pass). New DECISIONS.md is the living source of truth, built from facts verified directly (SSH to production system_settings: htf_directional_gate_enabled=true for all 4 active symbols, not off/BTC-ETH-only as the two stale docs each separately claimed) plus the audit trail from PR #67-84. Flags a real gap: backtest_engine.py doesn't model PR #75's SL ratchet or intra-candle Profit Giveback, so old sl_grid_analysis.py numbers don't precisely describe current production for split positions. Also documents the PR #84 precedent (tested a new bias source on the closed Profitability Workstream's forbidden fixtures; result was negative, nothing shipped, but the process boundary was technically crossed). TMA-slope status left explicitly unresolved (contradictory across 3 docs) pending a future measurement. No code changes."
+}
