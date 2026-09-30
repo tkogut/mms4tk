@@ -69,7 +69,7 @@ Przed wersją v0.47.2 proces pojednania pozycji w `daemon.py` (`_reconcile_posit
 
 ### Źródło Konfiguracji & Zasada Recreate
 - Token i Chat ID są wstrzykiwane do kontenera ze zmiennych środowiskowych:
-  - `TELEGRAM_BOT_TOKEN`: Token bota **Masterek** (`8851742516:AAExUxxCqIzebCXy_OHiekAFKHklALiJJjw`).
+  - `TELEGRAM_BOT_TOKEN`: Token bota **Masterek** (`<REDACTED_ROTATE_IF_NOT_ALREADY>`).
   - `TELEGRAM_CHAT_ID`: `1544516700`.
 - ⚠️ **KRYTYCZNA REGUŁA DLA AGENTÓW I DEVOPS**:
   - W pliku `/docker/mms4tk/.env` na VPS zmienna `TELEGRAM_BOT_TOKEN` **musi wskazywać wyłącznie na bota Masterek**.
