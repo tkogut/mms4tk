@@ -1062,6 +1062,25 @@ class MMS4Daemon:
         # 3. Process signal and execute trades if triggered
         outcome = "NO_ACTION"
         details = signal.reason or ""
+
+        # Issue #80: pure instrumentation, zero behavior change, no epoch bump.
+        # Measures whether the signal candle's volume relative to its own recent
+        # history differs for executed vs. blocked BASE entries -- per symbol,
+        # since volume means something different on each market (see the XAG
+        # weekend-candle incident and the external "EMA Alerts" volume-ratio
+        # filter this issue is probing). The signal candle is candles[-2] (the
+        # last CLOSED candle -- analytics.evaluate_signals's own `curr_c`);
+        # candles[-1] is still open. `_sig_vol_suffix` is appended verbatim to
+        # `details` below, never read back or acted on.
+        _sig_vol_suffix = ""
+        if signal.signal_type in ("BASE_SHORT", "BASE_LONG") and len(candles) >= 22:
+            try:
+                _sig_vol = float(candles[-2].volume)
+                _avg20 = sum(float(c.volume) for c in candles[-22:-2]) / 20.0
+                _vol_ratio = (_sig_vol / _avg20) if _avg20 > 0 else float("nan")
+                _sig_vol_suffix = f" vol={_sig_vol:.4f} vol_ratio={_vol_ratio:.4f}"
+            except Exception:
+                _sig_vol_suffix = ""
         order_info: Optional[Dict[str, Any]] = None
         # Set by whichever execution branch actually places an order; read by the
         # notification block below. Previously the flip branch named it `new_side`, so the
@@ -1617,7 +1636,7 @@ class MMS4Daemon:
         # ────────────────────────────────────────────────────────────────
         if signal.signal_type != "NONE" and not signal.is_allowed:
             outcome = f"BLOCKED_{signal.signal_type}"
-            details = f"Signal vetoed by analytics (is_allowed=False): {signal.reason}"
+            details = f"Signal vetoed by analytics (is_allowed=False): {signal.reason}{_sig_vol_suffix}"
             logger.info(f"🚫 {target_symbol}: {details}")
             self.logger_db.log_cycle(
                 symbol=target_symbol,
@@ -1955,6 +1974,15 @@ class MMS4Daemon:
                             await self.release_portfolio_reservation(notional_addon_usd)
 
         # 4. Log cycle outcome for specific symbol
+        # Issue #80: append the signal-candle volume instrumentation computed above
+        # to whichever `details` string this cycle's branch produced (EXECUTED_BASE_*,
+        # SKIPPED_*, COOLDOWN_ACTIVE, CANDLE_GATE_SKIP, EXECUTED_TP_AND_FLIP_*,
+        # PORTFOLIO_GUARD_BLOCKED_*, ERROR_*) -- every one of them re-assigns `details`
+        # from scratch rather than appending, so this has to happen here, once, right
+        # before the row is written. Empty string (non-BASE signal, or too few candles)
+        # is a no-op suffix. Never changes `outcome` or any trading decision.
+        if _sig_vol_suffix and _sig_vol_suffix not in details:
+            details = f"{details}{_sig_vol_suffix}"
         self.logger_db.log_cycle(
             symbol=target_symbol,
             signal_type=signal.signal_type,
