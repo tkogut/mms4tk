@@ -281,7 +281,8 @@ class MMS4SignalEngine:
         candles: List[Candle],
         state_manager: MMS4StateManager,
         params: Optional[IndicatorParams] = None,
-        symbol: Optional[str] = None
+        symbol: Optional[str] = None,
+        base_sl_pct: float = 0.02
     ) -> SignalResult:
         """
         Evaluates candles and current strategy state to trigger trading signals.
@@ -289,6 +290,12 @@ class MMS4SignalEngine:
         `symbol` selects which per-symbol state and leverage gate the signal. Without it
         the primary symbol's state is used, which silently mis-gates every other symbol
         in a multi-symbol daemon — always pass it from the daemon.
+
+        `base_sl_pct` is the daemon's configured base stop-loss distance (`daemon.base_sl_pct`).
+        It's only used to make a BASE signal's `stop_loss` field agree with the price OKX
+        will actually be told to trigger at (`OKXExecutor._compute_sl_trigger_price`) — it's
+        informational, callers must keep reading the real SL off `daemon.base_sl_pct` /
+        the order's own attached algo, not off this field.
         """
         if params is None:
             params = IndicatorParams()
@@ -429,7 +436,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_SHORT",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 1.01, 6),
+                    stop_loss=0.0,  # P3 V2: HIGH_RISK_ADD has no independent SL
                     leverage=active_leverage,
                     is_allowed=False,
                     reason=f"HIGH_RISK_ADD blocked: Volatility Ratio ({latest_vr:.2f}) > {params.adaptive_vr_high:.2f} (SKIPPED_HIGH_VOLATILITY)",
@@ -440,7 +447,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_SHORT",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 1.01, 6),
+                    stop_loss=0.0,  # P3 V2: HIGH_RISK_ADD has no independent SL
                     leverage=active_leverage,
                     is_allowed=False,
                     # Audit Phase 3.1 (2026-09-11): SCOUT_MODE no longer cuts leverage to
@@ -457,7 +464,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_SHORT",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 1.01, 6),
+                    stop_loss=0.0,  # P3 V2: HIGH_RISK_ADD has no independent SL
                     leverage=1.0,
                     is_allowed=True,
                     reason="HIGH_RISK_ADD SHORT signal: follow-up candle confirmed down trend" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
@@ -486,7 +493,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_LONG",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 0.99, 6),
+                    stop_loss=0.0,  # P3 V2: HIGH_RISK_ADD has no independent SL
                     leverage=active_leverage,
                     is_allowed=False,
                     reason=f"HIGH_RISK_ADD blocked: Volatility Ratio ({latest_vr:.2f}) > {params.adaptive_vr_high:.2f} (SKIPPED_HIGH_VOLATILITY)",
@@ -497,7 +504,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_LONG",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 0.99, 6),
+                    stop_loss=0.0,  # P3 V2: HIGH_RISK_ADD has no independent SL
                     leverage=active_leverage,
                     is_allowed=False,
                     # Audit Phase 3.1 (2026-09-11): SCOUT_MODE no longer cuts leverage to
@@ -514,7 +521,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="HIGH_RISK_ADD_LONG",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 0.99, 6),
+                    stop_loss=0.0,  # P3 V2: HIGH_RISK_ADD has no independent SL
                     leverage=1.0,
                     is_allowed=True,
                     reason="HIGH_RISK_ADD LONG signal: follow-up candle confirmed up trend" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
@@ -552,7 +559,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="BASE_SHORT",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 1.02, 6),
+                    stop_loss=round(curr_c.close * (1.0 + base_sl_pct), 6),
                     leverage=active_leverage,
                     is_allowed=False,
                     reason=(
@@ -581,7 +588,7 @@ class MMS4SignalEngine:
                     return SignalResult(
                         signal_type="BASE_SHORT",
                         price=curr_c.close,
-                        stop_loss=round(curr_c.close * 1.02, 6),
+                        stop_loss=round(curr_c.close * (1.0 + base_sl_pct), 6),
                         leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_SHORT blocked during US Open Time-Lock ({params.time_lock_start}-{params.time_lock_end} UTC): SKIPPED_TIME_LOCK",
@@ -602,7 +609,7 @@ class MMS4SignalEngine:
                     return SignalResult(
                         signal_type="BASE_SHORT",
                         price=curr_c.close,
-                        stop_loss=round(curr_c.close * 1.02, 6),
+                        stop_loss=round(curr_c.close * (1.0 + base_sl_pct), 6),
                         leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_SHORT blocked in high volatility expansion (VR {latest_vr:.2f} > {params.adaptive_vr_high:.2f}): no extreme Sweep Rejection wick (SKIPPED_HIGH_VOLATILITY_BASE)",
@@ -616,7 +623,7 @@ class MMS4SignalEngine:
                     return SignalResult(
                         signal_type="BASE_SHORT",
                         price=curr_c.close,
-                        stop_loss=round(curr_c.close * 1.02, 6),
+                        stop_loss=round(curr_c.close * (1.0 + base_sl_pct), 6),
                         leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_SHORT blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
@@ -626,7 +633,7 @@ class MMS4SignalEngine:
             return SignalResult(
                 signal_type="BASE_SHORT",
                 price=curr_c.close,
-                stop_loss=round(curr_c.close * 1.02, 6),
+                stop_loss=round(curr_c.close * (1.0 + base_sl_pct), 6),
                 leverage=active_leverage,
                 is_allowed=True,
                 reason="Base SHORT signal: candle hit upper band and closed down" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),
@@ -644,7 +651,7 @@ class MMS4SignalEngine:
                 return SignalResult(
                     signal_type="BASE_LONG",
                     price=curr_c.close,
-                    stop_loss=round(curr_c.close * 0.98, 6),
+                    stop_loss=round(curr_c.close * (1.0 - base_sl_pct), 6),
                     leverage=active_leverage,
                     is_allowed=False,
                     reason=(
@@ -667,7 +674,7 @@ class MMS4SignalEngine:
                     return SignalResult(
                         signal_type="BASE_LONG",
                         price=curr_c.close,
-                        stop_loss=round(curr_c.close * 0.98, 6),
+                        stop_loss=round(curr_c.close * (1.0 - base_sl_pct), 6),
                         leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_LONG blocked in high volatility expansion (VR {latest_vr:.2f} > {params.adaptive_vr_high:.2f}): no extreme Sweep Rejection wick (SKIPPED_HIGH_VOLATILITY_BASE)",
@@ -681,7 +688,7 @@ class MMS4SignalEngine:
                     return SignalResult(
                         signal_type="BASE_LONG",
                         price=curr_c.close,
-                        stop_loss=round(curr_c.close * 0.98, 6),
+                        stop_loss=round(curr_c.close * (1.0 - base_sl_pct), 6),
                         leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_LONG blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
@@ -691,7 +698,7 @@ class MMS4SignalEngine:
             return SignalResult(
                 signal_type="BASE_LONG",
                 price=curr_c.close,
-                stop_loss=round(curr_c.close * 0.98, 6),
+                stop_loss=round(curr_c.close * (1.0 - base_sl_pct), 6),
                 leverage=active_leverage,
                 is_allowed=True,
                 reason="Base LONG signal: candle hit lower band and closed up" + (f" (VR={latest_vr:.2f})" if is_adaptive else ""),

@@ -155,7 +155,7 @@ def mk_candles(n=60, base=100.0):
 
 class StubEngine:
     def __init__(self): self.next = SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=1.0)
-    def evaluate_signals(self, candles, state_manager, params=None, symbol=None): return self.next
+    def evaluate_signals(self, candles, state_manager, params=None, symbol=None, base_sl_pct=None): return self.next
 
 async def tp_flip():
     ex = MagicMock(spec=OKXExecutor)
