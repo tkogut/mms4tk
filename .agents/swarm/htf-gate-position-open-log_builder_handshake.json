@@ -1,0 +1,12 @@
+{
+  "conversation_id": "htf-gate-position-open-log",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "src/mms4tk/daemon.py",
+    "tests/test_htf_gate_position_open_log.py"
+  ],
+  "math_consistency_check": "PASSED",
+  "timestamp": "2026-09-30T13:52:28Z",
+  "notes": "Fixes #76: appends (position_open=true/false) to cycle_logs.details whenever a signal is blocked by filter_bias's directional_bias gate (signal_type=NONE, reason mentions directional_bias). Pure instrumentation using the already-computed own_positions dict, no behavior change, no epoch bump. 4 new tests + full suite 492 passed. Last open item from the 2026-09-28 XAG protection-gaps audit -- all 7 findings (#67-72, #76) now closed."
+}

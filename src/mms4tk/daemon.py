@@ -1193,6 +1193,16 @@ class MMS4Daemon:
             if side:
                 own_positions[side] = p
 
+        # Issue #76: filter_bias (analytics.py) collapses a directionally-vetoed
+        # signal to signal_type="NONE" before this function ever sees which
+        # entry/exit intent it had, so cycle_logs couldn't tell a blocked fresh
+        # entry apart from a blocked opposite-band take-profit on an
+        # already-open position (issue #70's exact open question). Pure
+        # instrumentation — appended to `details`, never acted on; the signal
+        # is suppressed exactly as before.
+        if signal.signal_type == "NONE" and "directional_bias" in (signal.reason or ""):
+            details = f"{details} (position_open={str(bool(own_positions)).lower()})"
+
         if "SHORT" in signal.signal_type:
             target_pos_side = "short"
         elif "LONG" in signal.signal_type:
