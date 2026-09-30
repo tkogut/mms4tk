@@ -1073,7 +1073,10 @@ class MMS4Daemon:
         # candles[-1] is still open. `_sig_vol_suffix` is appended verbatim to
         # `details` below, never read back or acted on.
         _sig_vol_suffix = ""
-        if signal.signal_type in ("BASE_SHORT", "BASE_LONG") and len(candles) >= 22:
+        _is_directional_bias_block = (
+            signal.signal_type == "NONE" and "directional_bias" in (signal.reason or "")
+        )
+        if (signal.signal_type in ("BASE_SHORT", "BASE_LONG") or _is_directional_bias_block) and len(candles) >= 22:
             try:
                 _sig_vol = float(candles[-2].volume)
                 _avg20 = sum(float(c.volume) for c in candles[-22:-2]) / 20.0

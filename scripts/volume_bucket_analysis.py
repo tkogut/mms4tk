@@ -123,10 +123,11 @@ def bucket_of(ratio: float) -> str:
     return "HIGH"
 
 
-def one_run(symbol: str, chunk):
+def one_run(symbol: str, chunk, htf_gate_enabled: bool):
     params = IndicatorParams(engine_mode="ADAPTIVE", adaptive_vr_high=1.6, adaptive_vr_low=0.8)
     trades = be.run_backtest(symbol, chunk, params, stale_candles_threshold=12,
-                             trend_filter_enabled=False, htf_directional_gate_enabled=False)
+                             trend_filter_enabled=False,
+                             htf_directional_gate_enabled=htf_gate_enabled)
 
     # Group all trade rows (partials + final close) sharing the same entry_idx back
     # into one observation per OPENED position -- see module docstring.
@@ -167,7 +168,7 @@ def bucket_stats(obs) -> dict:
     return out
 
 
-def measure(fixtures, window_days: int, windows) -> list:
+def measure(fixtures, window_days: int, windows, htf_gate_enabled: bool) -> list:
     results = []
     for name in fixtures:
         tag = _tag_for(name)
@@ -181,20 +182,22 @@ def measure(fixtures, window_days: int, windows) -> list:
         sel = range(n_windows) if not windows else [i - 1 for i in windows]
         for w in sel:
             chunk = candles[w * per_window:(w + 1) * per_window]
-            _emit_window(results, tag, symbol, name, f"{tag}_W{w + 1}", chunk, partial=False)
+            _emit_window(results, tag, symbol, name, f"{tag}_W{w + 1}", chunk, partial=False,
+                        htf_gate_enabled=htf_gate_enabled)
         # Short leftover tail (relevant for XAU/XAG, which have < 2 full windows of
         # history at all) -- reported separately, excluded from the cross-window
         # verdict (too short to be an independent data point).
         if not windows and leftover >= 24 * 14:  # at least 2 weeks, else not worth reporting
             chunk = candles[n_windows * per_window:]
-            _emit_window(results, tag, symbol, name, f"{tag}_PARTIAL", chunk, partial=True)
+            _emit_window(results, tag, symbol, name, f"{tag}_PARTIAL", chunk, partial=True,
+                        htf_gate_enabled=htf_gate_enabled)
     return results
 
 
-def _emit_window(results, tag, symbol, name, label, chunk, partial: bool):
+def _emit_window(results, tag, symbol, name, label, chunk, partial: bool, htf_gate_enabled: bool):
     if len(chunk) < 100:
         return
-    obs = one_run(symbol, chunk)
+    obs = one_run(symbol, chunk, htf_gate_enabled)
     stats = bucket_stats(obs)
     row = {
         "window": label,
@@ -242,12 +245,14 @@ def report(rows) -> None:
 
     print("\n" + "=" * 100)
     print("STEP 3 CRITERION: is LOW consistently worse than MID+HIGH combined, "
-          "in a majority of INDEPENDENT full windows, on BOTH symbols with data?")
+          "in a majority of INDEPENDENT full windows, on the symbols that HAVE "
+          "multiple independent windows (BTC, ETH)? XAU/XAG have only ONE full")
+    print("122d window each (their instruments were only listed ~150 days ago) -- "
+          "reported separately as single-window, supplementary, non-decisive evidence.")
     print("(partial/leftover windows excluded from this verdict -- see table above for their raw numbers)")
     print("=" * 100)
 
-    per_symbol_verdict = {}
-    for sym in sorted({r["symbol"] for r in full_rows}):
+    def _symbol_delta_summary(sym):
         sub = [r for r in full_rows if r["symbol"] == sym]
         n = len(sub)
         deltas = []  # LOW avg_pnl - combined(MID+HIGH) avg_pnl, per window
@@ -266,32 +271,73 @@ def report(rows) -> None:
             deltas.append(low_avg - combined_avg)
             if low_avg < combined_avg:
                 low_worse += 1
+        return n, low_has_data, low_worse, deltas
+
+    MULTI_WINDOW_SYMBOLS = ("BTC", "ETH")
+    primary_verdict = {}
+    print("\n-- PRIMARY (multi-window: BTC, ETH) --")
+    for sym in MULTI_WINDOW_SYMBOLS:
+        if sym not in {r["symbol"] for r in full_rows}:
+            continue
+        n, low_has_data, low_worse, deltas = _symbol_delta_summary(sym)
         print(f"\n{sym}: {n} full window(s), {low_has_data} with LOW-bucket data")
         if low_has_data == 0:
             print("  -- no window had any LOW-volume-bucket trades; cannot evaluate")
-            per_symbol_verdict[sym] = None
+            primary_verdict[sym] = None
             continue
         p = _sign_test(low_worse, low_has_data)
-        print(f"  LOW worse than MID+HIGH in {low_worse}/{low_has_data} windows "
-              f"(sign test p={p:.4f})")
         mean_delta = sum(deltas) / len(deltas)
-        print(f"  mean(LOW avg - combined avg) per window = {mean_delta*100:+.4f} pp")
-        per_symbol_verdict[sym] = (low_worse, low_has_data, mean_delta)
+        print(f"  LOW worse than MID+HIGH in {low_worse}/{low_has_data} windows "
+              f"(sign test p={p:.4f}, NOT significant with this few windows regardless of outcome)")
+        print(f"  mean(LOW avg - combined avg) per window = {mean_delta*100:+.4f} pp "
+              f"(per-window deltas: {[f'{d*100:+.3f}pp' for d in deltas]})")
+        primary_verdict[sym] = (low_worse, low_has_data, mean_delta, p)
+
+    print("\n-- SUPPLEMENTARY (single window only: XAU, XAG) --")
+    supplementary_verdict = {}
+    for sym in ("XAU", "XAG"):
+        if sym not in {r["symbol"] for r in full_rows}:
+            continue
+        n, low_has_data, low_worse, deltas = _symbol_delta_summary(sym)
+        if low_has_data == 0 or n == 0:
+            print(f"{sym}: no usable window -- skipped")
+            continue
+        mean_delta = deltas[0]
+        direction = "supports" if mean_delta < 0 else "contradicts"
+        print(f"{sym}: 1 full window ({n} total) -- LOW vs MID+HIGH delta = {mean_delta*100:+.3f}pp "
+              f"({direction} the hypothesis). Single window -- NOT decisive either way.")
+        supplementary_verdict[sym] = mean_delta
 
     print("\n" + "-" * 100)
-    symbols_with_data = [s for s, v in per_symbol_verdict.items() if v is not None]
-    consistently_worse = [
-        s for s in symbols_with_data
-        if per_symbol_verdict[s][0] > per_symbol_verdict[s][1] / 2
+    majority_symbols = [
+        s for s, v in primary_verdict.items()
+        if v is not None and v[0] > v[1] / 2
     ]
-    print(f"Symbols with LOW-bucket data: {symbols_with_data}")
-    print(f"Symbols where LOW is worse in a MAJORITY of windows: {consistently_worse}")
-    if len(symbols_with_data) >= 2 and len(consistently_worse) == len(symbols_with_data):
-        print("VERDICT: criterion MET on all symbols with data -- proceed to fuller validation "
-              "(still NOT step 4 / a live filter).")
+    all_p_significant = all(
+        v is not None and v[3] < 0.05 for v in primary_verdict.values()
+    )
+    print(f"Primary symbols (BTC/ETH) where LOW is worse in a bare majority of windows: {majority_symbols}")
+    print(f"Any primary symbol individually statistically significant (p<0.05)? {all_p_significant}")
+    if len(majority_symbols) == len([v for v in primary_verdict.values() if v is not None]) and majority_symbols:
+        deltas_str = ", ".join(
+            f"{s} {v[2]*100:+.3f}pp ({v[0]}/{v[1]})" for s, v in primary_verdict.items() if v is not None
+        )
+        supp_str = ", ".join(
+            f"{s} {d*100:+.3f}pp ({'supports' if d < 0 else 'contradicts'})"
+            for s, d in supplementary_verdict.items()
+        ) or "no usable data"
+        print(f"VERDICT: directionally CONSISTENT on BTC/ETH (LOW worse in a bare majority of windows in "
+              f"both: {deltas_str}), but NOT statistically significant at n=3 windows/symbol (3/3 would only "
+              f"reach sign-test p=0.25; 2/3 never reaches significance). XAU/XAG (single window each, "
+              f"underpowered) do not agree with each other: {supp_str}.")
+        print("RECOMMENDATION: inconclusive -- a mild, non-significant directional tilt on crypto, no usable "
+              "signal yet on metals (need more elapsed history before a second independent XAU/XAG window "
+              "exists). Do NOT implement a filter on this evidence. Re-run with more windows once more "
+              "history accumulates (BTC/ETH: rerun periodically as fixtures extend; XAU/XAG: wait for a "
+              "second 122d window, ~4 more months from instrument listing).")
     else:
-        print("VERDICT: criterion NOT met on all symbols with data -- do not proceed to a filter "
-              "on this evidence alone.")
+        print("VERDICT: criterion NOT met -- LOW-volume bucket is not consistently worse across the "
+              "available symbols/windows. Do not implement a filter on this evidence.")
 
     if partial_rows:
         print("\n(partial/underpowered windows, excluded above, raw numbers only:)")
@@ -311,6 +357,10 @@ def main() -> None:
     ap.add_argument("--json", default=None, help="write raw per-window results here")
     ap.add_argument("--report", nargs="*", default=None,
                     help="print the table/verdict from previously written --json files")
+    ap.add_argument("--htf-gate", action="store_true",
+                    help="run with htf_directional_gate_enabled=True, matching the production "
+                         "config (DECISIONS.md: on for all 4 active symbols since 2026-09-13/14). "
+                         "Default False is the sensitivity/baseline run.")
     args = ap.parse_args()
 
     if args.report is not None:
@@ -323,7 +373,7 @@ def main() -> None:
 
     if not args.fixtures:
         ap.error("--fixtures is required unless --report is used")
-    rows = measure(args.fixtures, args.window_days, args.windows)
+    rows = measure(args.fixtures, args.window_days, args.windows, args.htf_gate)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(rows, f, indent=2)
