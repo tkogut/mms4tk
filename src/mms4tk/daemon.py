@@ -1053,7 +1053,8 @@ class MMS4Daemon:
         await self._refresh_htf_directional_gate(target_symbol, ind_params)
 
         signal: SignalResult = self.signal_engine.evaluate_signals(
-            candles, self.state_manager, params=ind_params, symbol=target_symbol
+            candles, self.state_manager, params=ind_params, symbol=target_symbol,
+            base_sl_pct=self.base_sl_pct
         )
         if target_symbol == self.symbol:
             self.last_signal = signal

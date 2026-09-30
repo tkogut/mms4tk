@@ -101,7 +101,7 @@ class StubEngine:
     """Zwraca zadany sygnal, aby wymusic konkretna sciezke decyzyjna daemona."""
     def __init__(self):
         self.next = SignalResult(signal_type="NONE", price=100.0, stop_loss=0.0, leverage=1.0)
-    def evaluate_signals(self, candles, state_manager, params=None, symbol=None):
+    def evaluate_signals(self, candles, state_manager, params=None, symbol=None, base_sl_pct=None):
         return self.next
 
 

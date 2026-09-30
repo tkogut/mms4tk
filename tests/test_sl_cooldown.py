@@ -33,7 +33,7 @@ class StubEngine:
     def __init__(self, result=None):
         self.next = result
 
-    def evaluate_signals(self, candles, state_manager, params=None, symbol=None):
+    def evaluate_signals(self, candles, state_manager, params=None, symbol=None, base_sl_pct=None):
         return self.next
 
 

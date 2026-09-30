@@ -46,7 +46,7 @@ class StubEngine:
     def __init__(self, result):
         self.result = result
 
-    def evaluate_signals(self, candles, state_manager, params=None, symbol=None):
+    def evaluate_signals(self, candles, state_manager, params=None, symbol=None, base_sl_pct=None):
         return self.result
 
 
