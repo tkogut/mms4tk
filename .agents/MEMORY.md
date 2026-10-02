@@ -166,6 +166,19 @@ Powiadomienia w ekosystemie MMS4TK są wysyłane dwoma całkowicie odrębnymi ś
 
 ---
 
+### 2026-10-02 — /grill-me: ETHpredict (TimesFM 3.0 + LoRA kolegi) — benchmark, bez integracji
+- **Cel**: zmierzyć, czy model (48×30m → `open` następnej świecy ETH) ma jakąkolwiek wartość dla MMS4. Zero zmian w `src/`, zero hooka do `daemon.py`.
+- **Decyzje z wywiadu**:
+  1. **Zakaz z DECISIONS.md §1**: dowód tylko z shadow-logu (predykcje stemplowane przed wynikiem) + świeże dane po dacie treningu. Offline na przeszłych danych = "possibly seen in training" (data końca treningu kolegi NIEZNANA). Nie używać `*_24m` / `*_max`; scorer odmawia.
+  2. **Rola modelu**: nie zakładana. Mierzymy surowy edge (poziom vs baseline, kierunek, zwrot handlowy po opłatach, kwantyle jako estymator zmienności). Rola (filtr/bias/wyjścia) = osobna decyzja właściciela po wynikach; każda byłaby nową logiką sygnałową pod zamkniętym workstreamem.
+  3. **Środowisko**: WSL GPU, osobne venv (nie ruszać `requirements.txt`). 66 MB `adapter_model.safetensors` zostaje w `tmp/` (gitignored).
+  4. **Interfejs modelu** (od właściciela): wejście = 48 ostatnich świec 30m; benchmark = sliding window stride 1 vs wartość z pliku; tylko ostatnie okno to prognoza przyszłości.
+- **Bramka akceptacji (zaproponowana, ustalona PRZED danymi)**: ≥2000 czystych barów; dolna granica Wilson(95%) trafności kierunku > 50%; zwrot netto (maker) > 0 z Newey-West t > 2; skill vs last-close > 0 i Diebold-Mariano p < 0.05.
+- **Otwarte pytania do autora**: data końca treningu, źródło/zakres danych i znaczenie "filtered", strefa czasowa `interval`, kolejność kolumn (open,high,low,close vs open,low,high,close), czemu brak baseline'u persistence w notebooku, wpływ zerowego paddingu 48→64.
+- **5 pytań kontrolnych grill-me**: (1) tylko laptop WSL, brak węzła produkcyjnego, nic nie trafia na VPS; (2) zmieniony tylko ten plik, brak plików stanu współdzielonych; (3) brak DB (CSV w `tmp/`); (4) błąd/luka OKX → cykl pominięty, brak zleceń, brak kluczy; (5) handshake NIE wygenerowany (sesja nie zakończona PR-em).
+- **Korekty po przeglądzie**: bramka oparta na kanale `close` + taker (open[t+1]≈close[t] jest prawie znane — kanał open to tylko diagnostyka); log shadow zapisuje kanały o/h/l/c; wiersz "clean" = zalogowany ≤120 s od otwarcia świecy.
+- **Artefakty**: `scripts/ethpredict/` (fetch_30m, run_inference, shadow_logger, score, README).
+
 ## 📚 7. WSKAŹNIK DO POZOSTAŁEJ DOKUMENTACJI
 - **Strategia i algorytm (nienaruszalny fundament merytoryczny)**: `docs/MASTERMIND_STRATEGY.md`, `docs/STRATEGY_AND_ALGORITHM.md`, `docs/mms4_mastermind_full_strategy_and_architecture.md`.
 - **Reszta dokumentacji human-facing**: `docs/` (jedyny kanoniczny katalog — `.agents/docs/` zlikwidowany 2026-09-12 jako przestarzała, nielinkowana kopia).
