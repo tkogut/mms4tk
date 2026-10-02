@@ -870,8 +870,8 @@ class LoggerDB:
                     ts_max = (dt + timedelta(seconds=180)).isoformat()
 
                     cursor.execute("""
-                        SELECT signal_type, outcome FROM cycle_logs 
-                        WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?) 
+                        SELECT signal_type, outcome, timestamp FROM cycle_logs
+                        WHERE (symbol = ? OR symbol = ? OR symbol LIKE ?)
                         AND timestamp BETWEEN ? AND ?
                         AND (
                             signal_type LIKE '%FORCE%' OR signal_type LIKE '%SPLIT%' OR signal_type LIKE '%CLOSE%'
@@ -881,10 +881,45 @@ class LoggerDB:
                             OR outcome LIKE '%STOP%' OR outcome LIKE '%TP%' OR outcome LIKE '%MIDLINE%'
                             OR outcome LIKE '%ESCAPE%'
                         )
-                        ORDER BY timestamp DESC LIMIT 1
                     """, (clean_sym, sym, f"{base}/%", ts_min, ts_max))
+                    candidates = cursor.fetchall()
 
-                    log_row = cursor.fetchone()
+                    # `STALE_SPLIT_50`/`MIDLINE_PARTIAL_TP` mark a PARTIAL close — they
+                    # can only ever correspond to the trade whose own closing fill IS
+                    # that partial reduce, which lands within a few seconds of it. The
+                    # full +/-180s window exists for genuine full-close signal types
+                    # (FORCE_CLOSE, STOP-LOSS, ...), which have no earlier sibling event
+                    # to be confused with. Without this, a later, unrelated full close
+                    # on the same symbol (e.g. the ratcheted exchange SL finally
+                    # triggering, minutes after the split that set it) falls inside the
+                    # wide window and gets mislabeled with the split's own reason —
+                    # reproduced on production: 2026-10-02 XAU/USDC, a SPLIT_50 at
+                    # 14:11:02 and an unrelated SL fill at 14:13:23 (2m21s later) both
+                    # ended up tagged STALE_SPLIT_50 (issue #91).
+                    PARTIAL_CLOSE_SIGNAL_TYPES = {"STALE_SPLIT_50", "MIDLINE_PARTIAL_TP"}
+                    PARTIAL_CLOSE_TOLERANCE_SECONDS = 30
+
+                    def _parse_log_ts(raw: Any) -> Optional[datetime]:
+                        if not raw:
+                            return None
+                        try:
+                            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                            if parsed.tzinfo is None:
+                                parsed = parsed.replace(tzinfo=timezone.utc)
+                            return parsed
+                        except Exception:
+                            return None
+
+                    scored = []
+                    for candidate in candidates:
+                        cand_dt = _parse_log_ts(candidate["timestamp"])
+                        delta = abs((cand_dt - dt).total_seconds()) if cand_dt else float("inf")
+                        sig_candidate = candidate["signal_type"] or ""
+                        if sig_candidate in PARTIAL_CLOSE_SIGNAL_TYPES and delta > PARTIAL_CLOSE_TOLERANCE_SECONDS:
+                            continue
+                        scored.append((delta, candidate))
+                    scored.sort(key=lambda pair: pair[0])
+                    log_row = scored[0][1] if scored else None
                     if log_row:
                         sig = log_row["signal_type"] or ""
                         out = log_row["outcome"] or ""
