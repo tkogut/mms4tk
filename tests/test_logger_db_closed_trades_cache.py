@@ -219,3 +219,71 @@ def test_get_closed_trades_maps_stale_be_signal_types_to_own_reason(tmp_path):
     trades = {t["trade_id"]: t for t in db.get_closed_trades()}
     assert trades["trade_force_close_be"]["reason"] == "STALE_FORCE_CLOSE_BE"
     assert trades["trade_be_escape"]["reason"] == "STALE_BE_ESCAPE"
+
+
+def test_get_closed_trades_does_not_carry_split_50_onto_a_later_unrelated_close(tmp_path):
+    """
+    Regression test for issue #91 (2026-10-02 XAU/USDC production incident):
+    get_closed_trades()'s cycle_logs lookup matched on symbol + a +/-180s window,
+    ORDER BY timestamp DESC LIMIT 1 — nothing distinguished "the cycle_logs row for
+    *this* closing fill" from "the cycle_logs row for a *different*, earlier
+    closing event on the same symbol that happens to fall inside the window".
+
+    Real production sequence: a STALE_SPLIT_50 (partial reduce + SL ratchet) at
+    14:11:02, then an unrelated, later full close (the ratcheted exchange SL
+    actually triggering) at 14:13:23 — 2m21s after the split, still inside the old
+    +/-180s window. Both closed_trades rows ended up tagged reason=STALE_SPLIT_50,
+    even though the second is a distinct closing event with no cycle_logs row of
+    its own (the exchange's own stop-loss execution isn't logged by the bot).
+
+    Fix: STALE_SPLIT_50/MIDLINE_PARTIAL_TP (partial-close signal types) only match
+    within a tight tolerance (30s) of their own trade's timestamp — a full close
+    2+ minutes later must NOT inherit the earlier partial's reason, and should fall
+    through to the pnl-based fallback instead.
+    """
+    db_file = os.path.join(tmp_path, "test_logs.db")
+    db = LoggerDB(db_path=db_file)
+
+    split_ts = datetime(2026, 10, 2, 14, 11, 0, tzinfo=timezone.utc)
+    second_leg_ts = datetime(2026, 10, 2, 14, 13, 23, tzinfo=timezone.utc)
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "INSERT INTO cycle_logs (timestamp, symbol, signal_type, state, leverage, price, outcome, details) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                datetime(2026, 10, 2, 14, 11, 2, tzinfo=timezone.utc).isoformat(),
+                "XAU/USDC", "STALE_SPLIT_50", "BASE_MODE", 3.0, 4188.70, "STALE_SPLIT_50",
+                "Inactivity Manager: Split 50% of SHORT position for XAU/USDC after 1 candles "
+                "stagnation. ATR=$19.79 SL ratcheted to $4,188.8500.",
+            ),
+        )
+        conn.commit()
+
+    # Leg 1: the split's own fill — correctly tagged STALE_SPLIT_50 (timestamp
+    # matches the cycle_logs row almost exactly, well within the 30s tolerance).
+    db.upsert_closed_trade(
+        trade_id="3974450677435600896", timestamp=split_ts.isoformat(), symbol="XAU-USD_UM_XPERP-310502",
+        side="SHORT", entry_price=4192.0, exit_price=4188.70, amount=25.0,
+        pnl_usd=0.0825, pnl_pct=-0.0006376799484326881, is_win=False, leverage=3.0,
+        fee_usd=0.10475875, pnl_net_usd=-0.02225875,
+    )
+    # Leg 2: the ratcheted exchange SL executing on the REMAINING contracts,
+    # 2m21s later — a distinct closing event, no cycle_logs row of its own.
+    db.upsert_closed_trade(
+        trade_id="3974455468169629696", timestamp=second_leg_ts.isoformat(), symbol="XAU-USD_UM_XPERP-310502",
+        side="SHORT", entry_price=4192.0, exit_price=4189.296, amount=25.0,
+        pnl_usd=0.0676, pnl_pct=-0.001064604649564032, is_win=False, leverage=3.0,
+        fee_usd=0.1047662, pnl_net_usd=-0.0371662,
+    )
+
+    trades = {t["trade_id"]: t for t in db.get_closed_trades()}
+    assert trades["3974450677435600896"]["reason"] == "STALE_SPLIT_50"
+    assert trades["3974455468169629696"]["reason"] != "STALE_SPLIT_50", (
+        "the second, unrelated closing fill must not inherit the first leg's "
+        "STALE_SPLIT_50 reason just because it falls inside the wide time window"
+    )
+    # No matching cycle_logs row exists for leg 2, so it must fall through to the
+    # pnl-based heuristic (small net loss, not a TAKE-PROFIT) — BREAK-EVEN here,
+    # which is a materially better label than a fabricated STALE_SPLIT_50.
+    assert trades["3974455468169629696"]["reason"] == "BREAK-EVEN"
