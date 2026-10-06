@@ -661,7 +661,14 @@ class MMS4Daemon:
                     pnl=pnl_usd,
                     pnl_percent=pnl_pct,
                     is_stop_loss=is_stop_out,
-                    is_take_profit=False,
+                    # Issue #99: this used to be hardcoded False, so a position that
+                    # disappeared from OKX without hitting the stop (e.g. a ratcheted
+                    # exchange SL triggering in profit, #92) never restored SCOUT_MODE
+                    # to BASE_MODE even when genuinely profitable — the only state-manager
+                    # signal that does so (`on_take_profit_hit`) was simply never reached.
+                    # A reconciled close is a take-profit, for state-machine purposes,
+                    # whenever it wasn't a stop-out and it actually made money.
+                    is_take_profit=(not is_stop_out and pnl_usd > 0),
                     sl_percent=sl_percent,
                 )
                 self.logger_db.upsert_closed_trade(
@@ -1762,7 +1769,12 @@ class MMS4Daemon:
                             )
                         except Exception as rec_err:
                             logger.error(f"Failed to record take-profit trade for {target_symbol}: {rec_err}")
-                            self.state_manager.on_take_profit_hit(target_symbol)
+                        # Issue #99: the exchange-side close already happened (step 1 above)
+                        # regardless of whether the local DB bookkeeping just above succeeded,
+                        # so the SCOUT_MODE->BASE_MODE restore must fire unconditionally — it
+                        # was previously nested inside the `except` branch, meaning it only ran
+                        # when record_trade() FAILED and never on the normal success path.
+                        self.state_manager.on_take_profit_hit(target_symbol)
 
                         # 3. Emit Take Profit webhook event & Telegram
                         try:
