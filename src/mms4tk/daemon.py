@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from mms4tk.state_manager import (
     MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION,
 )
-from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional, is_maintenance_locked
+from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional, is_maintenance_locked, set_maintenance_lock
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams, HigherTimeframeAnalytics
 from mms4tk.logger_db import LoggerDB
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
@@ -131,6 +131,13 @@ class MMS4Daemon:
         # Stop-loss percentages used when opening; reconciliation compares the exit price
         # against these to decide whether a vanished position was a stop-out.
         self.base_sl_pct: float = float(os.getenv("MMS4_BASE_SL_PCT", "0.02"))
+        # Issue #95: daily USD drawdown circuit breaker. Default 0 = disabled — this
+        # never changes behavior unless explicitly configured. Positive value = the
+        # most negative today's realized net PnL (across all symbols) is allowed to
+        # go before new entries are blocked for the rest of the UTC day via the
+        # existing maintenance-lock gate (same one emergency_killall uses).
+        self.daily_drawdown_limit_usd: float = float(os.getenv("MMS4_DAILY_DRAWDOWN_LIMIT_USD", "0"))
+        self._daily_drawdown_halted_on: Optional[str] = None  # UTC date string, so the halt logs once per day
         # (symbol, side) pairs whose addon ledger is already known empty — avoids a no-op
         # DELETE on every cycle for the side that has no position.
         self._addons_known_clear: set = set()
@@ -989,13 +996,68 @@ class MMS4Daemon:
             )
         return overrides
 
+    def _check_daily_drawdown(self, target_symbol: str) -> None:
+        """
+        Issue #95: account-wide daily USD drawdown circuit breaker. Disabled by
+        default (`daily_drawdown_limit_usd <= 0`) — zero behavior change unless
+        explicitly configured via MMS4_DAILY_DRAWDOWN_LIMIT_USD.
+
+        Checked once per symbol's cycle (cheap single-row SQL aggregate), but the
+        breach itself is account-wide, not per-symbol — the existing maintenance
+        lock (`is_maintenance_locked()`, already gating every symbol's entries at
+        `execute_symbol_cycle`'s signal-dispatch branch) is what actually stops new
+        entries once engaged. This does not close open positions and does not
+        auto-clear at UTC midnight — same manual-reset expectation as
+        `emergency_killall`'s existing maintenance-lock behavior.
+        """
+        if self.daily_drawdown_limit_usd <= 0:
+            return
+        if is_maintenance_locked():
+            return  # already halted (by this, emergency_killall, or an exchange-outage path)
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        if self._daily_drawdown_halted_on == today:
+            return  # already logged + locked today, avoid re-logging every cycle
+
+        try:
+            todays_pnl = self.logger_db.get_todays_realized_pnl_usd()
+        except Exception as e:
+            logger.warning(f"Daily drawdown check failed to read today's PnL: {e}")
+            return
+
+        if todays_pnl <= -abs(self.daily_drawdown_limit_usd):
+            set_maintenance_lock(True, reason=f"DAILY_DRAWDOWN_BREACH: ${todays_pnl:.2f}")
+            self._daily_drawdown_halted_on = today
+            logger.error(
+                f"🛑 Daily drawdown limit breached: realized PnL today ${todays_pnl:.2f} "
+                f"<= -${self.daily_drawdown_limit_usd:.2f} — maintenance mode engaged, "
+                f"new entries blocked for the rest of the day."
+            )
+            try:
+                self.logger_db.log_cycle(
+                    symbol=target_symbol,
+                    signal_type="NONE",
+                    state=self.state_manager.get_symbol_state(target_symbol).value,
+                    leverage=self.state_manager.get_symbol_leverage(target_symbol),
+                    price=0.0,
+                    outcome="DAILY_DRAWDOWN_HALT",
+                    details=(
+                        f"Daily drawdown limit breached: realized PnL today ${todays_pnl:.2f} "
+                        f"<= -${self.daily_drawdown_limit_usd:.2f}. Maintenance mode engaged."
+                    ),
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log DAILY_DRAWDOWN_HALT cycle: {log_err}")
+
     async def execute_symbol_cycle(self, target_symbol: str) -> Dict[str, Any]:
         """
         Executes a single market evaluation cycle for a specific trading symbol.
         Isolates state, leverage, and logging per symbol.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
-        
+
+        self._check_daily_drawdown(target_symbol)
+
         # 0. Hard Guard: Check if target_symbol is active
         try:
             from mms4tk.api import configured_symbols_store

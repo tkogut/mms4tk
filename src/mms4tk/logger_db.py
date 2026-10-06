@@ -995,6 +995,28 @@ class LoggerDB:
         """Fetch the most recent closed trades (sorted chronologically)."""
         return self.get_closed_trades(limit=limit)
 
+    def get_todays_realized_pnl_usd(self) -> float:
+        """
+        Sum of `pnl_net_usd` for every `closed_trades` row closed on the current UTC
+        calendar day. Used by the daily drawdown circuit breaker (issue #95) — a
+        simple daily reset, NOT the same thing as `get_kpi_summary`'s epoch-wide
+        peak-to-trough `max_drawdown` (that never resets daily, it's cumulative
+        across the whole `data_collection_epoch_start` window).
+
+        All `closed_trades.timestamp` values are UTC ISO8601 (`datetime.now(timezone.utc)`
+        at write time throughout this codebase), so SQLite's `date()` function — which
+        operates on the string's calendar date, no timezone math needed — gives the
+        correct UTC-day boundary directly.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(pnl_net_usd), 0.0) FROM closed_trades "
+                "WHERE date(timestamp) = date('now')"
+            )
+            row = cursor.fetchone()
+            return float(row[0] if row and row[0] is not None else 0.0)
+
     def get_kpi_summary(self, initial_equity: float = 0.0, since: Optional[str] = None) -> Dict[str, Any]:
         """
         Compute KPI summary (Win Rate, Profit Factor, MDD %, Average R:R) from closed_trades.
