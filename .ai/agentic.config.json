@@ -1,38 +1,65 @@
 {
-  "version": "6.5.0",
-  "project_name": "mms4tk",
-  "architecture": "Swarm Triad (Coordinator, Builder, Auditor)",
-  "validation_gates": {
-    "lint": "python3 -m flake8 src/ tests/ || true",
-    "typecheck": "python3 -m mypy src/ || true",
-    "test": "MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest tests/ -v",
-    "build": "python3 -m build || true"
+  "version": 1,
+  "baseBranch": "main",
+  "tracker": "github",
+  "browser": { "provider": "agent-browser" },
+  "validation": {
+    "commands": [
+      "python3 -m flake8 src/ tests/ || true",
+      "python3 -m mypy src/ || true",
+      "MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest tests/ -v",
+      "python3 -m build || true"
+    ]
   },
-  "roles": {
-    "coordinator": {
-      "mandate": "High-level orchestration, git push, plan management (.agents/plans/)",
-      "forbidden_paths": ["src/*", "tests/*"]
-    },
-    "builder": {
-      "mandate": "Atomic feature implementation in isolated Git Worktree",
-      "forbidden_paths": [".agents/plans/*"]
-    },
-    "auditor": {
-      "mandate": "Read-only mathematical consistency, security audit, and QA gate verification",
-      "read_only": true
-    }
-  },
-  "heartbeat": {
-    "interval_seconds": 15,
-    "daemon_endpoint": "/api/v1/daemon/status"
-  },
-  "evaluator": {
+  "labels": {
     "enabled": true,
-    "manifest": ".agents/eval/evaluator.md",
-    "test_cases": [".agents/eval/tc-001.json"]
+    "pipeline": ["review", "changes-requested", "qa", "qa-failed", "merge-queue", "blocked", "do-not-merge"],
+    "category": ["bug", "feature", "refactor", "security", "dependencies", "documentation"],
+    "meta": ["needs-qa", "skip-qa", "qa-approved", "qa-self-verified", "in-progress", "ci-monitoring"],
+    "priority": ["priority-low", "priority-medium", "priority-high", "priority-extreme"],
+    "risk": ["risk-low", "risk-medium", "risk-high"]
   },
-  "context_routing": {
-    "entrypoint": ".agents/agents.md",
-    "max_domain_modules": 3
+  "qaGate": true,
+  "ci": { "maxWaitMinutes": 40 },
+  "engine": { "loopStepThreshold": 20, "executorTier": "standard", "stepReview": "final" },
+  "paths": {
+    "runs": ".ai/runs",
+    "analysis": ".ai/analysis",
+    "specs": ".ai/specs",
+    "scripts": ".ai/scripts",
+    "qa": ".ai/qa"
+  },
+  "reviewChecklist": null,
+  "swarm": {
+    "version": "6.5.0",
+    "project_name": "mms4tk",
+    "architecture": "Swarm Triad (Coordinator, Builder, Auditor)",
+    "roles": {
+      "coordinator": {
+        "mandate": "High-level orchestration, git push, plan management (.agents/plans/)",
+        "forbidden_paths": ["src/*", "tests/*"]
+      },
+      "builder": {
+        "mandate": "Atomic feature implementation in isolated Git Worktree",
+        "forbidden_paths": [".agents/plans/*"]
+      },
+      "auditor": {
+        "mandate": "Read-only mathematical consistency, security audit, and QA gate verification",
+        "read_only": true
+      }
+    },
+    "heartbeat": {
+      "interval_seconds": 15,
+      "daemon_endpoint": "/api/v1/daemon/status"
+    },
+    "evaluator": {
+      "enabled": true,
+      "manifest": ".agents/eval/evaluator.md",
+      "test_cases": [".agents/eval/tc-001.json"]
+    },
+    "context_routing": {
+      "entrypoint": ".agents/agents.md",
+      "max_domain_modules": 3
+    }
   }
 }
