@@ -298,6 +298,8 @@ curl -s localhost:8000/api/v1/daemon/status | jq '.allocation_plan'
 | [REST API](docs/API.md) | Endpoint reference |
 | [Deployment guide](docs/DEPLOYMENT_GUIDE.md) | VPS / Docker / Traefik |
 | [Audit scripts](tests/audit/README.md) | How to run the 61 verification assertions |
+| [Code review guide](CODE_REVIEW.md) | Repo-specific review priorities, checks, and severity guidance — auto-applied by `om-code-review` |
+| [Backward compatibility](BACKWARD_COMPATIBILITY.md) | Protected contract surfaces (API, DB schema, env vars, Hermes tool schemas) and the required path to change them |
 
 ---
 
