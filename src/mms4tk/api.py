@@ -958,9 +958,22 @@ class StrategyProfileUpdate(BaseModel):
     risk_profile: Optional[str] = Field(default=None, description="CONSERVATIVE | MODERATE | AGGRESSIVE")
     scout_override: Optional[bool] = Field(default=None, description="True allows early SCOUT_MODE relaxation")
     reason: Optional[str] = Field(default=None)
+    symbol: Optional[str] = Field(
+        default=None,
+        description="Symbol whose SCOUT_MODE a scout_override relaxes (e.g. XAG/USDC). "
+                    "Omitted = the primary trading symbol (previous behavior).",
+    )
 
 
-@app.post("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
+def _format_symbol(raw: str) -> str:
+    """Canonical `BASE/USDC` form used across the multi-symbol endpoints."""
+    sym = raw.upper().strip()
+    if "/" not in sym:
+        sym = sym.replace("USDC", "/USDC") if sym.endswith("USDC") else f"{sym}/USDC"
+    return sym
+
+
+@app.post("/api/v1/strategy/profile",response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
 async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfile:
     """
     Partially update the active strategy profile configuration: only fields
@@ -985,7 +998,7 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     )
     updated = state_manager.update_strategy_profile(merged)
     if updated.scout_override:
-        state_manager.relax_scout_mode()
+        state_manager.relax_scout_mode(_format_symbol(profile.symbol) if profile.symbol else None)
     return updated
 
 
@@ -1056,6 +1069,10 @@ class HITLResolveRequest(BaseModel):
     directional_bias: str = Field(default="BOTH", description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
     risk_profile: str = Field(default="MODERATE", description="CONSERVATIVE | MODERATE | AGGRESSIVE")
     reason: str = Field(default="Human-in-the-Loop decision")
+    symbol: Optional[str] = Field(
+        default=None,
+        description="Symbol the decision applies to (e.g. XAG/USDC). Omitted = the primary trading symbol.",
+    )
 
 
 @app.post("/api/v1/hermes/hitl_resolve", tags=["Hermes Integration"], dependencies=[Depends(verify_api_key)])
@@ -1076,12 +1093,14 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
     )
     updated = state_manager.update_strategy_profile(profile)
     relaxed = False
+    target_symbol = _format_symbol(req.symbol) if req.symbol else None
     if scout_override:
-        relaxed = state_manager.relax_scout_mode()
+        relaxed = state_manager.relax_scout_mode(target_symbol)
 
     return {
         "status": "ok",
         "decision": req.decision,
+        "symbol": target_symbol or state_manager.trading_symbol,
         "scout_override": scout_override,
         "scout_mode_relaxed": relaxed,
         "profile": updated.model_dump(),
@@ -1891,9 +1910,7 @@ async def verify_symbol_direct(req: AddSymbolRequest) -> Dict[str, Any]:
 @app.post("/api/v1/symbols/update", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
     """Add, activate, or update per-symbol allocation ($ USD) & Base/Add ratio configuration."""
-    formatted_sym = req.symbol.upper().strip()
-    if "/" not in formatted_sym:
-        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+    formatted_sym = _format_symbol(req.symbol)
 
     b_ratio = req.base_ratio
     a_ratio = 100 - b_ratio if b_ratio <= 100 else req.add_ratio

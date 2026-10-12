@@ -25,7 +25,7 @@ Stage **E1** of a 5-stage fix for "SCOUT_MODE has no reliable per-symbol exit" (
 
 ## Non-goals
 
-- No change to **when** SCOUT is entered or left (that is E2/E3). No `finalize_close`, no K counter, no expiry timer, no per-symbol `scout_override`/HITL, no alerts.
+- No change to **when** SCOUT is entered or left (that is E2/E3). No `finalize_close`, no K counter, no expiry timer, no alerts. Per-symbol `scout_override`/HITL is limited to the minimal slice added in Phase 5 (optional `symbol` on two endpoints).
 - No change to leverage/size-multiplier logic or to `backtest_engine.py` (persistence is not modeled there).
 - No manual reset of XAG's current SCOUT state; it keeps its state through the deploy, which is the point.
 - Does not modify `.agents/plans/` (Coordinator-owned).
@@ -65,3 +65,8 @@ PR: #106
 ### Phase 4: Release
 
 - [x] 4.1 Bump version in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md` — 9af3a06
+
+### Phase 5: Per-symbol override (minimal slice of E4, added after review finding M1)
+
+- [x] 5.1 Optional `symbol` on `/strategy/profile` and `/hitl/resolve`, passed to `relax_scout_mode(symbol)`; Hermes tool schemas expose it
+- [x] 5.2 Tests: override/HITL with `symbol` relaxes only that symbol; omitted `symbol` keeps primary-only behavior

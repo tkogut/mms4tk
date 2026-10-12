@@ -208,6 +208,10 @@ class HermesToolGenerator:
                                 "default": "",
                                 "description": "Reason for profile update"
                             },
+                            "symbol": {
+                                "type": "string",
+                                "description": "Symbol whose SCOUT_MODE scout_override relaxes (e.g. XAG/USDC). Omit for the primary trading symbol."
+                            },
                             "x_mms4_api_key": {
                                 "type": "string",
                                 "description": "Authentication key for X-MMS4-API-KEY header."
@@ -258,6 +262,10 @@ class HermesToolGenerator:
                                 "type": "string",
                                 "default": "Human-in-the-Loop decision",
                                 "description": "Reason for the decision"
+                            },
+                            "symbol": {
+                                "type": "string",
+                                "description": "Symbol the decision applies to (e.g. XAG/USDC). Omit for the primary trading symbol."
                             },
                             "x_mms4_api_key": {
                                 "type": "string",

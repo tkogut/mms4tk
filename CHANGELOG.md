@@ -27,10 +27,14 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 - ⚠️ **Behavior change on first restart**: any symbol whose LATEST `state_history` row
   is SCOUT_MODE (it previously fell back to BASE_MODE on every restart) now comes back
   in SCOUT_MODE. Before deploying, list the latest state per symbol and decide whether
-  stale ones need handling. Until E3/E4 land, a NON-primary symbol leaves SCOUT_MODE
-  only on a full take-profit: `scout_override` / HITL SWEEP_WICK (`relax_scout_mode()`
-  without a symbol) act on the primary symbol only, and restarts / pair-config edits no
-  longer reset it.
+  stale ones need handling. A symbol now leaves SCOUT_MODE on a full take-profit or an
+  explicit per-symbol override (below); restarts and pair-config edits no longer reset it.
+- ✨ **Per-symbol override (minimal slice of E4)**: `POST /api/v1/strategy/profile`
+  (`scout_override`) and `POST /api/v1/hermes/hitl_resolve` (SWEEP_WICK) accept an
+  optional `symbol` (e.g. `XAG/USDC`) and relax that symbol's SCOUT_MODE. Previously
+  they called `relax_scout_mode()` with no symbol and could only ever release the
+  primary one. Omitting `symbol` keeps the old behavior. Hermes tool schemas
+  (`mms4_set_strategy_profile`, `mms4_hitl_resolve`) expose the new field.
 - ⚠️ **Legacy rows without a symbol** (neither column nor `"[SYM]"` prefix) are applied
   to the *current* primary symbol (`MMS4_SYMBOL`) only when it has no tagged row —
   after changing `MMS4_SYMBOL`, check that a new primary does not inherit another
