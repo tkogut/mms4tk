@@ -68,5 +68,5 @@ PR: #106
 
 ### Phase 5: Per-symbol override (minimal slice of E4, added after review finding M1)
 
-- [x] 5.1 Optional `symbol` on `/strategy/profile` and `/hitl/resolve`, passed to `relax_scout_mode(symbol)`; Hermes tool schemas expose it
-- [x] 5.2 Tests: override/HITL with `symbol` relaxes only that symbol; omitted `symbol` keeps primary-only behavior
+- [x] 5.1 Optional `symbol` on `/strategy/profile` and `/hitl/resolve`, passed to `relax_scout_mode(symbol)`; Hermes tool schemas expose it — 
+- [x] 5.2 Tests: override/HITL with `symbol` relaxes only that symbol; omitted `symbol` keeps primary-only behavior — 
