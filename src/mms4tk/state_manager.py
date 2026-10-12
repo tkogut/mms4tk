@@ -133,11 +133,43 @@ class MMS4StateManager:
         self._symbol_htf_bias: Dict[str, str] = {}
 
         if self.logger_db is not None:
-            saved = self.logger_db.get_latest_state()
-            if saved and "state" in saved and saved["state"]:
-                self._current_state = MMS4State(saved["state"])
-                self._symbol_states[self.trading_symbol] = self._current_state
+            self._restore_symbol_states_from_db()
             self._load_strategy_profile_from_db()
+
+    def _restore_symbol_states_from_db(self) -> None:
+        """Rebuild `_symbol_states` from the latest persisted state of EVERY symbol.
+
+        This used to read only the single latest `state_history` row and hand it to the
+        primary symbol, so after a restart a non-primary symbol (e.g. XAG) silently
+        returned to BASE_MODE without a take-profit, and a latest row belonging to XAG
+        put the primary symbol (BTC) into SCOUT_MODE. Legacy rows with no symbol at all
+        are only ever applied to the primary symbol, and only when it has no tagged row.
+        """
+        if self.logger_db is None:
+            return
+        restored: Dict[str, MMS4State] = {}
+        for symbol, row in self.logger_db.get_latest_symbol_states().items():
+            state = self._parse_persisted_state(row)
+            if state is not None:
+                restored[symbol] = state
+        if self.trading_symbol not in restored:
+            state = self._parse_persisted_state(self.logger_db.get_latest_untagged_state())
+            if state is not None:
+                restored[self.trading_symbol] = state
+        self._symbol_states.update(restored)
+        if self.trading_symbol in restored:
+            self._current_state = restored[self.trading_symbol]
+
+    @staticmethod
+    def _parse_persisted_state(row: Optional[Dict[str, Any]]) -> Optional[MMS4State]:
+        """MMS4State from a state_history row; None when absent or not a known state."""
+        if not row or not row.get("state"):
+            return None
+        try:
+            return MMS4State(row["state"])
+        except ValueError:
+            logger.warning(f"Ignoring unknown persisted state {row['state']!r}")
+            return None
 
     def get_symbol_state(self, symbol: str) -> MMS4State:
         """
@@ -159,7 +191,8 @@ class MMS4StateManager:
             self.logger_db.save_state(
                 state=state.value,
                 leverage=self.get_symbol_leverage(symbol),
-                reason=f"[{symbol}] {reason}"
+                reason=f"[{symbol}] {reason}",
+                symbol=symbol,
             )
 
     def get_symbol_leverage(self, symbol: str) -> float:
@@ -210,9 +243,7 @@ class MMS4StateManager:
     def set_logger_db(self, logger_db: Any) -> None:
         """Attach LoggerDB instance and restore latest persisted state if present."""
         self.logger_db = logger_db
-        saved = self.logger_db.get_latest_state()
-        if saved and "state" in saved and saved["state"]:
-            self._current_state = MMS4State(saved["state"])
+        self._restore_symbol_states_from_db()
         self._load_strategy_profile_from_db()
 
     def _load_strategy_profile_from_db(self) -> None:
@@ -347,7 +378,12 @@ class MMS4StateManager:
     def save_state(self, reason: str = "") -> None:
         """Persist the current state snapshot to logger_db (no-op without a DB attached)."""
         if self.logger_db is not None:
-            self.logger_db.save_state(state=self._current_state.value, leverage=self.leverage, reason=reason)
+            self.logger_db.save_state(
+                state=self._current_state.value,
+                leverage=self.leverage,
+                reason=reason,
+                symbol=self.trading_symbol,
+            )
 
     def is_high_risk_add_allowed(self) -> bool:
         """
