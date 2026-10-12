@@ -56,6 +56,25 @@ SCOUT_LEVERAGE: float = float(
 )
 SCOUT_SIZE_MULT: float = float(os.getenv("MMS4_SCOUT_SIZE_MULT", "0.3"))
 
+# ── SCOUT_MODE exit after K clean closes (E3 of #107) ────────────────────
+#
+# A full take-profit used to be the ONLY way a symbol left SCOUT_MODE (besides an operator
+# override). A symbol that only ever closes via the Inactivity Manager (FORCE_CLOSE...) never
+# produces one, so it could sit in SCOUT_MODE indefinitely (XAG: since 2026-10-07).
+#
+# Now a symbol also leaves SCOUT_MODE after SCOUT_EXIT_K CONSECUTIVE clean full closes:
+#   * only FORCE_CLOSE / MIDLINE_INVALIDATION count (SCOUT_COUNTING_REASONS);
+#   * "clean" = gross pnl_percent above the measured round-trip cost (== net > 0). The cost is
+#     backtest_engine.ROUND_TRIP_FEE_PCT (0.0010003, measured from production); it is repeated
+#     here because state_manager must not import from the backtest;
+#   * a counting close that is not clean, and a STOP_LOSS, RESET the counter ("K in a row");
+#   * FORCE_CLOSE_BE / BE_ESCAPE / CLOSED_EXTERNAL and partial closes are neutral;
+#   * a full take-profit still exits immediately (unchanged).
+SCOUT_EXIT_K: int = max(1, int(os.getenv("MMS4_SCOUT_EXIT_K", "3")))
+SCOUT_MIN_GROSS_PNL_PCT: float = float(os.getenv("MMS4_SCOUT_MIN_GROSS_PNL_PCT", "0.0010003"))
+SCOUT_COUNTING_REASONS = frozenset({"FORCE_CLOSE", "MIDLINE_INVALIDATION"})
+_SCOUT_OK_KEY_PREFIX = "scout_ok:"
+
 # Split of the per-symbol margin cap between the base entry and the high-risk add.
 BASE_ALLOCATION: float = float(os.getenv("MMS4_BASE_ALLOCATION", "0.70"))
 ADDON_ALLOCATION: float = float(os.getenv("MMS4_ADDON_ALLOCATION", str(round(1.0 - BASE_ALLOCATION, 10))))
@@ -137,7 +156,9 @@ class MMS4StateManager:
     
     Transition rules:
     - BASE_MODE -> SCOUT_MODE: Triggered when a Stop-Loss hit is >= 2.0% (0.02).
-    - SCOUT_MODE -> BASE_MODE: Triggered on first Take-Profit (TP) hit or scout_override relaxation.
+    - SCOUT_MODE -> BASE_MODE: Triggered on first Take-Profit (TP) hit, scout_override relaxation,
+      or SCOUT_EXIT_K consecutive clean FORCE_CLOSE / MIDLINE_INVALIDATION closes (E3 of #107;
+      see SCOUT_COUNTING_REASONS and `_apply_scout_exit_rule`).
     
     Note: NO trailing stops logic is implemented per strategy specification.
     """
@@ -173,6 +194,10 @@ class MMS4StateManager:
         # global field directly -- see get_effective_directional_bias below.
         self._symbol_htf_bias: Dict[str, str] = {}
 
+        # Per-symbol count of consecutive clean closes while in SCOUT_MODE (see
+        # SCOUT_EXIT_K); persisted under system_settings key `scout_ok:{symbol}`.
+        self._scout_ok: Dict[str, int] = {}
+
         if self.logger_db is not None:
             self._restore_symbol_states_from_db()
             self._load_strategy_profile_from_db()
@@ -200,6 +225,55 @@ class MMS4StateManager:
         self._symbol_states.update(restored)
         if self.trading_symbol in restored:
             self._current_state = restored[self.trading_symbol]
+        self._restore_scout_counters_from_db()
+
+    def _restore_scout_counters_from_db(self) -> None:
+        """Reload the clean-close counters of symbols that are (still) in SCOUT_MODE.
+
+        A missing, garbled or out-of-range value restores 0 - safe, the symbol just needs
+        K more clean closes. Keys of symbols no longer in SCOUT are ignored.
+        """
+        if self.logger_db is None:
+            return
+        try:
+            settings = self.logger_db.get_all_settings()
+        except Exception as e:
+            logger.warning(f"Could not load SCOUT counters: {e}")
+            return
+        for symbol, state in self._symbol_states.items():
+            if state != MMS4State.SCOUT_MODE:
+                continue
+            try:
+                value = int(settings.get(f"{_SCOUT_OK_KEY_PREFIX}{symbol}", 0))
+            except (TypeError, ValueError):
+                value = 0
+            if 0 < value < SCOUT_EXIT_K:
+                self._scout_ok[symbol] = value
+
+    def get_scout_ok(self, symbol: str) -> int:
+        """Consecutive clean closes counted for `symbol` toward leaving SCOUT_MODE."""
+        return self._scout_ok.get(symbol, 0)
+
+    def _set_scout_ok(self, symbol: str, count: int, *, force: bool = False) -> None:
+        """Set (and persist) a symbol's clean-close counter; 0 removes it.
+
+        `force` also removes the persisted key when the in-memory counter was already 0, so
+        a SCOUT transition can never leave a stale key behind to be restored later.
+        """
+        if count <= 0:
+            if self._scout_ok.pop(symbol, 0) == 0 and not force:
+                return
+        else:
+            self._scout_ok[symbol] = count
+        if self.logger_db is not None:
+            try:
+                key = f"{_SCOUT_OK_KEY_PREFIX}{symbol}"
+                if count > 0:
+                    self.logger_db.set_setting(key, count, updated_by="state_manager")
+                else:
+                    self.logger_db.delete_setting(key)
+            except Exception as e:
+                logger.warning(f"Could not persist SCOUT counter for {symbol}: {e}")
 
     @staticmethod
     def _parse_persisted_state(row: Optional[Dict[str, Any]]) -> Optional[MMS4State]:
@@ -225,7 +299,11 @@ class MMS4StateManager:
 
     def set_symbol_state(self, symbol: str, state: MMS4State, reason: str = "") -> None:
         """Update operating state for a specific symbol without altering other symbols."""
+        previous = self._symbol_states.get(symbol, MMS4State.BASE_MODE)
         self._symbol_states[symbol] = state
+        if state != previous:
+            # Every entry into / exit from SCOUT_MODE starts the clean-close count afresh.
+            self._set_scout_ok(symbol, 0, force=True)
         if symbol == self.trading_symbol:
             self._current_state = state
         if self.logger_db:
@@ -579,7 +657,7 @@ class MMS4StateManager:
         """
         flags = close_reason_flags(reason)
         try:
-            return self.record_trade(
+            record = self.record_trade(
                 trade_id=trade_id or f"{reason.lower()}_{symbol}_{side}_{int(time.time() * 1000)}",
                 symbol=symbol,
                 side=side,
@@ -598,6 +676,40 @@ class MMS4StateManager:
             if flags["is_take_profit"] and not flags["is_partial"]:
                 self.on_take_profit_hit(symbol=symbol)
             raise
+        self._apply_scout_exit_rule(symbol, reason, flags, pnl_percent)
+        return record
+
+    def _apply_scout_exit_rule(
+        self, symbol: str, reason: str, flags: Dict[str, bool], pnl_percent: float
+    ) -> None:
+        """E3 of #107: count clean full closes and leave SCOUT_MODE after SCOUT_EXIT_K.
+
+        Never raises: this runs after the close is booked, so a failure here must not turn
+        into a failed close (the daemon already acted on the exchange).
+        """
+        try:
+            if self.get_symbol_state(symbol) != MMS4State.SCOUT_MODE:
+                return  # not in SCOUT (a full take-profit has already exited it)
+            if flags["is_stop_loss"]:
+                self._set_scout_ok(symbol, 0)
+                return
+            if flags["is_partial"] or flags["is_take_profit"]:
+                return  # partial closes are neutral
+            if reason not in SCOUT_COUNTING_REASONS:
+                return  # FORCE_CLOSE_BE / BE_ESCAPE / CLOSED_EXTERNAL are neutral
+            if pnl_percent <= SCOUT_MIN_GROSS_PNL_PCT:
+                self._set_scout_ok(symbol, 0)  # a net-losing close breaks the run
+                return
+            count = self.get_scout_ok(symbol) + 1
+            if count >= SCOUT_EXIT_K:
+                self.set_symbol_state(
+                    symbol, MMS4State.BASE_MODE,
+                    reason=f"SCOUT_EXPIRED_K: {count} consecutive clean closes",
+                )
+            else:
+                self._set_scout_ok(symbol, count)
+        except Exception as e:
+            logger.error(f"SCOUT exit rule failed for {symbol} ({reason}): {e}")
 
     def get_summary(self) -> Dict[str, Any]:
         """Return dict representation of current state and metrics."""
