@@ -4,6 +4,30 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.11] - 2026-10-12
+
+### ♻️ Changed — One Place That Books Every Position Close (E2 of #107)
+- 🧩 **`state_manager.py`**: new `CLOSE_REASON_FLAGS` (single reason → `is_stop_loss` /
+  `is_take_profit` / `is_partial` table) and `MMS4StateManager.finalize_close(...)`, the
+  only supported way to book a close. An unknown reason raises `ValueError`, so a new
+  close path can no longer silently skip the SCOUT/BASE state machine (the class of gap
+  behind #107). A full take-profit still restores SCOUT_MODE → BASE_MODE even when its
+  own bookkeeping raises (the #99 invariant, now guaranteed inside `finalize_close`).
+- 🔁 **`daemon.py`**: reconciliation, midline partial TP and TP+flip now call
+  `finalize_close` (the separate `on_take_profit_hit` call after TP+flip is gone — it is
+  covered). `STALE_SPLIT_50` and `FORCE_CLOSE` / `FORCE_CLOSE_BE` / `BE_ESCAPE` were not
+  booked at all before; they now are, via `_book_stale_close`.
+- 🔬 **`backtest_engine.py`**: `_trade_record_flags` reads the shared table and closes go
+  through `finalize_close`, so the backtest and the daemon cannot drift.
+- 🛡️ Guard test `tests/test_close_paths_use_finalize_close.py`: no module other than
+  `state_manager.py` may call `record_trade` / `on_take_profit_hit` / `on_stop_loss_hit`.
+- ✅ **No change to which closes enter or leave SCOUT_MODE**: `FORCE_CLOSE*` / `BE_ESCAPE`
+  stay "neither SL nor TP", `STALE_SPLIT_50` stays a partial TP. That is E3 of #107.
+- ⚠️ **Metrics only**: `trade_count`, `realized_pnl` and the equity accumulator in
+  `state_logs` / the status payload now include inactivity closes (PnL is an estimate from
+  the current price, like the midline path). No sizing, leverage or risk decision reads
+  them. `closed_trades` writes are untouched.
+
 ## 🚀 [0.48.10] - 2026-10-12
 
 ### 🔥 Fixed — SCOUT_MODE Lost / Leaked Between Symbols on Restart
