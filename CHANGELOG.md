@@ -24,6 +24,11 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
 - ⚠️ **Deploy note**: additive DB migration — deploy under the maintenance lock
   (`scripts/maintenance.py --enable` / `--disable`) after a `logs.db` backup. Stage E1
   of the SCOUT-exit fix; the exit-path changes (E2–E5) ship separately.
+- ⚠️ **Behavior change on first restart**: any symbol whose LATEST `state_history` row
+  is SCOUT_MODE (it previously fell back to BASE_MODE on every restart) now comes back
+  in SCOUT_MODE. Before deploying, list the latest state per symbol and decide whether
+  stale ones should be relaxed first (`scout_override`) — until E3 lands, SCOUT exits
+  only on a full take-profit or an override.
 
 ## 🚀 [0.48.9] - 2026-09-24
 
