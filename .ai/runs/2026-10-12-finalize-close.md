@@ -51,25 +51,27 @@ Every way a position can disappear is booked through ONE function, `MMS4StateMan
 
 ## Progress
 
+PR: #111
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Shared table and `finalize_close`
 
-- [ ] 1.1 Add `CLOSE_REASON_FLAGS` to `state_manager.py` with values identical to the backtest table
-- [ ] 1.2 Add `MMS4StateManager.finalize_close(...)`; unknown reason raises
-- [ ] 1.3 Tests: table values, `finalize_close` flags, FORCE_CLOSE on profit keeps SCOUT, SL enters SCOUT, full TP exits it
+- [x] 1.1 Add `CLOSE_REASON_FLAGS` to `state_manager.py` with values identical to the backtest table — 5199a93
+- [x] 1.2 Add `MMS4StateManager.finalize_close(...)`; unknown reason raises — 5199a93
+- [x] 1.3 Tests: table values, `finalize_close` flags, FORCE_CLOSE on profit keeps SCOUT, SL enters SCOUT, full TP exits it — 5199a93
 
 ### Phase 2: Backtest on the shared table
 
-- [ ] 2.1 `backtest_engine` reads the shared table and books closes via `finalize_close`
-- [ ] 2.2 Update `tests/test_backtest_engine.py:337` to the shared source; parity tests unchanged
+- [x] 2.1 `backtest_engine` reads the shared table and books closes via `finalize_close` — b025863
+- [x] 2.2 Update `tests/test_backtest_engine.py:337` to the shared source; parity tests unchanged — b025863
 
 ### Phase 3: Daemon paths
 
-- [ ] 3.1 Reconciliation, midline and TP+flip call `finalize_close`, keeping the #99 unconditional SCOUT restore
-- [ ] 3.2 `STALE_SPLIT_50` and `FORCE_CLOSE*` / `BE_ESCAPE` call `finalize_close` with estimated PnL
-- [ ] 3.3 Guard test: `daemon.py` has no direct `record_trade` / `on_take_profit_hit` / `on_stop_loss_hit` calls
+- [x] 3.1 Reconciliation, midline and TP+flip call `finalize_close`, keeping the #99 unconditional SCOUT restore — 31cb456
+- [x] 3.2 `STALE_SPLIT_50` and `FORCE_CLOSE*` / `BE_ESCAPE` call `finalize_close` with estimated PnL — 31cb456
+- [x] 3.3 Guard test: `daemon.py` has no direct `record_trade` / `on_take_profit_hit` / `on_stop_loss_hit` calls — 31cb456
 
 ### Phase 4: Release
 
-- [ ] 4.1 Bump version to 0.48.11 in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md`
+- [x] 4.1 Bump version to 0.48.11 in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md` — 9e68d6f
