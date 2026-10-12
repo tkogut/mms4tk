@@ -20,7 +20,7 @@ def _make_daemon(temp_db: LoggerDB):
     executor.has_credentials = True
     state_mgr = MagicMock(spec=MMS4StateManager)
     state_mgr.get_symbol_state.return_value = MagicMock(value="BASE_MODE")
-    state_mgr.record_trade = MagicMock()
+    state_mgr.finalize_close = MagicMock()
 
     daemon = MMS4Daemon(
         executor=executor,
@@ -73,10 +73,10 @@ def test_reconcile_positions_with_real_okx_fill(temp_db: LoggerDB):
     # -2.03% move from entry 77630 is beyond -1.5% SL threshold -> MUST be STOP-LOSS
     assert ev["is_stop_loss"] is True
 
-    # Check state_mgr.record_trade received the trade with exact pnl
-    state_mgr.record_trade.assert_called_once()
-    kwargs = state_mgr.record_trade.call_args[1]
-    assert kwargs["is_stop_loss"] is True
+    # Check the close was booked via finalize_close as a STOP_LOSS with the exact pnl
+    state_mgr.finalize_close.assert_called_once()
+    kwargs = state_mgr.finalize_close.call_args[1]
+    assert kwargs["reason"] == "STOP_LOSS"
     assert kwargs["pnl"] == pytest.approx(-4.27, abs=0.01)
 
 

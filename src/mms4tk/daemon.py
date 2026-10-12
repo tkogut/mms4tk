@@ -407,6 +407,59 @@ class MMS4Daemon:
             logger.warning(f"base_entry_price lookup failed for {symbol}/{side}: {e}")
         return fallback
 
+    @staticmethod
+    def _stale_reduced_contracts(reduce_result: Any, active_pos: Any, fraction: float) -> float:
+        """Contracts a stale reduction closed: the order's own `amount` when reported,
+        otherwise the requested fraction of the position that was open before it."""
+        try:
+            amount = float((reduce_result or {}).get("amount") or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            amount = 0.0
+        if amount > 0:
+            return amount
+        return _pos_contracts(active_pos) * fraction if active_pos is not None else 0.0
+
+    def _book_stale_close_if_executed(
+        self, reduce_result: Any, symbol: str, side: str, entry_price: float,
+        exit_price: float, contracts_closed: float, reason: str,
+    ) -> bool:
+        """`_book_stale_close`, but only when `reduce_position` really placed a closing
+        order. A `no_position` result (the position had already gone, e.g. a stop filled
+        between the position fetch and the reduce) must not leave a fictitious
+        FORCE_CLOSE in the ledger; the real stop-out is booked by reconciliation."""
+        if not self._close_succeeded(reduce_result):
+            logger.info(f"Stale {reason} for {symbol} {side.upper()} not booked: no closing order was placed.")
+            return False
+        self._book_stale_close(symbol, side, entry_price, exit_price, contracts_closed, reason)
+        return True
+
+    def _book_stale_close(
+        self, symbol: str, side: str, entry_price: float, exit_price: float,
+        contracts_closed: float, reason: str,
+    ) -> None:
+        """Book an Inactivity-Manager close (SPLIT_50 / FORCE_CLOSE / FORCE_CLOSE_BE /
+        BE_ESCAPE) through `finalize_close`, so these paths are no longer invisible to the
+        state manager's ledger. The PnL is an ESTIMATE from the current price (like the
+        midline path), not the fill; bookkeeping failures are logged and never block the
+        trading cycle. State impact is unchanged: SPLIT_50 is a partial TP, the full
+        closes are neither SL nor TP (see `CLOSE_REASON_FLAGS`)."""
+        try:
+            if entry_price > 0 and exit_price > 0:
+                pnl_pct = (
+                    (exit_price - entry_price) / entry_price if side == "long"
+                    else (entry_price - exit_price) / entry_price
+                )
+            else:
+                pnl_pct = 0.0
+            ct_size = self._get_contract_size(symbol)
+            self.state_manager.finalize_close(
+                symbol=symbol, side=side, reason=reason,
+                entry_price=entry_price, exit_price=exit_price, amount=contracts_closed,
+                pnl=pnl_pct * entry_price * contracts_closed * ct_size, pnl_percent=pnl_pct,
+            )
+        except Exception as book_err:
+            logger.error(f"Failed to book stale close ({reason}) for {symbol}: {book_err}")
+
     def _clear_addons(self, symbol: str, side: Optional[str] = None) -> None:
         """
         Drop the addon ledger for a symbol/side.
@@ -658,24 +711,29 @@ class MMS4Daemon:
 
             try:
                 trade_id_str = f"recon_{target_symbol}_{side}_{int(time.time()*1000)}"
-                self.state_manager.record_trade(
+                # Issue #99: this used to be hardcoded False, so a position that
+                # disappeared from OKX without hitting the stop (e.g. a ratcheted
+                # exchange SL triggering in profit, #92) never restored SCOUT_MODE
+                # to BASE_MODE even when genuinely profitable — the only state-manager
+                # signal that does so (`on_take_profit_hit`) was simply never reached.
+                # A reconciled close is a take-profit, for state-machine purposes,
+                # whenever it wasn't a stop-out and it actually made money.
+                if is_stop_out:
+                    close_reason = "STOP_LOSS"
+                elif pnl_usd > 0:
+                    close_reason = "CLOSED_EXTERNAL_TP"
+                else:
+                    close_reason = "CLOSED_EXTERNAL"
+                self.state_manager.finalize_close(
                     trade_id=trade_id_str,
                     symbol=target_symbol,
                     side=side,
+                    reason=close_reason,
                     entry_price=entry_price,
                     exit_price=exit_price,
                     amount=contracts,
                     pnl=pnl_usd,
                     pnl_percent=pnl_pct,
-                    is_stop_loss=is_stop_out,
-                    # Issue #99: this used to be hardcoded False, so a position that
-                    # disappeared from OKX without hitting the stop (e.g. a ratcheted
-                    # exchange SL triggering in profit, #92) never restored SCOUT_MODE
-                    # to BASE_MODE even when genuinely profitable — the only state-manager
-                    # signal that does so (`on_take_profit_hit`) was simply never reached.
-                    # A reconciled close is a take-profit, for state-machine purposes,
-                    # whenever it wasn't a stop-out and it actually made money.
-                    is_take_profit=(not is_stop_out and pnl_usd > 0),
                     sl_percent=sl_percent,
                 )
                 self.logger_db.upsert_closed_trade(
@@ -1479,17 +1537,16 @@ class MMS4Daemon:
 
                         # 5. Record trade in state manager with is_partial=True
                         trade_id = f"midline_tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}"
-                        self.state_manager.record_trade(
+                        self.state_manager.finalize_close(
                             trade_id=trade_id,
                             symbol=target_symbol,
                             side=side_to_close,
+                            reason="MIDLINE_PARTIAL_TP",
                             entry_price=active_entry_price,
                             exit_price=tma_mid,
                             amount=contracts_to_reduce,
                             pnl=partial_pnl,
                             pnl_percent=pnl_pct,
-                            is_take_profit=True,
-                            is_partial=True,
                         )
 
                         # 6. Emit Hermes webhook & Telegram notification
@@ -1591,6 +1648,11 @@ class MMS4Daemon:
                                 f"({reduce_result.get('contracts')} contract(s)) — position held intact."
                             )
                         else:
+                            self._book_stale_close(
+                                target_symbol, t_side, t_entry, signal.price,
+                                self._stale_reduced_contracts(reduce_result, active_pos, 0.50),
+                                "STALE_SPLIT_50",
+                            )
                             outcome = "STALE_SPLIT_50"
                             details = (
                                 f"Inactivity Manager: Split 50% of {t_side.upper()} position for {target_symbol} "
@@ -1653,6 +1715,11 @@ class MMS4Daemon:
                         except Exception:
                             pass
                         self._clear_addons(target_symbol, t_side)
+                        self._book_stale_close_if_executed(
+                            reduce_result, target_symbol, t_side, t_entry, signal.price,
+                            _pos_contracts(active_pos) if active_pos is not None else 0.0,
+                            stale_action.value,
+                        )
                         outcome = stale_action.value
                         details = (
                             f"Inactivity Manager: {stale_action.value} for {target_symbol} {t_side.upper()} "
@@ -1816,27 +1883,33 @@ class MMS4Daemon:
 
                         # 2. Book the realized take-profit and transition state (SCOUT -> BASE)
                         try:
-                            ct_size = self._get_contract_size(target_symbol)
-                            pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
-                            self.state_manager.record_trade(
+                            try:
+                                ct_size = self._get_contract_size(target_symbol)
+                                pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
+                            except Exception as pnl_err:
+                                # The PnL figure is bookkeeping only; it must never keep the
+                                # take-profit from reaching finalize_close (which restores
+                                # SCOUT_MODE -> BASE_MODE, the #99 invariant).
+                                logger.warning(f"Could not estimate take-profit PnL for {target_symbol}: {pnl_err}")
+                                pnl_usd = 0.0
+                            self.state_manager.finalize_close(
                                 trade_id=f"tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}",
                                 symbol=target_symbol,
                                 side=side_to_close,
+                                reason="TP_AND_FLIP",
                                 entry_price=active_entry_price,
                                 exit_price=signal.price,
                                 amount=existing_contracts,
                                 pnl=pnl_usd,
                                 pnl_percent=pnl_pct,
-                                is_take_profit=True,
                             )
                         except Exception as rec_err:
                             logger.error(f"Failed to record take-profit trade for {target_symbol}: {rec_err}")
                         # Issue #99: the exchange-side close already happened (step 1 above)
                         # regardless of whether the local DB bookkeeping just above succeeded,
-                        # so the SCOUT_MODE->BASE_MODE restore must fire unconditionally — it
-                        # was previously nested inside the `except` branch, meaning it only ran
-                        # when record_trade() FAILED and never on the normal success path.
-                        self.state_manager.on_take_profit_hit(target_symbol)
+                        # so the SCOUT_MODE->BASE_MODE restore must fire unconditionally.
+                        # `finalize_close` guarantees it for a full take-profit even when its
+                        # own bookkeeping raises, so no separate hook call is needed here.
 
                         # 3. Emit Take Profit webhook event & Telegram
                         try:

@@ -34,7 +34,7 @@ from mms4tk.analytics import Candle, IndicatorParams, MMS4SignalEngine, TMAIndic
 from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 from mms4tk.logger_db import LoggerDB
 from mms4tk.okx_executor import OKXExecutor
-from mms4tk.state_manager import MMS4StateManager, MMS4State
+from mms4tk.state_manager import MMS4StateManager, MMS4State, close_reason_flags
 
 BASE_SL_PCT = 0.02
 STALE_ATR_THRESHOLD = 0.5
@@ -170,41 +170,15 @@ BASE_CONTRACTS_DEFAULT = 2.0
 
 def _trade_record_flags(exit_reason: str) -> Dict[str, bool]:
     """Map a harness `exit_reason` to the `(is_stop_loss, is_take_profit, is_partial)`
-    flags `MMS4StateManager.record_trade()` needs to reproduce the real
-    BASE_MODE/SCOUT_MODE state machine (see `state_manager.py`'s `on_stop_loss_hit`/
-    `on_take_profit_hit`, both invoked from `record_trade`). `sl_percent` is NOT
-    resolved here — the caller passes the trade's actual stop-loss percentage.
+    flags the real BASE_MODE/SCOUT_MODE state machine needs.
 
-    FORCE_CLOSE/FORCE_CLOSE_BE/BE_ESCAPE map to neither SL nor TP: production's own
-    `inactivity_manager.py`/`daemon.py` never call either state hook for these exits
-    (they are inactivity-driven exits, not a signal-driven take-profit or a hard
-    stop-loss fill) — confirmed by grep, not assumed.
-
-    Faza 4 (task.md, candidate #1/#2, both default-off measurement-only features):
-    D1_RANGE_TP (candidate #2, hard TP at entry +/- k*D1_range_ref) and
-    MIDLINE_FULL_TP (candidate #1 variant (4), 100% exit at the midline instead of
-    a partial) are both full, non-partial take-profit closes — same classification
-    as TP_AND_FLIP. MIDLINE_INVALIDATION (candidate #1 variant (3): the protected
-    remainder closes because price closed back on the wrong side of the midline)
-    is a full close but NOT a take-profit in this table's sense — it can lock in
-    either a small gain or a small loss depending on where the remainder's close
-    price lands relative to entry, exactly like STOP_LOSS in that respect, but it
-    is not a hard-stop-price fill either, so it maps to neither flag, same as the
-    Inactivity Manager's own ambiguous exits above.
+    Thin delegate to the shared `state_manager.CLOSE_REASON_FLAGS` table (the same one
+    production's `finalize_close()` reads), so the backtest and the daemon cannot drift.
+    The rationale for each classification (e.g. why FORCE_CLOSE/FORCE_CLOSE_BE/BE_ESCAPE/
+    MIDLINE_INVALIDATION are "neither SL nor TP" and STALE_SPLIT_50 is a partial TP) lives
+    next to that table. Unknown reasons raise ValueError.
     """
-    table = {
-        "STOP_LOSS":           dict(is_stop_loss=True,  is_take_profit=False, is_partial=False),
-        "TP_AND_FLIP":         dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
-        "STALE_SPLIT_50":      dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
-        "MIDLINE_PARTIAL_TP":  dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
-        "FORCE_CLOSE":         dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
-        "FORCE_CLOSE_BE":      dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
-        "BE_ESCAPE":           dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
-        "D1_RANGE_TP":         dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
-        "MIDLINE_FULL_TP":     dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
-        "MIDLINE_INVALIDATION": dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
-    }
-    return table[exit_reason]
+    return close_reason_flags(exit_reason)
 
 
 def _size_new_entry(symbol: str, sm: MMS4StateManager) -> Dict[str, Any]:
@@ -743,7 +717,6 @@ def run_backtest(
         entry = position["entry_price"]
         weight = position["notional_weight"]
         pnl_pct = (exit_price - entry) / entry if side == "long" else (entry - exit_price) / entry
-        flags = _trade_record_flags(reason)
         # Under the default V2 this is always BASE_SL_PCT (2%) — addon or not — so
         # on_stop_loss_hit's own `sl_percent >= 0.02` SCOUT_MODE/Hermes-H4 gate fires
         # for addon-carrying positions too, matching production exactly
@@ -753,10 +726,10 @@ def run_backtest(
         # (1.25% < 2% for V0 => no SCOUT_MODE transition), reproducing pre-P3
         # production for the historical P1 comparison.
         sl_percent = position.get("sl_pct_override", BASE_SL_PCT) if reason == "STOP_LOSS" else 0.0
-        sm.record_trade(
-            trade_id=f"{symbol}-{idx}", symbol=symbol, side=side,
+        sm.finalize_close(
+            trade_id=f"{symbol}-{idx}", symbol=symbol, side=side, reason=reason,
             entry_price=entry, exit_price=exit_price, amount=position["contracts"],
-            pnl=pnl_pct * entry, pnl_percent=pnl_pct, sl_percent=sl_percent, **flags,
+            pnl=pnl_pct * entry, pnl_percent=pnl_pct, sl_percent=sl_percent,
         )
         trades.append({
             "side": side, "entry_price": entry, "exit_price": exit_price,
@@ -769,14 +742,13 @@ def run_backtest(
         position = None
 
     def record_partial(reason: str) -> None:
-        """`sm.record_trade()` call for a partial booking (SPLIT_50/Midline TP) that
-        does NOT close `position` — mirrors `record_trade`'s own is_partial=True
-        branch, which explicitly preserves SCOUT_MODE rather than exiting it."""
-        flags = _trade_record_flags(reason)
-        sm.record_trade(
-            trade_id=f"{symbol}-partial", symbol=symbol, side=position["side"],
+        """`sm.finalize_close()` call for a partial booking (SPLIT_50/Midline TP) that
+        does NOT close `position` — the partial flag makes `record_trade` preserve
+        SCOUT_MODE rather than exit it."""
+        sm.finalize_close(
+            trade_id=f"{symbol}-partial", symbol=symbol, side=position["side"], reason=reason,
             entry_price=position["entry_price"], exit_price=position["entry_price"],
-            amount=0.0, pnl=0.0, pnl_percent=0.0, sl_percent=0.0, **flags,
+            amount=0.0, pnl=0.0, pnl_percent=0.0, sl_percent=0.0,
         )
 
     def _attach_d1_range_target(pos: Dict[str, Any], entry_idx: int) -> None:
