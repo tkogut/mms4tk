@@ -1946,8 +1946,11 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Failed to persist trend-filter/inactivity settings for {formatted_sym}: {e}")
 
-    state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")
-    
+    # A pair-config edit must not touch the symbol's risk state: this used to force
+    # BASE_MODE unconditionally, silently wiping an active SCOUT_MODE (even right after a
+    # real stop-out). A symbol the state manager has never seen already defaults to
+    # BASE_MODE, so there is nothing to initialize here.
+
     # Perform instant OKX API verification
     v_res = await executor.verify_symbol_with_okx(formatted_sym)
     okx_verification_cache[formatted_sym] = v_res
