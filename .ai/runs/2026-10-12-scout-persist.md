@@ -42,24 +42,26 @@ Stage **E1** of a 5-stage fix for "SCOUT_MODE has no reliable per-symbol exit" (
 
 ## Progress
 
+PR: #106
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Persistence layer (logger_db)
 
-- [ ] 1.1 Add idempotent `symbol` column to `state_history` with backfill from `[SYM]` reason prefix
-- [ ] 1.2 Add `symbol` argument to `save_state` and `get_latest_symbol_states()`
+- [x] 1.1 Add idempotent `symbol` column to `state_history` with backfill from `[SYM]` reason prefix — 3ea0f63
+- [x] 1.2 Add `symbol` argument to `save_state` and `get_latest_symbol_states()` — 3ea0f63
 
 ### Phase 2: State manager rehydration
 
-- [ ] 2.1 Rehydrate per-symbol states in `__init__` and `set_logger_db` via one shared helper
-- [ ] 2.2 Tag every state write with its symbol (`set_symbol_state`, `save_state`)
-- [ ] 2.3 Tests: restart keeps XAG in SCOUT and BTC in BASE, no cross-symbol leak, legacy rows
+- [x] 2.1 Rehydrate per-symbol states in `__init__` and `set_logger_db` via one shared helper — cc4e4d1
+- [x] 2.2 Tag every state write with its symbol (`set_symbol_state`, `save_state`) — cc4e4d1
+- [x] 2.3 Tests: restart keeps XAG in SCOUT and BTC in BASE, no cross-symbol leak, legacy rows — cc4e4d1
 
 ### Phase 3: API reset removal
 
-- [ ] 3.1 Stop `api.py` pair-config update from downgrading an active SCOUT_MODE
-- [ ] 3.2 Test: pair-config update preserves SCOUT_MODE and leaves unknown symbols in BASE
+- [x] 3.1 Stop `api.py` pair-config update from downgrading an active SCOUT_MODE — 9ef475b
+- [x] 3.2 Test: pair-config update preserves SCOUT_MODE and leaves unknown symbols in BASE — 9ef475b
 
 ### Phase 4: Release
 
-- [ ] 4.1 Bump version in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md`
+- [x] 4.1 Bump version in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md` — 9af3a06
