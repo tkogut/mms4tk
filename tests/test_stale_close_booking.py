@@ -75,3 +75,27 @@ def test_reduced_contracts_uses_order_amount_then_fraction(result, expected):
 
 def test_reduced_contracts_without_position_is_zero():
     assert MMS4Daemon._stale_reduced_contracts({}, None, 0.5) == 0.0
+
+
+@pytest.mark.parametrize("status", ["no_position", "not_divisible", "error", "rejected"])
+def test_full_stale_close_is_not_booked_when_no_closing_order_was_placed(daemon_and_sm, status):
+    """The position can already be gone (e.g. a stop filled between the fetch and the
+    reduce): that must not leave a fictitious FORCE_CLOSE in the ledger."""
+    daemon, sm = daemon_and_sm
+    booked = daemon._book_stale_close_if_executed(
+        {"status": status}, XAG, "long", 60.0, 61.0, 5.0, "FORCE_CLOSE"
+    )
+    assert booked is False
+    assert sm.trade_history == []
+
+
+def test_full_stale_close_is_booked_when_the_order_was_placed(daemon_and_sm):
+    daemon, sm = daemon_and_sm
+    assert daemon._book_stale_close_if_executed({"id": "123", "status": "closed"}, XAG, "long", 60.0, 61.0, 5.0, "FORCE_CLOSE")
+    assert len(sm.trade_history) == 1
+    assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE  # still no SCOUT exit (E3)
+
+
+def test_missing_result_is_not_booked(daemon_and_sm):
+    daemon, sm = daemon_and_sm
+    assert daemon._book_stale_close_if_executed(None, XAG, "long", 60.0, 61.0, 5.0, "FORCE_CLOSE") is False

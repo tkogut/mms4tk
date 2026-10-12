@@ -419,6 +419,20 @@ class MMS4Daemon:
             return amount
         return _pos_contracts(active_pos) * fraction if active_pos is not None else 0.0
 
+    def _book_stale_close_if_executed(
+        self, reduce_result: Any, symbol: str, side: str, entry_price: float,
+        exit_price: float, contracts_closed: float, reason: str,
+    ) -> bool:
+        """`_book_stale_close`, but only when `reduce_position` really placed a closing
+        order. A `no_position` result (the position had already gone, e.g. a stop filled
+        between the position fetch and the reduce) must not leave a fictitious
+        FORCE_CLOSE in the ledger; the real stop-out is booked by reconciliation."""
+        if not self._close_succeeded(reduce_result):
+            logger.info(f"Stale {reason} for {symbol} {side.upper()} not booked: no closing order was placed.")
+            return False
+        self._book_stale_close(symbol, side, entry_price, exit_price, contracts_closed, reason)
+        return True
+
     def _book_stale_close(
         self, symbol: str, side: str, entry_price: float, exit_price: float,
         contracts_closed: float, reason: str,
@@ -1701,8 +1715,8 @@ class MMS4Daemon:
                         except Exception:
                             pass
                         self._clear_addons(target_symbol, t_side)
-                        self._book_stale_close(
-                            target_symbol, t_side, t_entry, signal.price,
+                        self._book_stale_close_if_executed(
+                            reduce_result, target_symbol, t_side, t_entry, signal.price,
                             _pos_contracts(active_pos) if active_pos is not None else 0.0,
                             stale_action.value,
                         )
@@ -1869,8 +1883,15 @@ class MMS4Daemon:
 
                         # 2. Book the realized take-profit and transition state (SCOUT -> BASE)
                         try:
-                            ct_size = self._get_contract_size(target_symbol)
-                            pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
+                            try:
+                                ct_size = self._get_contract_size(target_symbol)
+                                pnl_usd = pnl_pct * active_entry_price * existing_contracts * ct_size
+                            except Exception as pnl_err:
+                                # The PnL figure is bookkeeping only; it must never keep the
+                                # take-profit from reaching finalize_close (which restores
+                                # SCOUT_MODE -> BASE_MODE, the #99 invariant).
+                                logger.warning(f"Could not estimate take-profit PnL for {target_symbol}: {pnl_err}")
+                                pnl_usd = 0.0
                             self.state_manager.finalize_close(
                                 trade_id=f"tp_{target_symbol}_{side_to_close}_{int(time.time()*1000)}",
                                 symbol=target_symbol,

@@ -25,7 +25,7 @@ Every way a position can disappear is booked through ONE function, `MMS4StateMan
 
 ## Scope
 
-1. `state_manager.py`: `CLOSE_REASON_FLAGS` (single source of truth) + `finalize_close(symbol, side, reason, entry_price, exit_price, amount, pnl, pnl_percent, sl_percent=0.0, is_partial=None, trade_id=None)`; an unknown reason raises.
+1. `state_manager.py`: `CLOSE_REASON_FLAGS` (single source of truth) + `finalize_close(symbol, side, reason, entry_price, exit_price, amount, pnl, pnl_percent, sl_percent=0.0, trade_id=None)`; an unknown reason raises.
 2. `backtest_engine.py`: `_trade_record_flags` reads the shared table; closes go through `finalize_close`.
 3. `daemon.py`: all five paths call `finalize_close` (the two missing ones are added with estimated PnL).
 4. A guard test: nothing in `daemon.py` calls `record_trade` / `on_take_profit_hit` / `on_stop_loss_hit` directly.
@@ -64,7 +64,7 @@ PR: #111
 ### Phase 2: Backtest on the shared table
 
 - [x] 2.1 `backtest_engine` reads the shared table and books closes via `finalize_close` — b025863
-- [x] 2.2 Update `tests/test_backtest_engine.py:337` to the shared source; parity tests unchanged — b025863
+- [x] 2.2 Keep `_trade_record_flags` as a thin delegate so `tests/test_backtest_engine.py:337` and the parity tests pass unchanged — b025863
 
 ### Phase 3: Daemon paths
 

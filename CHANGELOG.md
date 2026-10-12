@@ -21,6 +21,9 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
   through `finalize_close`, so the backtest and the daemon cannot drift.
 - 🛡️ Guard test `tests/test_close_paths_use_finalize_close.py`: no module other than
   `state_manager.py` may call `record_trade` / `on_take_profit_hit` / `on_stop_loss_hit`.
+- 🛟 One strictly-safer edge: a reconciled profitable close (`CLOSED_EXTERNAL_TP`) now also
+  restores SCOUT_MODE when its bookkeeping raises (it did not before). Stale
+  `FORCE_CLOSE*` / `BE_ESCAPE` are booked only when a closing order was actually placed.
 - ✅ **No change to which closes enter or leave SCOUT_MODE**: `FORCE_CLOSE*` / `BE_ESCAPE`
   stay "neither SL nor TP", `STALE_SPLIT_50` stays a partial TP. That is E3 of #107.
 - ⚠️ **Metrics only**: `trade_count`, `realized_pnl` and the equity accumulator in

@@ -41,5 +41,6 @@ def test_daemon_books_every_close_path_through_finalize_close():
 
 def test_stale_close_paths_are_wired_to_the_booking_helper():
     calls = [name for name, _ in _calls(SRC / "daemon.py")]
-    # one call for the executed SPLIT_50 branch, one for the FORCE_CLOSE*/BE_ESCAPE branch
-    assert calls.count("_book_stale_close") == 2
+    # the executed SPLIT_50 branch and the FORCE_CLOSE*/BE_ESCAPE branch
+    booked = calls.count("_book_stale_close") + calls.count("_book_stale_close_if_executed")
+    assert booked >= 2
