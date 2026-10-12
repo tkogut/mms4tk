@@ -112,19 +112,40 @@ def test_set_logger_db_restores_per_symbol_states():
         assert sm.get_symbol_state(BTC) == MMS4State.BASE_MODE
 
 
-def test_legacy_prefix_rows_are_backfilled_into_symbol_column():
-    """Rows written before the `symbol` column existed carry the symbol only in the
-    "[SYM]" reason prefix; opening the DB must backfill them (idempotently)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db = _new_db(tmpdir)
-        db.save_state("SCOUT_MODE", 1.0, "[XAG/USDC] Stop Loss hit (2.1%)")  # legacy: untagged
-        db = LoggerDB(db_path=os.path.join(tmpdir, "test_logs.db"))  # re-open => migration runs
-        db = LoggerDB(db_path=os.path.join(tmpdir, "test_logs.db"))  # and is idempotent
+def test_old_schema_is_migrated_and_prefix_rows_backfilled():
+    """The real production case: a state_history table created BEFORE the `symbol`
+    column existed. Opening the DB must add the column, backfill rows that carry the
+    symbol only in the "[BASE/QUOTE]" reason prefix, leave non-symbol tags alone, and be
+    idempotent on re-open."""
+    import sqlite3
 
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "test_logs.db")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE state_history (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "timestamp TEXT NOT NULL, state TEXT NOT NULL, leverage REAL NOT NULL, reason TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO state_history (timestamp, state, leverage, reason) VALUES ('t', ?, 1.0, ?)",
+            [
+                ("SCOUT_MODE", "[XAG/USDC] Stop Loss hit (2.1%)"),
+                ("SCOUT_MODE", "[HITL] manual note"),  # a tag, not a symbol
+                ("SCOUT_MODE", "no prefix at all"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        db = LoggerDB(db_path=path)  # migration runs
+        db = LoggerDB(db_path=path)  # and is idempotent
+
+        assert set(db.get_latest_symbol_states()) == {XAG}
         assert db.get_latest_symbol_states()[XAG]["state"] == "SCOUT_MODE"
+        assert db.get_latest_untagged_state()["reason"] == "no prefix at all"
         sm = MMS4StateManager(logger_db=db, trading_symbol=BTC)
         assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE
-        assert sm.get_symbol_state(BTC) == MMS4State.BASE_MODE
+        assert sm.get_symbol_state("HITL") == MMS4State.BASE_MODE
 
 
 def test_untagged_legacy_row_applies_to_primary_symbol_only_when_it_has_no_tagged_row():
@@ -137,7 +158,8 @@ def test_untagged_legacy_row_applies_to_primary_symbol_only_when_it_has_no_tagge
         assert sm.get_symbol_state(BTC) == MMS4State.SCOUT_MODE  # untagged legacy -> primary
         assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE
 
-        db2 = _new_db(tempfile.mkdtemp())
+    with tempfile.TemporaryDirectory() as tmpdir2:
+        db2 = _new_db(tmpdir2)
         db2.save_state("SCOUT_MODE", 1.0, "no symbol anywhere")
         db2.save_state("BASE_MODE", 3.0, "[BTC/USDC] tp", symbol=BTC)
         sm2 = MMS4StateManager(logger_db=db2, trading_symbol=BTC)

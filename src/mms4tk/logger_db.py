@@ -128,14 +128,21 @@ class LoggerDB:
             # rebuild ONE state and assigned it to the primary symbol. A real column makes
             # the latest state of every symbol recoverable. Legacy rows are backfilled
             # from that "[SYM]" prefix; rows with no prefix stay NULL (= primary symbol).
+            # The backfill runs ONLY when this call adds the column: LoggerDB() is built on
+            # every Streamlit rerun, and an unindexed full-table UPDATE (plus its write
+            # lock) on each of those would contend with the daemon for nothing.
             cursor.execute("PRAGMA table_info(state_history)")
             if "symbol" not in {row[1] for row in cursor.fetchall()}:
                 cursor.execute("ALTER TABLE state_history ADD COLUMN symbol TEXT")
-            cursor.execute("""
-                UPDATE state_history
-                SET symbol = substr(reason, 2, instr(reason, ']') - 2)
-                WHERE symbol IS NULL AND reason LIKE '[%]%' AND instr(reason, ']') > 2
-            """)
+                # Only a "[BASE/QUOTE]" prefix counts (a "/" inside the brackets) so a
+                # non-symbol tag such as "[HITL] ..." is never mistaken for a symbol.
+                cursor.execute("""
+                    UPDATE state_history
+                    SET symbol = substr(reason, 2, instr(reason, ']') - 2)
+                    WHERE reason LIKE '[%/%]%'
+                      AND instr(reason, ']') > 2
+                      AND instr(reason, '/') BETWEEN 3 AND instr(reason, ']') - 2
+                """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS strategy_profile (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1299,7 +1306,11 @@ class LoggerDB:
             return dict(row) if row else None
 
     def get_latest_state(self) -> Optional[Dict[str, Any]]:
-        """Retrieve the latest state record from state_history table."""
+        """Retrieve the latest state record from state_history table, whichever symbol.
+
+        No longer used to restore state (that is per symbol now: see
+        `get_latest_symbol_states`); kept for callers that want the raw latest row.
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
