@@ -123,6 +123,19 @@ class LoggerDB:
                     reason TEXT
                 )
             """)
+            # SCOUT_MODE is per-symbol, but state_history only ever carried the symbol
+            # inside the free-text `reason` ("[XAG/USDC] ..."), so a restart could only
+            # rebuild ONE state and assigned it to the primary symbol. A real column makes
+            # the latest state of every symbol recoverable. Legacy rows are backfilled
+            # from that "[SYM]" prefix; rows with no prefix stay NULL (= primary symbol).
+            cursor.execute("PRAGMA table_info(state_history)")
+            if "symbol" not in {row[1] for row in cursor.fetchall()}:
+                cursor.execute("ALTER TABLE state_history ADD COLUMN symbol TEXT")
+            cursor.execute("""
+                UPDATE state_history
+                SET symbol = substr(reason, 2, instr(reason, ']') - 2)
+                WHERE symbol IS NULL AND reason LIKE '[%]%' AND instr(reason, ']') > 2
+            """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS strategy_profile (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1241,20 +1254,49 @@ class LoggerDB:
             rows = cursor.fetchall()
             return [dict(r) for r in rows]
 
-    def save_state(self, state: str, leverage: float, reason: str = "") -> int:
-        """Save state transition or snapshot to state_history table."""
+    def save_state(self, state: str, leverage: float, reason: str = "", symbol: Optional[str] = None) -> int:
+        """Save state transition or snapshot to state_history table.
+
+        `symbol` tags the row with the symbol the state belongs to; None keeps the legacy
+        untagged behavior (treated as the primary symbol's state on restore).
+        """
         timestamp = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO state_history (timestamp, state, leverage, reason)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO state_history (timestamp, state, leverage, reason, symbol)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (timestamp, state, leverage, reason)
+                (timestamp, state, leverage, reason, symbol)
             )
             conn.commit()
             return cursor.lastrowid or 0
+
+    def get_latest_symbol_states(self) -> Dict[str, Dict[str, Any]]:
+        """Latest state_history row for EACH symbol that has one (tagged rows only)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT s.* FROM state_history s
+                JOIN (
+                    SELECT symbol, MAX(id) AS max_id FROM state_history
+                    WHERE symbol IS NOT NULL GROUP BY symbol
+                ) latest ON s.id = latest.max_id
+                """
+            )
+            return {row["symbol"]: dict(row) for row in cursor.fetchall()}
+
+    def get_latest_untagged_state(self) -> Optional[Dict[str, Any]]:
+        """Latest legacy row with no symbol (neither column nor "[SYM]" prefix)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM state_history WHERE symbol IS NULL ORDER BY id DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def get_latest_state(self) -> Optional[Dict[str, Any]]:
         """Retrieve the latest state record from state_history table."""
