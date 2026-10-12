@@ -4,6 +4,42 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.10] - 2026-10-12
+
+### 🔥 Fixed — SCOUT_MODE Lost / Leaked Between Symbols on Restart
+- 🐛 **`state_manager.py` / `logger_db.py`**: `state_history` carried the symbol only
+  inside the free-text `reason` (`"[XAG/USDC] ..."`), and startup restored just the
+  single latest row — assigned to the **primary** symbol. After a restart a
+  non-primary symbol in SCOUT_MODE (e.g. XAG) silently returned to BASE_MODE with no
+  take-profit, and if the latest row belonged to XAG, the primary symbol (BTC) was
+  wrongly put into SCOUT_MODE.
+- 🐛 **`api.py`** (`POST /api/v1/symbols/add|update`): every pair-config edit
+  unconditionally reset the symbol to BASE_MODE, wiping an active SCOUT_MODE.
+- ✅ **Naprawa**: `state_history` gained an idempotent nullable `symbol` column
+  (legacy `"[SYM]"` rows are backfilled); `LoggerDB.save_state(symbol=)` tags every
+  write; `MMS4StateManager` rehydrates the latest state of **every** symbol in
+  `__init__` and `set_logger_db` (legacy untagged rows apply to the primary symbol
+  only when it has no tagged row); the pair-config endpoint no longer touches the
+  symbol's risk state.
+- ⚠️ **Deploy note**: additive DB migration — deploy under the maintenance lock
+  (`scripts/maintenance.py --enable` / `--disable`) after a `logs.db` backup. Stage E1
+  of the SCOUT-exit fix; the exit-path changes (E2–E5) ship separately.
+- ⚠️ **Behavior change on first restart**: any symbol whose LATEST `state_history` row
+  is SCOUT_MODE (it previously fell back to BASE_MODE on every restart) now comes back
+  in SCOUT_MODE. Before deploying, list the latest state per symbol and decide whether
+  stale ones need handling. A symbol now leaves SCOUT_MODE on a full take-profit or an
+  explicit per-symbol override (below); restarts and pair-config edits no longer reset it.
+- ✨ **Per-symbol override (minimal slice of E4)**: `POST /api/v1/strategy/profile`
+  (`scout_override`) and `POST /api/v1/hermes/hitl_resolve` (SWEEP_WICK) accept an
+  optional `symbol` (e.g. `XAG/USDC`) and relax that symbol's SCOUT_MODE. Previously
+  they called `relax_scout_mode()` with no symbol and could only ever release the
+  primary one. Omitting `symbol` keeps the old behavior. Hermes tool schemas
+  (`mms4_set_strategy_profile`, `mms4_hitl_resolve`) expose the new field.
+- ⚠️ **Legacy rows without a symbol** (neither column nor `"[SYM]"` prefix) are applied
+  to the *current* primary symbol (`MMS4_SYMBOL`) only when it has no tagged row —
+  after changing `MMS4_SYMBOL`, check that a new primary does not inherit another
+  symbol's old untagged state.
+
 ## 🚀 [0.48.9] - 2026-09-24
 
 ### 🔥 Fixed — Stop-Losses Mislabeled as "BREAK-EVEN" in Trade History

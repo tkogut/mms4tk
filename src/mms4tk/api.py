@@ -939,6 +939,11 @@ async def get_strategy_profile() -> StrategyProfile:
     return state_manager.strategy_profile
 
 
+# A bare symbol ("xag"), BASE/QUOTE ("XAG/USDC") or glued ("xagusdc") form; rejects blank/garbage with a 422
+# instead of a silent no-op 200 that Hermes cannot distinguish from "released".
+_SYMBOL_PATTERN = r"^\s*[A-Za-z0-9]{1,16}(/[A-Za-z0-9]{1,16})?\s*$"
+
+
 class StrategyProfileUpdate(BaseModel):
     """Faza 6 C.1.2: partial-update counterpart to StrategyProfile.
 
@@ -958,6 +963,21 @@ class StrategyProfileUpdate(BaseModel):
     risk_profile: Optional[str] = Field(default=None, description="CONSERVATIVE | MODERATE | AGGRESSIVE")
     scout_override: Optional[bool] = Field(default=None, description="True allows early SCOUT_MODE relaxation")
     reason: Optional[str] = Field(default=None)
+    symbol: Optional[str] = Field(
+        default=None,
+        pattern=_SYMBOL_PATTERN,
+        max_length=32,
+        description="Symbol whose SCOUT_MODE a scout_override relaxes (e.g. XAG/USDC). "
+                    "Omitted = the primary trading symbol (previous behavior).",
+    )
+
+
+def _format_symbol(raw: str) -> str:
+    """Canonical `BASE/USDC` form used across the multi-symbol endpoints."""
+    sym = raw.upper().strip()
+    if "/" not in sym:
+        sym = sym.replace("USDC", "/USDC") if sym.endswith("USDC") else f"{sym}/USDC"
+    return sym
 
 
 @app.post("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
@@ -985,7 +1005,7 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     )
     updated = state_manager.update_strategy_profile(merged)
     if updated.scout_override:
-        state_manager.relax_scout_mode()
+        state_manager.relax_scout_mode(_format_symbol(profile.symbol) if profile.symbol else None)
     return updated
 
 
@@ -1056,6 +1076,12 @@ class HITLResolveRequest(BaseModel):
     directional_bias: str = Field(default="BOTH", description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
     risk_profile: str = Field(default="MODERATE", description="CONSERVATIVE | MODERATE | AGGRESSIVE")
     reason: str = Field(default="Human-in-the-Loop decision")
+    symbol: Optional[str] = Field(
+        default=None,
+        pattern=_SYMBOL_PATTERN,
+        max_length=32,
+        description="Symbol the decision applies to (e.g. XAG/USDC). Omitted = the primary trading symbol.",
+    )
 
 
 @app.post("/api/v1/hermes/hitl_resolve", tags=["Hermes Integration"], dependencies=[Depends(verify_api_key)])
@@ -1076,12 +1102,14 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
     )
     updated = state_manager.update_strategy_profile(profile)
     relaxed = False
+    target_symbol = _format_symbol(req.symbol) if req.symbol else None
     if scout_override:
-        relaxed = state_manager.relax_scout_mode()
+        relaxed = state_manager.relax_scout_mode(target_symbol)
 
     return {
         "status": "ok",
         "decision": req.decision,
+        "symbol": target_symbol or state_manager.trading_symbol,
         "scout_override": scout_override,
         "scout_mode_relaxed": relaxed,
         "profile": updated.model_dump(),
@@ -1891,9 +1919,7 @@ async def verify_symbol_direct(req: AddSymbolRequest) -> Dict[str, Any]:
 @app.post("/api/v1/symbols/update", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
     """Add, activate, or update per-symbol allocation ($ USD) & Base/Add ratio configuration."""
-    formatted_sym = req.symbol.upper().strip()
-    if "/" not in formatted_sym:
-        formatted_sym = formatted_sym.replace("USDC", "/USDC") if formatted_sym.endswith("USDC") else f"{formatted_sym}/USDC"
+    formatted_sym = _format_symbol(req.symbol)
 
     b_ratio = req.base_ratio
     a_ratio = 100 - b_ratio if b_ratio <= 100 else req.add_ratio
@@ -1946,8 +1972,11 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Failed to persist trend-filter/inactivity settings for {formatted_sym}: {e}")
 
-    state_manager.set_symbol_state(formatted_sym, MMS4State.BASE_MODE, reason="Dynamic pair configuration update via API")
-    
+    # A pair-config edit must not touch the symbol's risk state: this used to force
+    # BASE_MODE unconditionally, silently wiping an active SCOUT_MODE (even right after a
+    # real stop-out). A symbol the state manager has never seen already defaults to
+    # BASE_MODE, so there is nothing to initialize here.
+
     # Perform instant OKX API verification
     v_res = await executor.verify_symbol_with_okx(formatted_sym)
     okx_verification_cache[formatted_sym] = v_res
