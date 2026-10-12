@@ -939,6 +939,11 @@ async def get_strategy_profile() -> StrategyProfile:
     return state_manager.strategy_profile
 
 
+# A bare symbol ("xag"), BASE/QUOTE ("XAG/USDC") or glued ("xagusdc") form; rejects blank/garbage with a 422
+# instead of a silent no-op 200 that Hermes cannot distinguish from "released".
+_SYMBOL_PATTERN = r"^\s*[A-Za-z0-9]{1,16}(/[A-Za-z0-9]{1,16})?\s*$"
+
+
 class StrategyProfileUpdate(BaseModel):
     """Faza 6 C.1.2: partial-update counterpart to StrategyProfile.
 
@@ -960,6 +965,8 @@ class StrategyProfileUpdate(BaseModel):
     reason: Optional[str] = Field(default=None)
     symbol: Optional[str] = Field(
         default=None,
+        pattern=_SYMBOL_PATTERN,
+        max_length=32,
         description="Symbol whose SCOUT_MODE a scout_override relaxes (e.g. XAG/USDC). "
                     "Omitted = the primary trading symbol (previous behavior).",
     )
@@ -973,7 +980,7 @@ def _format_symbol(raw: str) -> str:
     return sym
 
 
-@app.post("/api/v1/strategy/profile",response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
+@app.post("/api/v1/strategy/profile", response_model=StrategyProfile, tags=["Strategy Profile"], dependencies=[Depends(verify_api_key)])
 async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfile:
     """
     Partially update the active strategy profile configuration: only fields
@@ -1071,6 +1078,8 @@ class HITLResolveRequest(BaseModel):
     reason: str = Field(default="Human-in-the-Loop decision")
     symbol: Optional[str] = Field(
         default=None,
+        pattern=_SYMBOL_PATTERN,
+        max_length=32,
         description="Symbol the decision applies to (e.g. XAG/USDC). Omitted = the primary trading symbol.",
     )
 

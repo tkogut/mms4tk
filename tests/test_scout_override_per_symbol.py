@@ -82,3 +82,11 @@ def test_strategy_profile_scout_override_without_symbol_is_primary_only(sm):
     client.post("/api/v1/strategy/profile", json={"scout_override": True}, headers=AUTH_HEADERS)
     assert sm.get_symbol_state(BTC) == MMS4State.BASE_MODE
     assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "XAG:USDC", "X" * 40, "XAG USDC", "XAG/USDC/EXTRA"])
+def test_invalid_symbol_is_rejected_not_a_silent_noop(sm, bad):
+    assert _hitl(symbol=bad).status_code == 422
+    res = client.post("/api/v1/strategy/profile", json={"scout_override": True, "symbol": bad}, headers=AUTH_HEADERS)
+    assert res.status_code == 422
+    assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE
