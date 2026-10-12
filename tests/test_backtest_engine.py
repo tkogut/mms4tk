@@ -914,7 +914,7 @@ def test_p2_high_vol_base_filter_verdict_unchanged_net_of_fees():
 
 
 @pytest.mark.slow
-def test_p1_addon_sl_gate_analysis():
+def test_p1_addon_sl_gate_analysis(monkeypatch):
     """Audit P1 (2026-09-08): required gate for implementing V1 or V2 in production
     — V1 OR V2 must beat V0 on BOTH R:R and total_pnl (NET) in >= 5/6 windows
     (BTC/ETH x H1/H2/full).
@@ -975,7 +975,18 @@ def test_p1_addon_sl_gate_analysis():
     assertion back to "still under 5". It does NOT lock in "V0 is confirmed
     correct" — that conclusion was withdrawn along with the stale-VR-params bug this
     docstring documents.
+
+    E3 NOTE (2026-10-12, #112): this analysis isolates the addon-SL mechanism, so it runs with
+    the SCOUT clean-close exit (`SCOUT_EXIT_K`) switched OFF - i.e. under the SCOUT semantics
+    it was measured under. With that exit on, SCOUT now expires inside the backtest, position
+    sizing changes and the frozen numbers move (observed: V1 strict-gate wins 2/6 instead of
+    3/6); neither variant comes near the 5/6 gate either way, so the P1 production decision
+    (V0 stays) is unaffected. Re-running this analysis WITH the E3 exit is a separate piece of
+    work, not something to absorb by editing the numbers below.
     """
+    # Keep the historical baseline: no SCOUT_MODE expiry by K clean closes (module global read
+    # at call time by MMS4StateManager._apply_scout_exit_rule).
+    monkeypatch.setattr("mms4tk.state_manager.SCOUT_EXIT_K", 10**9)
     windows = []
     for label, fname, symbol in [("BTC", "ohlcv_BTC_USDC_1h.csv", "BTC/USDC"),
                                   ("ETH", "ohlcv_ETH_USDC_1h.csv", "ETH/USDC")]:
