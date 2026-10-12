@@ -8,6 +8,7 @@ neutral; a full take-profit still exits immediately.
 import asyncio
 import os
 import tempfile
+import time
 
 import pytest
 
@@ -394,3 +395,28 @@ def test_fetch_close_fill_swallows_errors(daemon_sm):
     daemon, _, executor = daemon_sm
     executor.fetch_last_closing_order = AsyncMock(side_effect=RuntimeError("okx down"))
     assert asyncio.run(daemon._fetch_close_fill(XAG, "short", 123, delay_s=0)) is None
+
+
+def test_fetch_close_fill_is_bounded_by_a_timeout(daemon_sm):
+    """A slow OKX must not stall the trading cycle: each attempt is capped."""
+    daemon, _, executor = daemon_sm
+
+    async def hang(*a, **k):
+        await asyncio.sleep(30)
+
+    executor.fetch_last_closing_order = hang
+    started = time.monotonic()
+    result = asyncio.run(daemon._fetch_close_fill(XAG, "short", 123, delay_s=0, timeout_s=0.05))
+    assert result is None
+    assert time.monotonic() - started < 5   # the 30 s hang was cut off by the per-attempt timeout
+
+
+@pytest.mark.parametrize("active_entry,active_side,expected", [
+    (61.25, "short", 61.25),   # same leg: live avgPx wins
+    (61.25, "SHORT", 61.25),   # side case is irrelevant
+    (61.25, "long", 60.0),     # opposite leg (hedge mode): fall back to the tracker's entry
+    (0.0, "short", 60.0),      # no live price
+    (61.25, None, 60.0),
+])
+def test_stale_entry_price_comes_from_the_same_leg_only(active_entry, active_side, expected):
+    assert MMS4Daemon._stale_entry_price(active_entry, active_side, "short", 60.0) == expected

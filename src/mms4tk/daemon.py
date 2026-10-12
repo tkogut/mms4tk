@@ -420,14 +420,18 @@ class MMS4Daemon:
         return _pos_contracts(active_pos) * fraction if active_pos is not None else 0.0
 
     async def _fetch_close_fill(
-        self, symbol: str, side: str, requested_at_ms: int, attempts: int = 2, delay_s: float = 1.0
+        self, symbol: str, side: str, requested_at_ms: int, attempts: int = 2, delay_s: float = 1.0,
+        timeout_s: float = 5.0,
     ) -> Optional[Dict[str, Any]]:
         """The real fill of the close just placed (OKX order history), or None.
 
         `requested_at_ms` (taken before the order was sent) keeps an older, unrelated close of
         the same symbol/side from being mistaken for this one. OKX history can lag the order by
-        a moment, hence one short retry. Any failure returns None: the caller then books an
-        ESTIMATE, which the SCOUT clean-close rule treats as neutral.
+        a moment, hence one short retry. Each attempt is bounded by `timeout_s` (the executor can
+        issue several REST calls and swallows their errors), so a slow or unreachable OKX cannot
+        stall the trading cycle. Any failure or timeout returns None: the caller then books an
+        ESTIMATE, which the SCOUT clean-close rule treats as neutral. (A local clock running more
+        than the 5 s margin ahead of OKX would also reject our own fill - same safe outcome.)
         """
         fetch = getattr(self.executor, "fetch_last_closing_order", None)
         if fetch is None:
@@ -436,7 +440,7 @@ class MMS4Daemon:
             try:
                 res = fetch(symbol, side, min_fill_time_ms=requested_at_ms)
                 if inspect.isawaitable(res) or asyncio.iscoroutine(res):
-                    res = await res
+                    res = await asyncio.wait_for(res, timeout=timeout_s)
                 if isinstance(res, dict) and float(res.get("exit_price") or 0.0) > 0:
                     return res
             except Exception as e:
@@ -445,6 +449,15 @@ class MMS4Daemon:
             if attempt + 1 < attempts:
                 await asyncio.sleep(delay_s)
         return None
+
+    @staticmethod
+    def _stale_entry_price(active_entry_price: float, active_side: Any, t_side: str, t_entry: float) -> float:
+        """Entry price for a stale-close PnL: the live position's avgPx, but only when that
+        position is the SAME leg the inactivity tracker is closing (`active_pos` can be the
+        opposite leg in hedge mode); otherwise the tracker's own entry."""
+        if active_entry_price > 0 and str(active_side or "").lower() == str(t_side or "").lower():
+            return active_entry_price
+        return t_entry
 
     def _book_stale_close_if_executed(
         self, reduce_result: Any, symbol: str, side: str, entry_price: float,
@@ -1756,7 +1769,7 @@ class MMS4Daemon:
                             stale_fill = await self._fetch_close_fill(target_symbol, t_side, close_requested_ms)
                         self._book_stale_close_if_executed(
                             reduce_result, target_symbol, t_side,
-                            active_entry_price if active_entry_price > 0 else t_entry, signal.price,
+                            self._stale_entry_price(active_entry_price, active_side, t_side, t_entry), signal.price,
                             _pos_contracts(active_pos) if active_pos is not None else 0.0,
                             stale_action.value, fill=stale_fill,
                         )
