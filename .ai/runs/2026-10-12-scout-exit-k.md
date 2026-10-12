@@ -21,7 +21,8 @@ A symbol leaves SCOUT_MODE after **K = 3 consecutive qualifying full closes** (c
 |---|---|
 | Full TP (`TP_AND_FLIP`, `D1_RANGE_TP`, `MIDLINE_FULL_TP`, `CLOSED_EXTERNAL_TP`) | exits immediately (unchanged), counter cleared |
 | `STOP_LOSS` | reset to 0 |
-| `FORCE_CLOSE`, `MIDLINE_INVALIDATION` with `pnl_percent > SCOUT_MIN_GROSS_PNL_PCT` | +1; at K → `BASE_MODE`, reason `SCOUT_EXPIRED_K`, counter cleared |
+| `FORCE_CLOSE`, `MIDLINE_INVALIDATION` with `pnl_percent > SCOUT_MIN_GROSS_PNL_PCT` **from a real fill price** | +1; at K → `BASE_MODE`, reason `SCOUT_EXPIRED_K`, counter cleared |
+| same reasons but the PnL is only an **estimate** (no fill found) or not finite | neutral (neither counts nor resets) |
 | `FORCE_CLOSE`, `MIDLINE_INVALIDATION` otherwise (net loss) | reset to 0 |
 | `FORCE_CLOSE_BE`, `BE_ESCAPE`, `CLOSED_EXTERNAL`, partials (`STALE_SPLIT_50`, `MIDLINE_PARTIAL_TP`) | neutral |
 | Any entry into / exit from SCOUT | counter cleared |
@@ -53,10 +54,12 @@ Replaying XAG's real closes since its 2026-10-07 stop through this table gives 1
 - **Existing exits must not regress** (the #99 class): full TP must still exit immediately, partial closes must stay neutral — covered by tests.
 - **Restart behavior:** a missing/garbled `scout_ok:{symbol}` key restores 0 (safe: the symbol just needs K more closes).
 - **Backtest parity:** `pnl_percent` handed to `finalize_close` must be gross in both worlds; checked by a parity test.
+- **Estimate vs fill (review finding M1):** the daemon's stale-close PnL used the last closed candle and the tracker's entry, far noisier than the 0.10% threshold. The FORCE_CLOSE path now fetches the real fill (`fetch_last_closing_order`, one short retry) and passes `pnl_is_estimate=True` when it cannot; estimates are neutral.
+- **Backtest results move (review finding B1):** SCOUT now expires inside `run_backtest`; the slow P1 analysis test pins `SCOUT_EXIT_K` off to keep its baseline, and calibration scripts are no longer comparable with older runs (CHANGELOG).
 
 ## Validation
 
-`MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest tests/ -v` (never against the production container). Known unrelated failures on `main`: the two position-sizing tests (#109).
+`MMS4_API_KEY=test-api-auth-key-unit-test python3 -m pytest tests/ -v` **including the `slow` tests** (a first pass with `-m "not slow"` missed a red slow test; review finding B1). Never against the production container. Known unrelated failures on `main`: the two position-sizing tests (#109).
 
 ## Progress
 
