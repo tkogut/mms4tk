@@ -5,6 +5,7 @@ gross pnl_percent above the measured round-trip cost; a net-losing counting clos
 STOP_LOSS reset the run; FORCE_CLOSE_BE / BE_ESCAPE / CLOSED_EXTERNAL / partial closes are
 neutral; a full take-profit still exits immediately.
 """
+import asyncio
 import os
 import tempfile
 
@@ -261,3 +262,135 @@ def test_backtest_feeds_gross_pnl_percent_into_the_same_counter(monkeypatch):
         assert reason == trade["exit_reason"]
         assert pct == pytest.approx(trade["pnl_pct"])          # gross, fees not subtracted
         assert trade["fee_pct"] == pytest.approx(be.ROUND_TRIP_FEE_PCT)
+
+
+# ── review fixes: real fill only, NaN, ordering, env, daemon wiring ─────────
+
+def test_an_estimated_pnl_is_neutral_it_neither_counts_nor_resets():
+    sm = _scout_sm()
+    _close(sm, "FORCE_CLOSE", CLEAN)
+    sm.finalize_close(XAG, "short", "FORCE_CLOSE", 100.0, 99.0, 1.0, 1.0, CLEAN, pnl_is_estimate=True)
+    sm.finalize_close(XAG, "short", "FORCE_CLOSE", 100.0, 101.0, 1.0, -1.0, LOSS, pnl_is_estimate=True)
+    assert sm.get_scout_ok(XAG) == 1          # neither +1 (estimate) nor reset (estimated loss)
+    assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_pnl_percent_is_neutral(bad):
+    sm = _scout_sm()
+    _close(sm, "FORCE_CLOSE", CLEAN)
+    _close(sm, "FORCE_CLOSE", bad)
+    assert sm.get_scout_ok(XAG) == 1
+
+
+def test_counter_key_survives_when_persisting_the_exit_state_fails(monkeypatch):
+    """The state is persisted BEFORE the counter is cleared: if saving it raises, the key must
+    still be there so a restart sees a consistent (SCOUT + its counter) pair."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LoggerDB(db_path=os.path.join(tmp, "l.db"))
+        sm = _scout_sm(db)
+        _close(sm, "FORCE_CLOSE", CLEAN)
+        assert db.get_setting(f"scout_ok:{XAG}") == "1"
+        monkeypatch.setattr(db, "save_state", lambda **k: (_ for _ in ()).throw(RuntimeError("db down")))
+        with pytest.raises(RuntimeError):
+            sm.set_symbol_state(XAG, MMS4State.BASE_MODE, reason="x")
+        assert db.get_setting(f"scout_ok:{XAG}") == "1"
+
+
+def test_entering_scout_removes_a_stale_persisted_key():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LoggerDB(db_path=os.path.join(tmp, "l.db"))
+        db.set_setting(f"scout_ok:{XAG}", 2)                       # left behind by a crash
+        sm = MMS4StateManager(logger_db=db, trading_symbol=BTC)
+        sm.set_symbol_state(XAG, MMS4State.SCOUT_MODE, reason="stop")  # BASE -> SCOUT
+        assert db.get_setting(f"scout_ok:{XAG}") is None
+
+
+def test_invalid_env_values_fall_back_instead_of_crashing_at_import(monkeypatch):
+    from mms4tk.state_manager import _env_number
+    monkeypatch.setenv("MMS4_TEST_K", "three")
+    assert _env_number("MMS4_TEST_K", 3, int) == 3
+    monkeypatch.setenv("MMS4_TEST_K", "7")
+    assert _env_number("MMS4_TEST_K", 3, int) == 7
+    monkeypatch.delenv("MMS4_TEST_K")
+    assert _env_number("MMS4_TEST_K", 3, int) == 3
+
+
+# ── daemon wiring (real prices, SHORT, real fill vs estimate) ──────────────
+
+from unittest.mock import AsyncMock, MagicMock
+
+from mms4tk.daemon import MMS4Daemon
+from mms4tk.okx_executor import OKXExecutor
+
+
+@pytest.fixture
+def daemon_sm():
+    executor = OKXExecutor()
+    executor.exchange = MagicMock()
+    executor.exchange.markets = {XAG: {"contractSize": 0.01}}
+    executor.exchange.market = MagicMock(return_value={"contractSize": 0.01})
+    sm = MMS4StateManager(trading_symbol=BTC)
+    sm.set_symbol_state(XAG, MMS4State.SCOUT_MODE, reason="test")
+    with tempfile.TemporaryDirectory() as tmp:
+        daemon = MMS4Daemon(executor=executor, state_manager=sm,
+                            logger_db=LoggerDB(db_path=os.path.join(tmp, "d.db")), symbol=BTC)
+        yield daemon, sm, executor
+
+
+def _book(daemon, fill, entry=61.25, exit_=61.14):
+    return daemon._book_stale_close_if_executed(
+        {"id": "1", "status": "closed"}, XAG, "short", entry, exit_, 10.0, "FORCE_CLOSE", fill=fill
+    )
+
+
+def test_daemon_counts_a_short_close_from_a_real_fill(daemon_sm):
+    daemon, sm, _ = daemon_sm
+    assert _book(daemon, fill={"exit_price": 61.14})       # short 61.25 -> 61.14 = +0.18% gross
+    assert sm.get_scout_ok(XAG) == 1
+    assert sm.trade_history[-1].pnl > 0
+
+
+def test_daemon_does_not_count_a_close_without_a_real_fill(daemon_sm):
+    daemon, sm, _ = daemon_sm
+    assert _book(daemon, fill=None)                           # booked, but only as an estimate
+    assert len(sm.trade_history) == 1 and sm.get_scout_ok(XAG) == 0
+
+
+def test_daemon_real_fill_decides_not_the_candle_close(daemon_sm):
+    """The candle says +0.18% but the market close filled at a loss: the REAL fill resets."""
+    daemon, sm, _ = daemon_sm
+    _book(daemon, fill={"exit_price": 61.14})
+    assert sm.get_scout_ok(XAG) == 1
+    daemon._book_stale_close_if_executed(
+        {"id": "2"}, XAG, "short", 61.25, 61.14, 10.0, "FORCE_CLOSE", fill={"exit_price": 61.60}
+    )
+    assert sm.get_scout_ok(XAG) == 0
+
+
+def test_daemon_three_real_fills_release_the_symbol(daemon_sm):
+    daemon, sm, _ = daemon_sm
+    for _ in range(3):
+        _book(daemon, fill={"exit_price": 61.14})
+    assert sm.get_symbol_state(XAG) == MMS4State.BASE_MODE
+
+
+def test_fetch_close_fill_returns_the_order_fill(daemon_sm):
+    daemon, _, executor = daemon_sm
+    executor.fetch_last_closing_order = AsyncMock(return_value={"exit_price": 61.14, "pnl_usd": 0.1})
+    fill = asyncio.run(daemon._fetch_close_fill(XAG, "short", 123, delay_s=0))
+    assert fill["exit_price"] == 61.14
+    assert executor.fetch_last_closing_order.call_args.kwargs["min_fill_time_ms"] == 123
+
+
+def test_fetch_close_fill_retries_once_then_gives_up(daemon_sm):
+    daemon, _, executor = daemon_sm
+    executor.fetch_last_closing_order = AsyncMock(return_value=None)
+    assert asyncio.run(daemon._fetch_close_fill(XAG, "short", 123, delay_s=0)) is None
+    assert executor.fetch_last_closing_order.await_count == 2
+
+
+def test_fetch_close_fill_swallows_errors(daemon_sm):
+    daemon, _, executor = daemon_sm
+    executor.fetch_last_closing_order = AsyncMock(side_effect=RuntimeError("okx down"))
+    assert asyncio.run(daemon._fetch_close_fill(XAG, "short", 123, delay_s=0)) is None

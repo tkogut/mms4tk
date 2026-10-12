@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from enum import Enum
@@ -67,11 +68,26 @@ SCOUT_SIZE_MULT: float = float(os.getenv("MMS4_SCOUT_SIZE_MULT", "0.3"))
 #   * "clean" = gross pnl_percent above the measured round-trip cost (== net > 0). The cost is
 #     backtest_engine.ROUND_TRIP_FEE_PCT (0.0010003, measured from production); it is repeated
 #     here because state_manager must not import from the backtest;
+#   * the decision is taken only on a REAL fill price: a close whose PnL is only an estimate
+#     (`pnl_is_estimate=True`, e.g. the last closed candle) is neutral - it neither counts nor
+#     resets, because the 0.10% threshold is far below a typical intra-candle move;
 #   * a counting close that is not clean, and a STOP_LOSS, RESET the counter ("K in a row");
 #   * FORCE_CLOSE_BE / BE_ESCAPE / CLOSED_EXTERNAL and partial closes are neutral;
 #   * a full take-profit still exits immediately (unchanged).
-SCOUT_EXIT_K: int = max(1, int(os.getenv("MMS4_SCOUT_EXIT_K", "3")))
-SCOUT_MIN_GROSS_PNL_PCT: float = float(os.getenv("MMS4_SCOUT_MIN_GROSS_PNL_PCT", "0.0010003"))
+def _env_number(name: str, default: float, cast=float):
+    """Env override that falls back to `default` (with a warning) instead of crashing at import."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        logging.getLogger("mms4tk.state_manager").warning(f"Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+
+
+SCOUT_EXIT_K: int = max(1, _env_number("MMS4_SCOUT_EXIT_K", 3, int))
+SCOUT_MIN_GROSS_PNL_PCT: float = _env_number("MMS4_SCOUT_MIN_GROSS_PNL_PCT", 0.0010003)
 SCOUT_COUNTING_REASONS = frozenset({"FORCE_CLOSE", "MIDLINE_INVALIDATION"})
 _SCOUT_OK_KEY_PREFIX = "scout_ok:"
 
@@ -301,9 +317,6 @@ class MMS4StateManager:
         """Update operating state for a specific symbol without altering other symbols."""
         previous = self._symbol_states.get(symbol, MMS4State.BASE_MODE)
         self._symbol_states[symbol] = state
-        if state != previous:
-            # Every entry into / exit from SCOUT_MODE starts the clean-close count afresh.
-            self._set_scout_ok(symbol, 0, force=True)
         if symbol == self.trading_symbol:
             self._current_state = state
         if self.logger_db:
@@ -313,6 +326,11 @@ class MMS4StateManager:
                 reason=f"[{symbol}] {reason}",
                 symbol=symbol,
             )
+        if state != previous:
+            # Every entry into / exit from SCOUT_MODE starts the clean-close count afresh. Done
+            # AFTER the state is persisted: if persisting raised, the counter key must survive so
+            # a restart sees a consistent (SCOUT + its counter) pair, not SCOUT with a lost count.
+            self._set_scout_ok(symbol, 0, force=True)
 
     def get_symbol_leverage(self, symbol: str) -> float:
         """Return active leverage for specific trading symbol."""
@@ -648,8 +666,13 @@ class MMS4StateManager:
         pnl_percent: float,
         sl_percent: float = 0.0,
         trade_id: Optional[str] = None,
+        pnl_is_estimate: bool = False,
     ) -> TradeRecord:
         """Book a position close - the single entry point for every close path.
+
+        `pnl_is_estimate=True` marks a PnL derived from a price that is not the fill (e.g. the
+        last closed candle): it is still booked, but never counted toward (nor does it reset) the
+        SCOUT clean-close run.
 
         Looks the SL/TP/partial flags up from `CLOSE_REASON_FLAGS` (so the daemon and the
         backtest cannot disagree) and delegates to `record_trade`. An unknown `reason`
@@ -676,11 +699,12 @@ class MMS4StateManager:
             if flags["is_take_profit"] and not flags["is_partial"]:
                 self.on_take_profit_hit(symbol=symbol)
             raise
-        self._apply_scout_exit_rule(symbol, reason, flags, pnl_percent)
+        self._apply_scout_exit_rule(symbol, reason, flags, pnl_percent, pnl_is_estimate)
         return record
 
     def _apply_scout_exit_rule(
-        self, symbol: str, reason: str, flags: Dict[str, bool], pnl_percent: float
+        self, symbol: str, reason: str, flags: Dict[str, bool], pnl_percent: float,
+        pnl_is_estimate: bool = False,
     ) -> None:
         """E3 of #107: count clean full closes and leave SCOUT_MODE after SCOUT_EXIT_K.
 
@@ -697,6 +721,12 @@ class MMS4StateManager:
                 return  # partial closes are neutral
             if reason not in SCOUT_COUNTING_REASONS:
                 return  # FORCE_CLOSE_BE / BE_ESCAPE / CLOSED_EXTERNAL are neutral
+            if pnl_is_estimate or not math.isfinite(pnl_percent):
+                logger.info(
+                    f"SCOUT run for {symbol} unchanged: {reason} has no real fill price "
+                    f"(estimate={pnl_is_estimate}, pnl_percent={pnl_percent})."
+                )
+                return
             if pnl_percent <= SCOUT_MIN_GROSS_PNL_PCT:
                 self._set_scout_ok(symbol, 0)  # a net-losing close breaks the run
                 return

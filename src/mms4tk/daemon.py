@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from mms4tk.state_manager import (
-    MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION,
+    MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION, SCOUT_COUNTING_REASONS,
 )
 from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional, is_maintenance_locked, set_maintenance_lock
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams, HigherTimeframeAnalytics
@@ -419,9 +419,37 @@ class MMS4Daemon:
             return amount
         return _pos_contracts(active_pos) * fraction if active_pos is not None else 0.0
 
+    async def _fetch_close_fill(
+        self, symbol: str, side: str, requested_at_ms: int, attempts: int = 2, delay_s: float = 1.0
+    ) -> Optional[Dict[str, Any]]:
+        """The real fill of the close just placed (OKX order history), or None.
+
+        `requested_at_ms` (taken before the order was sent) keeps an older, unrelated close of
+        the same symbol/side from being mistaken for this one. OKX history can lag the order by
+        a moment, hence one short retry. Any failure returns None: the caller then books an
+        ESTIMATE, which the SCOUT clean-close rule treats as neutral.
+        """
+        fetch = getattr(self.executor, "fetch_last_closing_order", None)
+        if fetch is None:
+            return None
+        for attempt in range(attempts):
+            try:
+                res = fetch(symbol, side, min_fill_time_ms=requested_at_ms)
+                if inspect.isawaitable(res) or asyncio.iscoroutine(res):
+                    res = await res
+                if isinstance(res, dict) and float(res.get("exit_price") or 0.0) > 0:
+                    return res
+            except Exception as e:
+                logger.warning(f"Could not fetch the close fill for {symbol}/{side}: {e}")
+                return None
+            if attempt + 1 < attempts:
+                await asyncio.sleep(delay_s)
+        return None
+
     def _book_stale_close_if_executed(
         self, reduce_result: Any, symbol: str, side: str, entry_price: float,
         exit_price: float, contracts_closed: float, reason: str,
+        fill: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """`_book_stale_close`, but only when `reduce_position` really placed a closing
         order. A `no_position` result (the position had already gone, e.g. a stop filled
@@ -430,12 +458,16 @@ class MMS4Daemon:
         if not self._close_succeeded(reduce_result):
             logger.info(f"Stale {reason} for {symbol} {side.upper()} not booked: no closing order was placed.")
             return False
-        self._book_stale_close(symbol, side, entry_price, exit_price, contracts_closed, reason)
+        fill_price = float((fill or {}).get("exit_price") or 0.0)
+        self._book_stale_close(
+            symbol, side, entry_price, fill_price if fill_price > 0 else exit_price,
+            contracts_closed, reason, pnl_is_estimate=fill_price <= 0,
+        )
         return True
 
     def _book_stale_close(
         self, symbol: str, side: str, entry_price: float, exit_price: float,
-        contracts_closed: float, reason: str,
+        contracts_closed: float, reason: str, pnl_is_estimate: bool = True,
     ) -> None:
         """Book an Inactivity-Manager close (SPLIT_50 / FORCE_CLOSE / FORCE_CLOSE_BE /
         BE_ESCAPE) through `finalize_close`, so these paths are no longer invisible to the
@@ -456,6 +488,7 @@ class MMS4Daemon:
                 symbol=symbol, side=side, reason=reason,
                 entry_price=entry_price, exit_price=exit_price, amount=contracts_closed,
                 pnl=pnl_pct * entry_price * contracts_closed * ct_size, pnl_percent=pnl_pct,
+                pnl_is_estimate=pnl_is_estimate,
             )
         except Exception as book_err:
             logger.error(f"Failed to book stale close ({reason}) for {symbol}: {book_err}")
@@ -1702,6 +1735,7 @@ class MMS4Daemon:
                             except Exception as ratchet_err:
                                 logger.error(f"Failed to ratchet SL after SPLIT_50 for {target_symbol}: {ratchet_err}")
                     elif stale_action in (StaleAction.FORCE_CLOSE_BE, StaleAction.BE_ESCAPE, StaleAction.FORCE_CLOSE):
+                        close_requested_ms = int(time.time() * 1000) - 5000  # small clock-skew margin
                         reduce_result = await self.executor.reduce_position(
                             symbol=target_symbol, side=t_side,
                             reduction_pct=1.0, reason=stale_action.value
@@ -1715,10 +1749,16 @@ class MMS4Daemon:
                         except Exception:
                             pass
                         self._clear_addons(target_symbol, t_side)
+                        # Only a REAL fill can move the SCOUT clean-close counter (see
+                        # SCOUT_COUNTING_REASONS); without one the close is booked as an estimate.
+                        stale_fill = None
+                        if stale_action.value in SCOUT_COUNTING_REASONS and self._close_succeeded(reduce_result):
+                            stale_fill = await self._fetch_close_fill(target_symbol, t_side, close_requested_ms)
                         self._book_stale_close_if_executed(
-                            reduce_result, target_symbol, t_side, t_entry, signal.price,
+                            reduce_result, target_symbol, t_side,
+                            active_entry_price if active_entry_price > 0 else t_entry, signal.price,
                             _pos_contracts(active_pos) if active_pos is not None else 0.0,
-                            stale_action.value,
+                            stale_action.value, fill=stale_fill,
                         )
                         outcome = stale_action.value
                         details = (
