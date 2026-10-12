@@ -60,26 +60,28 @@ Replaying XAG's real closes since its 2026-10-07 stop through this table gives 1
 
 ## Progress
 
+PR: #113
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Counter state
 
-- [ ] 1.1 Add `SCOUT_EXIT_K` and `SCOUT_MIN_GROSS_PNL_PCT` constants with env overrides
-- [ ] 1.2 Add the per-symbol counter with persistence under `scout_ok:{symbol}` and restore on startup
-- [ ] 1.3 Clear the counter on every entry into or exit from SCOUT_MODE
+- [x] 1.1 Add `SCOUT_EXIT_K` and `SCOUT_MIN_GROSS_PNL_PCT` constants with env overrides — 91ae71c
+- [x] 1.2 Add the per-symbol counter with persistence under `scout_ok:{symbol}` and restore on startup — 91ae71c
+- [x] 1.3 Clear the counter on every entry into or exit from SCOUT_MODE — 91ae71c
 
 ### Phase 2: Exit rule
 
-- [ ] 2.1 Apply the counting semantics table in `finalize_close`, inside the existing safety net
-- [ ] 2.2 Exit to BASE_MODE with reason `SCOUT_EXPIRED_K` when the counter reaches K
+- [x] 2.1 Apply the counting semantics table in `finalize_close`, inside the existing safety net — 91ae71c
+- [x] 2.2 Exit to BASE_MODE with reason `SCOUT_EXPIRED_K` when the counter reaches K — 91ae71c
 
 ### Phase 3: Tests
 
-- [ ] 3.1 Tests: semantics per close type and the XAG replay (1/3 today)
-- [ ] 3.2 Tests: per-symbol isolation, restart persistence, failure safety, existing exits unchanged
-- [ ] 3.3 Test: backtest drives the same counter through `finalize_close` (parity)
+- [x] 3.1 Tests: semantics per close type and the XAG replay (1/3 today) — 91ae71c
+- [x] 3.2 Tests: per-symbol isolation, restart persistence, failure safety, existing exits unchanged — 91ae71c
+- [x] 3.3 Test: backtest drives the same counter through `finalize_close` (parity) — 91ae71c
 
 ### Phase 4: Docs and release
 
-- [ ] 4.1 Update the SCOUT contract docstring and `BACKWARD_COMPATIBILITY.md:42`
-- [ ] 4.2 Bump version to 0.48.12 in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md`
+- [x] 4.1 Update the SCOUT contract docstring and `BACKWARD_COMPATIBILITY.md:42` — 9636d8b
+- [x] 4.2 Bump version to 0.48.12 in `VERSION`, `src/mms4tk/__init__.py`, `ui_dashboard/app.py`, `CHANGELOG.md` — ffb4a92
