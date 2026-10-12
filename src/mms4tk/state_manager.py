@@ -578,18 +578,26 @@ class MMS4StateManager:
         raises ValueError: a new close path must be classified, not silently ignored.
         """
         flags = close_reason_flags(reason)
-        return self.record_trade(
-            trade_id=trade_id or f"{reason.lower()}_{symbol}_{side}_{int(time.time() * 1000)}",
-            symbol=symbol,
-            side=side,
-            entry_price=entry_price,
-            exit_price=exit_price,
-            amount=amount,
-            pnl=pnl,
-            pnl_percent=pnl_percent,
-            sl_percent=sl_percent,
-            **flags,
-        )
+        try:
+            return self.record_trade(
+                trade_id=trade_id or f"{reason.lower()}_{symbol}_{side}_{int(time.time() * 1000)}",
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                amount=amount,
+                pnl=pnl,
+                pnl_percent=pnl_percent,
+                sl_percent=sl_percent,
+                **flags,
+            )
+        except Exception:
+            # Issue #99 invariant: the exchange-side close already happened, so a FULL
+            # take-profit must restore SCOUT_MODE -> BASE_MODE even when the bookkeeping
+            # itself failed. (Idempotent: a no-op when record_trade already restored it.)
+            if flags["is_take_profit"] and not flags["is_partial"]:
+                self.on_take_profit_hit(symbol=symbol)
+            raise
 
     def get_summary(self) -> Dict[str, Any]:
         """Return dict representation of current state and metrics."""

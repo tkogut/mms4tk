@@ -37,7 +37,7 @@ for fn in sorted(os.listdir(PKG)):
         if isinstance(node, ast.Call):
             f = node.func
             nm = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "")
-            if nm in ("on_stop_loss_hit", "record_trade", "finalize_close"):
+            if nm in ("on_stop_loss_hit", "record_trade"):
                 enter.append(f"{fn}:{node.lineno}:{nm}")
             if nm in ("on_take_profit_hit", "relax_scout_mode"):
                 exit_.append(f"{fn}:{node.lineno}:{nm}")

@@ -97,3 +97,26 @@ def test_default_trade_id_is_unique_per_reason_symbol_and_call():
     a = _close(sm, "FORCE_CLOSE")
     b = _close(sm, "STALE_SPLIT_50")
     assert a.trade_id != b.trade_id
+
+
+def test_full_take_profit_still_restores_scout_when_bookkeeping_fails(monkeypatch):
+    """Issue #99: the exchange-side close already happened, so a failing ledger write must
+    not leave the symbol stuck in SCOUT_MODE. The error still propagates."""
+    sm = _sm()
+    sm.set_symbol_state(XAG, MMS4State.SCOUT_MODE, reason="test")
+    monkeypatch.setattr(sm, "record_trade", lambda **kw: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    with pytest.raises(RuntimeError, match="db down"):
+        _close(sm, "TP_AND_FLIP")
+    assert sm.get_symbol_state(XAG) == MMS4State.BASE_MODE
+
+
+def test_failed_bookkeeping_does_not_restore_scout_for_non_full_tp(monkeypatch):
+    sm = _sm()
+    sm.set_symbol_state(XAG, MMS4State.SCOUT_MODE, reason="test")
+    monkeypatch.setattr(sm, "record_trade", lambda **kw: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    for reason in ("STALE_SPLIT_50", "FORCE_CLOSE", "STOP_LOSS"):
+        with pytest.raises(RuntimeError):
+            _close(sm, reason)
+        assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE, reason
