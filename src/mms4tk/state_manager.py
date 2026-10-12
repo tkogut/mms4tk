@@ -1,4 +1,5 @@
 import os
+import time
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
@@ -88,6 +89,46 @@ class StrategyProfile(BaseModel):
     scout_override: bool = Field(default=False, description="True allows early SCOUT_MODE relaxation")
     reason: str = Field(default="Initial default profile")
     updated_at: Optional[str] = None
+
+
+# ── Close-reason classification (SSOT) ─────────────────────────────────────
+# One reason -> (is_stop_loss, is_take_profit, is_partial) table shared by the daemon and
+# the backtest, so every way a position can disappear is booked identically and a NEW
+# close path cannot silently skip the state machine. `finalize_close()` is the only
+# supported way to book a close; an unknown reason raises on purpose.
+#
+# Parity note: FORCE_CLOSE / FORCE_CLOSE_BE / BE_ESCAPE / MIDLINE_INVALIDATION are
+# deliberately "neither SL nor TP" (inactivity-driven or ambiguous exits), STALE_SPLIT_50
+# is a PARTIAL take-profit (SCOUT preserved). Changing what leaves SCOUT_MODE is a
+# separate, deliberate change (E3 of #107) - not part of this table's introduction.
+CLOSE_REASON_FLAGS: Dict[str, Dict[str, bool]] = {
+    "STOP_LOSS":            dict(is_stop_loss=True,  is_take_profit=False, is_partial=False),
+    "TP_AND_FLIP":          dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+    "STALE_SPLIT_50":       dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
+    "MIDLINE_PARTIAL_TP":   dict(is_stop_loss=False, is_take_profit=True,  is_partial=True),
+    "FORCE_CLOSE":          dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+    "FORCE_CLOSE_BE":       dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+    "BE_ESCAPE":            dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+    "D1_RANGE_TP":          dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+    "MIDLINE_FULL_TP":      dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+    "MIDLINE_INVALIDATION": dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+    # Reconciliation (position vanished from the exchange): the daemon picks the reason
+    # from the observed outcome - a genuine stop-out, a profitable non-stop close, or any
+    # other external close (neither signal).
+    "CLOSED_EXTERNAL_TP":   dict(is_stop_loss=False, is_take_profit=True,  is_partial=False),
+    "CLOSED_EXTERNAL":      dict(is_stop_loss=False, is_take_profit=False, is_partial=False),
+}
+
+
+def close_reason_flags(reason: str) -> Dict[str, bool]:
+    """Flags for a close `reason`; raises ValueError for an unknown one."""
+    try:
+        return dict(CLOSE_REASON_FLAGS[reason])
+    except KeyError:
+        raise ValueError(
+            f"Unknown close reason {reason!r}; add it to CLOSE_REASON_FLAGS "
+            f"(known: {sorted(CLOSE_REASON_FLAGS)})"
+        ) from None
 
 
 class MMS4StateManager:
@@ -516,6 +557,39 @@ class MMS4StateManager:
                 logger.warning(f"Failed to persist state metrics after trade {trade_id}: {e}")
 
         return record
+
+    def finalize_close(
+        self,
+        symbol: str,
+        side: str,
+        reason: str,
+        entry_price: float,
+        exit_price: float,
+        amount: float,
+        pnl: float,
+        pnl_percent: float,
+        sl_percent: float = 0.0,
+        trade_id: Optional[str] = None,
+    ) -> TradeRecord:
+        """Book a position close - the single entry point for every close path.
+
+        Looks the SL/TP/partial flags up from `CLOSE_REASON_FLAGS` (so the daemon and the
+        backtest cannot disagree) and delegates to `record_trade`. An unknown `reason`
+        raises ValueError: a new close path must be classified, not silently ignored.
+        """
+        flags = close_reason_flags(reason)
+        return self.record_trade(
+            trade_id=trade_id or f"{reason.lower()}_{symbol}_{side}_{int(time.time() * 1000)}",
+            symbol=symbol,
+            side=side,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            amount=amount,
+            pnl=pnl,
+            pnl_percent=pnl_percent,
+            sl_percent=sl_percent,
+            **flags,
+        )
 
     def get_summary(self) -> Dict[str, Any]:
         """Return dict representation of current state and metrics."""
