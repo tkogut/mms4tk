@@ -4,6 +4,27 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.10] - 2026-10-12
+
+### 🔥 Fixed — SCOUT_MODE Lost / Leaked Between Symbols on Restart
+- 🐛 **`state_manager.py` / `logger_db.py`**: `state_history` carried the symbol only
+  inside the free-text `reason` (`"[XAG/USDC] ..."`), and startup restored just the
+  single latest row — assigned to the **primary** symbol. After a restart a
+  non-primary symbol in SCOUT_MODE (e.g. XAG) silently returned to BASE_MODE with no
+  take-profit, and if the latest row belonged to XAG, the primary symbol (BTC) was
+  wrongly put into SCOUT_MODE.
+- 🐛 **`api.py`** (`POST /api/v1/symbols/add|update`): every pair-config edit
+  unconditionally reset the symbol to BASE_MODE, wiping an active SCOUT_MODE.
+- ✅ **Naprawa**: `state_history` gained an idempotent nullable `symbol` column
+  (legacy `"[SYM]"` rows are backfilled); `LoggerDB.save_state(symbol=)` tags every
+  write; `MMS4StateManager` rehydrates the latest state of **every** symbol in
+  `__init__` and `set_logger_db` (legacy untagged rows apply to the primary symbol
+  only when it has no tagged row); the pair-config endpoint no longer touches the
+  symbol's risk state.
+- ⚠️ **Deploy note**: additive DB migration — deploy under the maintenance lock
+  (`scripts/maintenance.py --enable` / `--disable`) after a `logs.db` backup. Stage E1
+  of the SCOUT-exit fix; the exit-path changes (E2–E5) ship separately.
+
 ## 🚀 [0.48.9] - 2026-09-24
 
 ### 🔥 Fixed — Stop-Losses Mislabeled as "BREAK-EVEN" in Trade History
