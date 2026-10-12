@@ -4,6 +4,31 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.12] - 2026-10-12
+
+### ✨ Added — SCOUT_MODE Exit After K Clean Closes (E3 of #107)
+- 🐛 **Problem**: a full take-profit (or an operator override) was the only way out of
+  SCOUT_MODE. A symbol that closes only through the Inactivity Manager (`FORCE_CLOSE`)
+  never produces one — XAG sat in SCOUT_MODE from 2026-10-07 despite repeated closes.
+- ✅ **`state_manager.py`**: a symbol now also leaves SCOUT_MODE (reason
+  `SCOUT_EXPIRED_K`) after `SCOUT_EXIT_K` (default **3**, env `MMS4_SCOUT_EXIT_K`)
+  **consecutive** clean full closes, counted per symbol in `finalize_close`:
+  - only `FORCE_CLOSE` and `MIDLINE_INVALIDATION` count;
+  - clean = gross `pnl_percent` above `SCOUT_MIN_GROSS_PNL_PCT` (default `0.0010003`, the
+    production-measured round-trip cost, env `MMS4_SCOUT_MIN_GROSS_PNL_PCT`), i.e. net > 0;
+  - a `STOP_LOSS` or a net-losing counting close **resets** the run;
+  - `FORCE_CLOSE_BE`, `BE_ESCAPE`, `CLOSED_EXTERNAL` and partial closes are neutral;
+  - a full take-profit still exits immediately, as before.
+- 💾 The counter is persisted in `system_settings` (`scout_ok:{symbol}`), restored on
+  startup for symbols still in SCOUT_MODE (garbled value → 0), and cleared on every entry
+  into / exit from SCOUT_MODE. No schema change.
+- 🔬 The backtest books through the same `finalize_close` with the same gross
+  `pnl_percent`, so the rule is modeled identically (parity test).
+- ⚠️ **Behavior**: a symbol can now return to full size and leverage without a
+  take-profit. Replaying XAG's real closes since its 2026-10-07 stop gives **1 of 3**
+  today (it is not released yet). Deploy together with a decision on stale SCOUT states
+  (see the 0.48.10 notes). `BACKWARD_COMPATIBILITY.md` documents the extended contract.
+
 ## 🚀 [0.48.11] - 2026-10-12
 
 ### ♻️ Changed — One Place That Books Every Position Close (E2 of #107)
