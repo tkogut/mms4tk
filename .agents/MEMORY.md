@@ -54,9 +54,7 @@
   `/daemon/status` → `allocation_plan`. Po `MMS4_SCOUT_STALE_ALERT_HOURS` (domyślnie 24 h)
   w SCOUT daemon wysyła alert Telegram `SCOUT_STALE` i powtarza go co tyle samo godzin
   (znacznik `scout_stale_alerted:{symbol}` w `system_settings`, kasowany przy wyjściu).
-  Ręczne zwolnienie: `POST /api/v1/strategy/profile {"scout_override": true, "symbol": ...}`
-  (jednorazowe, niezapamiętywane), `hitl_resolve` (pominięte `directional_bias`/`risk_profile`
-  zachowują obecny profil) albo `/settings/update {"scout_mode": false, "symbol": ...}`.
+  - **Operator Runbook (release SCOUT)**: `POST /api/v1/strategy/profile {"scout_override": true, "symbol": "X/USDC"}` (one-shot, relaksuje SCOUT_MODE → BASE_MODE bez trwałej modyfikacji profilu); alternatywnie `hitl_resolve` (pominięte `directional_bias`/`risk_profile` zachowują profil) lub `/settings/update {"scout_mode": false, "symbol": "X/USDC"}`.
 - **P3 V2 (SL SSOT, 2026-09-10)**: SL bazy (`base_entry_price`, -2.0%, nigdy nie
   aktualizowany uśrednieniem) jest JEDYNYM stop-lossem całej pozycji (baza+
   dokładka). Dokładka (`HIGH_RISK_ADD`) nie ma własnego SL — `closeFraction="1"`
