@@ -985,8 +985,8 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     """
     Partially update the active strategy profile configuration: only fields
     present (non-None) in the request overwrite the persisted profile, every
-    other field is left exactly as it was. If the merged scout_override is
-    True, relaxes SCOUT_MODE to BASE_MODE immediately.
+    other field is left exactly as it was. If scout_override is
+    True in the request, relaxes SCOUT_MODE to BASE_MODE immediately.
     Protected by X-MMS4-API-KEY header.
 
     Faza 6 C.1.2: previously took the full `StrategyProfile` model, so any
@@ -1000,13 +1000,16 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     merged = StrategyProfile(
         directional_bias=profile.directional_bias if profile.directional_bias is not None else current.directional_bias,
         risk_profile=profile.risk_profile if profile.risk_profile is not None else current.risk_profile,
-        scout_override=profile.scout_override if profile.scout_override is not None else current.scout_override,
+        # One-shot: scout_override=True is acted on here and never stored, or a later write
+        # (or a restart) would see a stale True; the response still echoes the request.
+        scout_override=False,
         reason=profile.reason if profile.reason is not None else current.reason,
     )
+    requested = bool(profile.scout_override)
     updated = state_manager.update_strategy_profile(merged)
-    if updated.scout_override:
+    if requested:
         state_manager.relax_scout_mode(_format_symbol(profile.symbol) if profile.symbol else None)
-    return updated
+    return updated.model_copy(update={"scout_override": requested})
 
 
 # ─── Hermes Webhook & HITL Endpoints ─────────────────────────────────────────
@@ -1073,8 +1076,14 @@ async def mark_event_dispatched(req: MarkDispatchedRequest) -> Dict[str, Any]:
 
 class HITLResolveRequest(BaseModel):
     decision: str = Field(description="SWEEP_WICK | MARUBOZU_BREAKOUT")
-    directional_bias: str = Field(default="BOTH", description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT")
-    risk_profile: str = Field(default="MODERATE", description="CONSERVATIVE | MODERATE | AGGRESSIVE")
+    directional_bias: Optional[str] = Field(
+        default=None,
+        description="BOTH | LONG_ONLY | SHORT_ONLY | FLAT. Omitted = keep the current profile value.",
+    )
+    risk_profile: Optional[str] = Field(
+        default=None,
+        description="CONSERVATIVE | MODERATE | AGGRESSIVE. Omitted = keep the current profile value.",
+    )
     reason: str = Field(default="Human-in-the-Loop decision")
     symbol: Optional[str] = Field(
         default=None,
@@ -1094,13 +1103,14 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
     - MARUBOZU_BREAKOUT → maintain SCOUT_MODE, update directional_bias accordingly
     """
     scout_override = req.decision == "SWEEP_WICK"
+    current = state_manager.strategy_profile
     profile = StrategyProfile(
-        directional_bias=req.directional_bias,
-        risk_profile=req.risk_profile,
-        scout_override=scout_override,
+        directional_bias=req.directional_bias if req.directional_bias is not None else current.directional_bias,
+        risk_profile=req.risk_profile if req.risk_profile is not None else current.risk_profile,
+        scout_override=False,  # one-shot: acted on below, never stored
         reason=f"HITL: {req.decision} — {req.reason}",
     )
-    updated = state_manager.update_strategy_profile(profile)
+    updated = state_manager.update_strategy_profile(profile).model_copy(update={"scout_override": scout_override})
     relaxed = False
     target_symbol = _format_symbol(req.symbol) if req.symbol else None
     if scout_override:
@@ -1368,6 +1378,12 @@ class SettingsUpdateRequest(BaseModel):
     leverage: Optional[float] = None
     stop_loss_pct: Optional[float] = None
     scout_mode: Optional[bool] = None
+    symbol: Optional[str] = Field(
+        default=None,
+        pattern=_SYMBOL_PATTERN,
+        max_length=32,
+        description="Symbol `scout_mode` applies to (e.g. XAG/USDC). Omitted = the primary trading symbol.",
+    )
     api_key: Optional[str] = None
     capital_split_ratio: Optional[float] = None
     max_margin_usd: Optional[float] = None
@@ -1419,8 +1435,11 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         state_manager.leverage = req.leverage  # setter clamps to [1.0, 10.0]
         db_updates["leverage"] = str(state_manager.leverage)
     if req.scout_mode is not None:
-        state_manager.scout_mode = bool(req.scout_mode)
-        db_updates["scout_mode"] = str(state_manager.scout_mode)
+        scout_target = _format_symbol(req.symbol) if req.symbol else None
+        state_manager.set_scout_mode(bool(req.scout_mode), scout_target)
+        if scout_target is None or scout_target == state_manager.trading_symbol:
+            # system_settings["scout_mode"] mirrors the primary symbol only.
+            db_updates["scout_mode"] = str(state_manager.scout_mode)
     if req.capital_split_ratio is not None:
         daemon.base_allocation = float(req.capital_split_ratio)
         daemon.addon_allocation = round(1.0 - daemon.base_allocation, 4)

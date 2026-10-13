@@ -4,6 +4,26 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.13] - 2026-10-13
+
+### ✨ Added — SCOUT_STALE alert and SCOUT visibility (E5 of #107, #119)
+- 🐛 **Problem**: ETH sat in SCOUT_MODE for 10 days without any signal, and the manual
+  SCOUT controls were either primary-symbol-only or silently reset the strategy profile.
+- ✅ **Alert**: a symbol in SCOUT_MODE longer than `MMS4_SCOUT_STALE_ALERT_HOURS`
+  (default **24**) raises a Telegram `SCOUT_STALE` alert showing the age and the clean-close
+  counter (e.g. `1/3`), repeated every 24 h while it stays in SCOUT. The last-alert time is
+  persisted (`system_settings` key `scout_stale_alerted:{symbol}`, cleared on exit), so a
+  restart neither re-fires nor loses the cadence. Checked once per daemon loop, never able to
+  interrupt trading.
+- ✅ **Visibility**: `/daemon/status` → `allocation_plan` exposes `scout_since`,
+  `scout_age_hours`, `scout_ok`, `scout_exit_k`. `scout_since` is restored after a restart from
+  the start of the symbol's current run of SCOUT rows in `state_history`.
+- 🔧 **`hitl_resolve`**: `directional_bias` / `risk_profile` are optional and keep the current
+  profile when omitted (previously they silently reset it to `BOTH` / `MODERATE`).
+- 🔧 **`scout_override` is one-shot**: acted on in the request and never stored (the response still echoes it), so it is neither carried into a later write nor restored after a restart.
+- 🔧 **`/settings/update`**: `scout_mode` accepts an optional `symbol` (omitted = primary).
+- 🧪 `tests/test_scout_stale.py` (20 tests, mutation-checked).
+
 ## 🚀 [0.48.12] - 2026-10-12
 
 ### ✨ Added — SCOUT_MODE Exit After K Clean Closes (E3 of #107)

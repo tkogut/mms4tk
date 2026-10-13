@@ -1,4 +1,4 @@
-# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.48.9, verified 2026-09-30)
+# 🧠 MMS4TK — PROJECT MEMORY & HANDOFF CONTEXT (v0.48.13, verified 2026-10-13)
 
 ## 📌 1. ENVIRONMENT & INFRASTRUCTURE
 - **Repository**: `/home/tkogut/projects/mms4tk`
@@ -48,6 +48,15 @@
   **rozmiar pozycji** (`SCOUT_SIZE_MULT=0.3`) — efektywnie ~10x mniejszy notional.
   Powrót SCOUT_MODE→BASE_MODE następuje przy pierwszym zamknięciu sklasyfikowanym
   jako `is_take_profit=True` (mechanizm wyjścia, NIE weryfikacja zysku netto).
+
+  **Widoczność i alert (#119, 0.48.13):** czas wejścia symbolu w SCOUT (`scout_since`, odtwarzany
+  z `state_history` po restarcie), `scout_age_hours`, `scout_ok` i `scout_exit_k` są w
+  `/daemon/status` → `allocation_plan`. Po `MMS4_SCOUT_STALE_ALERT_HOURS` (domyślnie 24 h)
+  w SCOUT daemon wysyła alert Telegram `SCOUT_STALE` i powtarza go co tyle samo godzin
+  (znacznik `scout_stale_alerted:{symbol}` w `system_settings`, kasowany przy wyjściu).
+  Ręczne zwolnienie: `POST /api/v1/strategy/profile {"scout_override": true, "symbol": ...}`
+  (jednorazowe, niezapamiętywane), `hitl_resolve` (pominięte `directional_bias`/`risk_profile`
+  zachowują obecny profil) albo `/settings/update {"scout_mode": false, "symbol": ...}`.
 - **P3 V2 (SL SSOT, 2026-09-10)**: SL bazy (`base_entry_price`, -2.0%, nigdy nie
   aktualizowany uśrednieniem) jest JEDYNYM stop-lossem całej pozycji (baza+
   dokładka). Dokładka (`HIGH_RISK_ADD`) nie ma własnego SL — `closeFraction="1"`

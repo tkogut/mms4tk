@@ -90,6 +90,10 @@ SCOUT_EXIT_K: int = max(1, _env_number("MMS4_SCOUT_EXIT_K", 3, int))
 SCOUT_MIN_GROSS_PNL_PCT: float = _env_number("MMS4_SCOUT_MIN_GROSS_PNL_PCT", 0.0010003)
 SCOUT_COUNTING_REASONS = frozenset({"FORCE_CLOSE", "MIDLINE_INVALIDATION"})
 _SCOUT_OK_KEY_PREFIX = "scout_ok:"
+# A symbol that stays in SCOUT_MODE this long raises a SCOUT_STALE alert (repeated every
+# SCOUT_STALE_ALERT_HOURS); the last-alert time is persisted under `scout_stale_alerted:{symbol}`.
+SCOUT_STALE_ALERT_HOURS: float = max(1.0, _env_number("MMS4_SCOUT_STALE_ALERT_HOURS", 24.0))
+_SCOUT_STALE_KEY_PREFIX = "scout_stale_alerted:"
 
 # Split of the per-symbol margin cap between the base entry and the high-risk add.
 BASE_ALLOCATION: float = float(os.getenv("MMS4_BASE_ALLOCATION", "0.70"))
@@ -214,6 +218,9 @@ class MMS4StateManager:
         # SCOUT_EXIT_K); persisted under system_settings key `scout_ok:{symbol}`.
         self._scout_ok: Dict[str, int] = {}
 
+        # Per-symbol moment the symbol entered its current run of SCOUT_MODE (UTC).
+        self._scout_since: Dict[str, datetime] = {}
+
         if self.logger_db is not None:
             self._restore_symbol_states_from_db()
             self._load_strategy_profile_from_db()
@@ -242,6 +249,39 @@ class MMS4StateManager:
         if self.trading_symbol in restored:
             self._current_state = restored[self.trading_symbol]
         self._restore_scout_counters_from_db()
+        self._restore_scout_since_from_db()
+
+    def _restore_scout_since_from_db(self) -> None:
+        """Reload when each SCOUT symbol entered SCOUT (a restart must not reset its age).
+
+        Unknown or unparsable timestamps fall back to "now": the age restarts, which only
+        delays the alert, never fires it early.
+        """
+        if self.logger_db is None:
+            return
+        for symbol, state in self._symbol_states.items():
+            if state != MMS4State.SCOUT_MODE:
+                continue
+            since = None
+            try:
+                raw = self.logger_db.get_scout_since(symbol)
+                if raw:
+                    since = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                    if since.tzinfo is None:
+                        since = since.replace(tzinfo=timezone.utc)
+            except Exception as e:
+                logger.warning(f"Could not restore SCOUT start time for {symbol}: {e}")
+            self._scout_since[symbol] = since or datetime.now(timezone.utc)
+
+    def scout_symbols(self) -> List[str]:
+        """Symbols currently in SCOUT_MODE."""
+        return [s for s, st in self._symbol_states.items() if st == MMS4State.SCOUT_MODE]
+
+    def get_scout_since(self, symbol: str) -> Optional[datetime]:
+        """When `symbol` entered its current SCOUT_MODE run; None when not in SCOUT_MODE."""
+        if self.get_symbol_state(symbol) != MMS4State.SCOUT_MODE:
+            return None
+        return self._scout_since.get(symbol)
 
     def _restore_scout_counters_from_db(self) -> None:
         """Reload the clean-close counters of symbols that are (still) in SCOUT_MODE.
@@ -331,6 +371,15 @@ class MMS4StateManager:
             # AFTER the state is persisted: if persisting raised, the counter key must survive so
             # a restart sees a consistent (SCOUT + its counter) pair, not SCOUT with a lost count.
             self._set_scout_ok(symbol, 0, force=True)
+            if state == MMS4State.SCOUT_MODE:
+                self._scout_since[symbol] = datetime.now(timezone.utc)
+            else:
+                self._scout_since.pop(symbol, None)
+            if self.logger_db is not None:
+                try:
+                    self.logger_db.delete_setting(f"{_SCOUT_STALE_KEY_PREFIX}{symbol}")
+                except Exception as e:
+                    logger.warning(f"Could not clear SCOUT_STALE marker for {symbol}: {e}")
 
     def get_symbol_leverage(self, symbol: str) -> float:
         """Return active leverage for specific trading symbol."""
@@ -507,10 +556,15 @@ class MMS4StateManager:
     @scout_mode.setter
     def scout_mode(self, enabled: bool) -> None:
         """Force SCOUT_MODE on/off for the primary symbol."""
+        self.set_scout_mode(enabled)
+
+    def set_scout_mode(self, enabled: bool, symbol: Optional[str] = None) -> None:
+        """Force SCOUT_MODE on/off for `symbol` (default: the primary symbol)."""
+        target_sym = symbol or self.trading_symbol
         if enabled:
-            self.set_symbol_state(self.trading_symbol, MMS4State.SCOUT_MODE, reason="SCOUT_MODE forced manually")
+            self.set_symbol_state(target_sym, MMS4State.SCOUT_MODE, reason="SCOUT_MODE forced manually")
         else:
-            self.relax_scout_mode()
+            self.relax_scout_mode(target_sym)
 
     def save_state(self, reason: str = "") -> None:
         """Persist the current state snapshot to logger_db (no-op without a DB attached)."""
