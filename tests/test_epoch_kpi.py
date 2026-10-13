@@ -122,8 +122,7 @@ def test_get_kpi_summary_since_after_all_trades_returns_the_empty_shape(seeded_d
 # ── backward compatibility ───────────────────────────────────────────────────
 
 def test_get_kpi_summary_without_since_is_byte_for_byte_unchanged(seeded_db):
-    """Regression guard for every pre-A2 caller (api.py, ui_dashboard/app.py,
-    trade_sync tests): omitting the parameter, and passing it as None explicitly,
+    """Regression guard for every pre-A2 caller (api.py, trade_sync tests): omitting the parameter, and passing it as None explicitly,
     must both mean 'the whole history' and produce an identical dict."""
     implicit = seeded_db.get_kpi_summary()
     explicit_none = seeded_db.get_kpi_summary(since=None)
