@@ -1,7 +1,8 @@
 """
 Issue #72: every connection to logs.db must enable WAL mode and set a real
 busy_timeout, since the file is opened concurrently by LoggerDB
-(antigravity_core), hermes_webhook.py, and ui_dashboard/app.py.
+(antigravity_core) and hermes_webhook.py (the legacy Streamlit ui_dashboard/app.py, once a third
+opener, has been removed).
 """
 import os
 

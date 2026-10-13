@@ -26,11 +26,12 @@
 
 ## 🤖 2. SWARM GOVERNANCE & SAFETY RULES
 - **Triad Roles**: Coordinator (plans & git push), Builder (atomic edits in isolated worktree `tmp/worktrees/`), Auditor (read-only verification).
-- **Mandatory Versioning (SSOT 4-file sync)** — every commit that ships a release MUST increment version identically in:
+- **Mandatory Versioning (SSOT 3-file sync)** — every commit that ships a release MUST increment version identically in:
   1. `VERSION`
   2. `src/mms4tk/__init__.py` (`__version__`)
-  3. `ui_dashboard/app.py` (`APP_VERSION`)
-  4. `CHANGELOG.md`
+  3. `CHANGELOG.md`
+
+  (2026-10-13: `ui_dashboard/app.py` (`APP_VERSION`) was dropped from this rule — the legacy Streamlit dashboard was removed; production serves the React/Vite build via nginx.)
 - **Zero-Loss Maintenance Directive**: lock before tests/deploy (`python3 scripts/maintenance.py --enable`), release after verification (`--disable`).
 - **Handshakes**: Builder handshake in `.agents/swarm/<id>_builder_handshake.json` after each unit of work.
 - **Test isolation**: `tests/conftest.py` patches `OKXExecutor` at the CLASS level (autouse) so no test ever makes a real OKX network call — escape hatch `@pytest.mark.allow_real_okx_network` for a deliberate integration test against a faked `.exchange`, never real network.
