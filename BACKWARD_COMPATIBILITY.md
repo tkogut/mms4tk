@@ -44,6 +44,8 @@ Defines the tool-call surface the external Hermes ops assistant invokes. A param
 
   **Extended by #119 (0.48.13):** `/api/v1/hermes/hitl_resolve` no longer resets the strategy profile when `directional_bias` / `risk_profile` are omitted (they were silently forced to `BOTH` / `MODERATE`; now they are optional and keep the current value, so callers that relied on the implicit reset must send them explicitly). `scout_override` is one-shot: it is never carried over from the stored profile into a later write. `/api/v1/settings/update` accepts an optional `symbol` for `scout_mode` (omitted = primary symbol, as before). `allocation_plan` in `/daemon/status` gains `scout_since`, `scout_age_hours`, `scout_ok`, `scout_exit_k` (additive). New env `MMS4_SCOUT_STALE_ALERT_HOURS` (default 24) and `system_settings` key `scout_stale_alerted:{symbol}`; no schema change.
 
+  **Extended by #122 (0.48.14):** `/api/v1/stats/pnl` (and `since_epoch`) gain the additive keys `profit_factor_net`, `average_rr_net`, `max_drawdown_net_usd`, `max_drawdown_net_pct`. The existing keys (`win_rate`, `profit_factor`, `max_drawdown*`, `average_rr`, `realized_pnl`) keep their GROSS meaning; only the dashboard now displays the net variants. No schema change.
+
 ## Required path to change any of the above
 
 1. State explicitly in the PR description which protected surface is touched and why.

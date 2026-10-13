@@ -4,6 +4,25 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.14] - 2026-10-13
+
+### 🐛 Fixed — Dashboard showed gross PnL as "Netto" (#122)
+- 🐛 **Problem**: the dashboard's main number (labelled "Netto + uPnL") was the realized
+  **gross** PnL plus uPnL, and Win Rate / Profit Factor / Max Drawdown were computed on
+  gross, so fees were invisible. Audit of 06-13.10 (59 trades): gross -0.04 USD, fees 5.84,
+  **net -5.89**; the dashboard derived win rate 75.9 % / PF 0.99 / MDD 4.75 instead of the
+  real 27.6 % / 0.27 / 7.49.
+- ✅ **`logger_db.get_kpi_summary`**: new net-of-fees measures `profit_factor_net`,
+  `average_rr_net`, `max_drawdown_net_usd`, `max_drawdown_net_pct` (additive; every existing
+  key keeps its gross meaning). `/api/v1/stats/pnl` exposes them at top level and in
+  `since_epoch` (they had to be added to `PnLResponse` / `EpochKpiBlock`, which filter
+  unknown keys).
+- ✅ **`AggregatedPnLCard.jsx`**: hero value = net realized + uPnL; Realized, Win Rate,
+  Profit Factor, Max Drawdown tiles show net (labelled "netto"); gross and fees stay visible
+  in the hero sub-line. Falls back to the old fields when the API is older.
+- 🧪 `tests/test_kpi_net.py` (5 tests, mutation-checked).
+- ⚠️ Deploy needs both `antigravity_core` (API) and `ui_dashboard` (new bundle) rebuilt.
+
 ## 🚀 [0.48.13] - 2026-10-13
 
 ### ✨ Added — SCOUT_STALE alert and SCOUT visibility (E5 of #107, #119)

@@ -15,22 +15,35 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
     return acc + (Number(p.notional_usd || 0) / lev);
   }, 0);
 
-  const totalCombinedPnl = realizedPnl + totalUnrealizedPnl;
+  // Net of fees: the hero number must be what the account actually earned.
+  const totalCombinedPnl = netRealizedPnl + totalUnrealizedPnl;
   const freeBalance = Number(statsData?.free_balance ?? statsData?.free_margin ?? 0);
   const totalEquity = freeBalance + totalMarginUsd + totalUnrealizedPnl;
 
   const totalTrades = statsData?.total_trades || 0;
   const hasTraded = totalTrades > 0;
-  const winRate = hasTraded && statsData?.win_rate !== undefined ? Number(statsData.win_rate).toFixed(1) : '0.0';
-  const profitFactor = hasTraded && statsData?.profit_factor !== undefined ? Number(statsData.profit_factor).toFixed(2) : '0.00';
-  const maxDdUsd = hasTraded && statsData?.max_drawdown_usd !== undefined
-    ? Number(statsData.max_drawdown_usd).toFixed(2)
-    : (hasTraded && statsData?.max_drawdown !== undefined ? Number(statsData.max_drawdown).toFixed(2) : '0.00');
+  const winRateSource = statsData?.net_win_rate_pct ?? statsData?.win_rate;
+  const winRate = hasTraded && winRateSource !== undefined ? Number(winRateSource).toFixed(1) : '0.0';
+  const profitFactorSource = statsData?.profit_factor_net ?? statsData?.profit_factor;
+  const profitFactor = hasTraded && profitFactorSource !== undefined ? Number(profitFactorSource).toFixed(2) : '0.00';
+  const maxDdSource = statsData?.max_drawdown_net_usd ?? statsData?.max_drawdown_usd ?? statsData?.max_drawdown;
+  const maxDdUsd = hasTraded && maxDdSource !== undefined ? Number(maxDdSource).toFixed(2) : '0.00';
   const maxDdPct = hasTraded && Number(statsData?.max_drawdown_pct || 0) > 0
     ? Number(statsData.max_drawdown_pct).toFixed(2)
     : null;
-  const avgRr = hasTraded && statsData?.average_rr !== undefined ? Number(statsData.average_rr).toFixed(2) : '0.00';
+  const avgRrSource = statsData?.average_rr_net ?? statsData?.average_rr;
+  const avgRr = hasTraded && avgRrSource !== undefined ? Number(avgRrSource).toFixed(2) : '0.00';
   const isMock = Boolean(statsData?.is_mock);
+
+  // Tile colours follow the (net) result instead of being fixed: green only when it is actually good.
+  const winRateNum = Number(winRateSource);
+  const winRateColor = !hasTraded || !Number.isFinite(winRateNum)
+    ? 'text-slate-300'
+    : winRateNum >= 50 ? 'text-emerald-400' : winRateNum >= 40 ? 'text-amber-400' : 'text-rose-400';
+  const profitFactorNum = Number(profitFactorSource);
+  const profitFactorColor = !hasTraded || !Number.isFinite(profitFactorNum)
+    ? 'text-slate-300'
+    : profitFactorNum >= 1 ? 'text-emerald-400' : 'text-rose-400';
 
   // Return on capital % estimation
   const returnPct = totalEquity > 0
@@ -58,7 +71,7 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
 
     if (points.length < 2) {
       // Synthesize 4 anchor points if trades history is scarce
-      points = [0, realizedPnl * 0.4, realizedPnl * 0.8, totalCombinedPnl];
+      points = [0, netRealizedPnl * 0.4, netRealizedPnl * 0.8, totalCombinedPnl];
     }
 
     const min = Math.min(...points, 0);
@@ -77,7 +90,7 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
     const areaD = coords.length > 0 ? `M ${coords.join(' L ')} L ${width - 3},${height} L 3,${height} Z` : '';
 
     return { pathD, areaD, isUp: (points[points.length - 1] >= points[0]) };
-  }, [tradesHistory, realizedPnl, totalCombinedPnl]);
+  }, [tradesHistory, netRealizedPnl, totalCombinedPnl]);
 
   return (
     <div className="bg-slate-900/95 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-xl backdrop-blur-md">
@@ -112,7 +125,9 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
             </div>
 
             <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2 pt-0.5">
-              <span>Realized: <b className="text-slate-200">${realizedPnl.toFixed(2)}</b></span>
+              <span>Realized netto: <b className="text-slate-200">${netRealizedPnl.toFixed(2)}</b></span>
+              <span>·</span>
+              <span>Brutto: <b className="text-slate-400">${realizedPnl.toFixed(2)}</b></span>
               <span>·</span>
               <span>Prowizje: <b className="text-slate-400">-${totalFees.toFixed(2)}</b></span>
               <span>·</span>
@@ -216,28 +231,28 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800/60 rounded px-2.5 py-1.5 flex items-center justify-between">
-          <div className="text-[10px] text-slate-400 font-mono">Realized PnL</div>
-          <div className={`text-xs font-bold font-mono tabular-nums text-right ${realizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {formatSignedUsd(realizedPnl)}
+          <div className="text-[10px] text-slate-400 font-mono">Realized PnL (netto)</div>
+          <div className={`text-xs font-bold font-mono tabular-nums text-right ${netRealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {formatSignedUsd(netRealizedPnl)}
           </div>
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800/60 rounded px-2.5 py-1.5 flex items-center justify-between">
-          <div className="text-[10px] text-slate-400 font-mono">Win Rate</div>
-          <div className="text-xs font-bold font-mono tabular-nums text-emerald-400 text-right">
+          <div className="text-[10px] text-slate-400 font-mono">Win Rate (netto)</div>
+          <div className={`text-xs font-bold font-mono tabular-nums text-right ${winRateColor}`}>
             {hasTraded ? `${winRate}%` : '0.0%'}
           </div>
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800/60 rounded px-2.5 py-1.5 flex items-center justify-between">
-          <div className="text-[10px] text-slate-400 font-mono">Profit Factor</div>
-          <div className="text-xs font-bold font-mono tabular-nums text-blue-400 text-right">
+          <div className="text-[10px] text-slate-400 font-mono">Profit Factor (netto)</div>
+          <div className={`text-xs font-bold font-mono tabular-nums text-right ${profitFactorColor}`}>
             {hasTraded ? profitFactor : '0.00'}
           </div>
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800/60 rounded px-2.5 py-1.5 flex items-center justify-between">
-          <div className="text-[10px] text-slate-400 font-mono">Max Drawdown</div>
+          <div className="text-[10px] text-slate-400 font-mono">Max Drawdown (netto)</div>
           <div className="text-xs font-bold font-mono tabular-nums text-rose-400 text-right">
             {hasTraded ? `$${maxDdUsd}` : '$0.00'}
           </div>

@@ -228,6 +228,10 @@ class EpochKpiBlock(BaseModel):
     max_drawdown_usd: float = Field(default=0.0)
     max_drawdown_pct: float = Field(default=0.0)
     average_rr: float = Field(default=0.0)
+    profit_factor_net: float = Field(default=0.0, description="Profit factor on net-of-fees PnL (profit_factor is gross)")
+    average_rr_net: float = Field(default=0.0, description="Average R:R on net-of-fees PnL (average_rr is gross)")
+    max_drawdown_net_usd: float = Field(default=0.0, description="Max drawdown in USD on the net-of-fees curve")
+    max_drawdown_net_pct: float = Field(default=0.0, description="Max drawdown on the net-of-fees curve as % of the equity peak; 0.0 unless a starting balance is known (the stats endpoint passes none, like max_drawdown_pct)")
 
 
 class PnLResponse(BaseModel):
@@ -243,6 +247,10 @@ class PnLResponse(BaseModel):
     profit_factor: float = Field(default=0.0, description="Profit factor ratio")
     max_drawdown: float = Field(default=0.0, description="Max Drawdown in USD (see max_drawdown_pct for the ratio)")
     average_rr: float = Field(default=0.0, description="Average Risk to Reward ratio")
+    profit_factor_net: float = Field(default=0.0, description="Profit factor on net-of-fees PnL (profit_factor is gross)")
+    average_rr_net: float = Field(default=0.0, description="Average R:R on net-of-fees PnL (average_rr is gross)")
+    max_drawdown_net_usd: float = Field(default=0.0, description="Max drawdown in USD on the net-of-fees curve")
+    max_drawdown_net_pct: float = Field(default=0.0, description="Max drawdown on the net-of-fees curve as % of the equity peak; 0.0 unless a starting balance is known (the stats endpoint passes none, like max_drawdown_pct)")
     free_balance: float = Field(default=0.0, description="Free available USDC balance")
     btc_balance: float = Field(default=0.0, description="BTC asset balance")
     is_mock: bool = Field(default=False, description="True if OKX API is operating in mock mode without live credentials")
@@ -565,6 +573,10 @@ async def get_pnl() -> Dict[str, Any]:
         "max_drawdown_usd": epoch_kpi.get("max_drawdown_usd", 0.0),
         "max_drawdown_pct": epoch_kpi.get("max_drawdown_pct", 0.0),
         "average_rr": epoch_kpi.get("average_rr", 0.0),
+        "profit_factor_net": epoch_kpi.get("profit_factor_net", 0.0),
+        "average_rr_net": epoch_kpi.get("average_rr_net", 0.0),
+        "max_drawdown_net_usd": epoch_kpi.get("max_drawdown_net_usd", 0.0),
+        "max_drawdown_net_pct": epoch_kpi.get("max_drawdown_net_pct", 0.0),
     }
 
     return {
@@ -582,6 +594,10 @@ async def get_pnl() -> Dict[str, Any]:
         "max_drawdown_pct": kpi.get("max_drawdown_pct", 0.0),
         "max_drawdown_usd": kpi.get("max_drawdown_usd", 0.0),
         "average_rr": kpi.get("average_rr", 0.0),
+        "profit_factor_net": kpi.get("profit_factor_net", 0.0),
+        "average_rr_net": kpi.get("average_rr_net", 0.0),
+        "max_drawdown_net_usd": kpi.get("max_drawdown_net_usd", 0.0),
+        "max_drawdown_net_pct": kpi.get("max_drawdown_net_pct", 0.0),
         "free_balance": free_usdc,
         "btc_balance": btc_bal,
         "is_mock": is_mock,
