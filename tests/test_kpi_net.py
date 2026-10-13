@@ -73,3 +73,35 @@ def test_stats_endpoint_exposes_net_keys(db, monkeypatch, empty_symbols_store):
     # gross keys unchanged in the same payload
     assert data["profit_factor"] == pytest.approx(1.62, abs=0.011)
     assert data["realized_net_pnl_usd"] == pytest.approx(-0.25)
+
+
+def test_net_falls_back_to_gross_minus_fee_when_pnl_net_is_missing(tmp_path):
+    d = LoggerDB(os.path.join(tmp_path, "fallback.db"))
+    d.upsert_closed_trade(
+        trade_id="f1", timestamp="2026-10-01T10:00:00+00:00", symbol="XAG/USDC", side="LONG",
+        entry_price=60.0, exit_price=61.0, amount=1.0, pnl_usd=0.30, pnl_pct=0.001,
+        is_win=True, fee_usd=0.10, pnl_net_usd=None,
+    )
+    d.upsert_closed_trade(
+        trade_id="f2", timestamp="2026-10-02T10:00:00+00:00", symbol="XAG/USDC", side="LONG",
+        entry_price=60.0, exit_price=59.0, amount=1.0, pnl_usd=-0.10, pnl_pct=-0.001,
+        is_win=False, fee_usd=0.10, pnl_net_usd=None,
+    )
+    kpi = d.get_kpi_summary()
+    # the DB layer defaults a missing net to gross - fee, so net = +0.20 and -0.20
+    assert kpi["profit_factor_net"] == pytest.approx(1.0)
+    assert kpi["max_drawdown_net_usd"] == pytest.approx(0.20)
+
+
+def test_all_net_wins_hit_the_profit_factor_cap(tmp_path):
+    d = LoggerDB(os.path.join(tmp_path, "cap.db"))
+    for i in range(2):
+        d.upsert_closed_trade(
+            trade_id=f"w{i}", timestamp=f"2026-10-0{i + 1}T10:00:00+00:00", symbol="XAG/USDC", side="LONG",
+            entry_price=60.0, exit_price=61.0, amount=1.0, pnl_usd=0.50, pnl_pct=0.01,
+            is_win=True, fee_usd=0.10, pnl_net_usd=0.40,
+        )
+    kpi = d.get_kpi_summary()
+    assert kpi["profit_factor_net"] == 99.0
+    assert kpi["average_rr_net"] == 99.0
+    assert kpi["max_drawdown_net_usd"] == 0.0

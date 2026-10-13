@@ -231,7 +231,7 @@ class EpochKpiBlock(BaseModel):
     profit_factor_net: float = Field(default=0.0, description="Profit factor on net-of-fees PnL (profit_factor is gross)")
     average_rr_net: float = Field(default=0.0, description="Average R:R on net-of-fees PnL (average_rr is gross)")
     max_drawdown_net_usd: float = Field(default=0.0, description="Max drawdown in USD on the net-of-fees curve")
-    max_drawdown_net_pct: float = Field(default=0.0, description="Max drawdown on the net-of-fees curve as % of the equity peak")
+    max_drawdown_net_pct: float = Field(default=0.0, description="Max drawdown on the net-of-fees curve as % of the equity peak; 0.0 unless a starting balance is known (the stats endpoint passes none, like max_drawdown_pct)")
 
 
 class PnLResponse(BaseModel):
@@ -250,7 +250,7 @@ class PnLResponse(BaseModel):
     profit_factor_net: float = Field(default=0.0, description="Profit factor on net-of-fees PnL (profit_factor is gross)")
     average_rr_net: float = Field(default=0.0, description="Average R:R on net-of-fees PnL (average_rr is gross)")
     max_drawdown_net_usd: float = Field(default=0.0, description="Max drawdown in USD on the net-of-fees curve")
-    max_drawdown_net_pct: float = Field(default=0.0, description="Max drawdown on the net-of-fees curve as % of the equity peak")
+    max_drawdown_net_pct: float = Field(default=0.0, description="Max drawdown on the net-of-fees curve as % of the equity peak; 0.0 unless a starting balance is known (the stats endpoint passes none, like max_drawdown_pct)")
     free_balance: float = Field(default=0.0, description="Free available USDC balance")
     btc_balance: float = Field(default=0.0, description="BTC asset balance")
     is_mock: bool = Field(default=False, description="True if OKX API is operating in mock mode without live credentials")

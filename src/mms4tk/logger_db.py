@@ -1152,7 +1152,6 @@ class LoggerDB:
             if float(t.get("pnl_net_usd") if t.get("pnl_net_usd") is not None else (t["pnl_usd"] - float(t.get("fee_usd") or 0.0))) > 0
         ]
         net_win_rate = (len(net_wins) / total_pnl_count * 100.0) if total_pnl_count > 0 else 0.0
-        net_win_rate = (len(net_wins) / total_pnl_count * 100.0) if total_pnl_count > 0 else 0.0
 
         # The ratios above (win_rate, profit_factor, average_rr, max_drawdown*) are GROSS and
         # keep their meaning; these are the same measures on the net-of-fees result.
