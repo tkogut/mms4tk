@@ -1089,6 +1089,10 @@ class LoggerDB:
                 "realized_gross_pnl_usd": 0.0,
                 "total_fees_usd": 0.0,
                 "realized_net_pnl_usd": 0.0,
+                "profit_factor_net": 0.0,
+                "average_rr_net": 0.0,
+                "max_drawdown_net_usd": 0.0,
+                "max_drawdown_net_pct": 0.0,
             }
 
         # Filter out zero-PnL entry fills to get actual closed round-trip trades with realized PnL
@@ -1148,6 +1152,36 @@ class LoggerDB:
             if float(t.get("pnl_net_usd") if t.get("pnl_net_usd") is not None else (t["pnl_usd"] - float(t.get("fee_usd") or 0.0))) > 0
         ]
         net_win_rate = (len(net_wins) / total_pnl_count * 100.0) if total_pnl_count > 0 else 0.0
+        net_win_rate = (len(net_wins) / total_pnl_count * 100.0) if total_pnl_count > 0 else 0.0
+
+        # The ratios above (win_rate, profit_factor, average_rr, max_drawdown*) are GROSS and
+        # keep their meaning; these are the same measures on the net-of-fees result.
+        net_values = [
+            float(t.get("pnl_net_usd") if t.get("pnl_net_usd") is not None else (t["pnl_usd"] - float(t.get("fee_usd") or 0.0)))
+            for t in closed_pnl_trades
+        ]
+        net_profit = sum(v for v in net_values if v > 0)
+        net_loss = abs(sum(v for v in net_values if v < 0))
+        n_net_wins = sum(1 for v in net_values if v > 0)
+        n_net_losses = sum(1 for v in net_values if v < 0)
+        profit_factor_net = round(net_profit / net_loss, 2) if net_loss > 0 else (99.0 if net_profit > 0 else 0.0)
+        net_avg_win = net_profit / n_net_wins if n_net_wins else 0.0
+        net_avg_loss = net_loss / n_net_losses if n_net_losses else 0.0
+        average_rr_net = round(net_avg_win / net_avg_loss, 2) if net_avg_loss > 0 else (99.0 if net_avg_win > 0 else 0.0)
+
+        net_equity = float(initial_equity)
+        net_peak = net_equity
+        max_dd_net_usd = 0.0
+        max_dd_net_pct = 0.0
+        for v in net_values:
+            net_equity += v
+            if net_equity > net_peak:
+                net_peak = net_equity
+            dd = net_peak - net_equity
+            if dd > max_dd_net_usd:
+                max_dd_net_usd = dd
+            if initial_equity > 0 and net_peak > 0:
+                max_dd_net_pct = max(max_dd_net_pct, (dd / net_peak) * 100.0)
 
         return {
             "total_trades": total_pnl_count,
@@ -1166,6 +1200,10 @@ class LoggerDB:
             "realized_gross_pnl_usd": round(total_pnl_usd, 2),
             "total_fees_usd": round(total_fees_usd, 4),
             "realized_net_pnl_usd": round(realized_net_pnl_usd, 2),
+            "profit_factor_net": profit_factor_net,
+            "average_rr_net": average_rr_net,
+            "max_drawdown_net_usd": round(max_dd_net_usd, 2),
+            "max_drawdown_net_pct": round(max_dd_net_pct, 2),
         }
 
     def log_cycle(
