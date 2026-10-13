@@ -269,3 +269,22 @@ def _isolate_system_settings():
         }, updated_by="test_isolation_cleanup")
     api_daemon.total_max_portfolio_margin_usd = 0.0
 
+
+@pytest.fixture
+def empty_symbols_store():
+    """Start a test with an EMPTY per-symbol configuration store and restore it afterwards.
+
+    `MMS4Daemon.plan_allocation` takes the per-symbol margin from `configured_symbols_store`
+    (loaded from symbols.json; `allocation_usd: 100.0` for BTC/ETH in this repo) and overrides the
+    daemon's own `trade_amount_usd`. A test that sizes from the constructor argument therefore
+    must not see the real configuration - otherwise it gets 10x the notional it expects (#109).
+    """
+    from mms4tk.api import configured_symbols_store
+
+    snapshot = {k: dict(v) if isinstance(v, dict) else v for k, v in configured_symbols_store.items()}
+    configured_symbols_store.clear()
+    try:
+        yield configured_symbols_store
+    finally:
+        configured_symbols_store.clear()
+        configured_symbols_store.update(snapshot)

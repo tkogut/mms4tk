@@ -9,6 +9,9 @@ from mms4tk.daemon import MMS4Daemon
 from mms4tk.analytics import SignalResult
 from mms4tk.logger_db import LoggerDB
 
+# These tests size from the daemon's own `trade_amount_usd`, not from symbols.json (#109).
+pytestmark = pytest.mark.usefixtures("empty_symbols_store")
+
 
 def test_daemon_70_30_capital_split_calculation(tmp_path):
     """Verify base order takes 70% ($7.00) and high risk add takes 30% ($3.00) of $10.00 cap."""
