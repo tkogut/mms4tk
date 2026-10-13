@@ -6,15 +6,25 @@ duplicated line left it unparseable from 2026-08-19 until #108, and nothing noti
 Parsing (not importing: Streamlit is not installed here) is enough to catch that class of mistake.
 """
 import ast
+import os
 from pathlib import Path
 
 import pytest
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "ui_dashboard"
-FILES = sorted(
-    p for p in DASHBOARD.rglob("*.py")
-    if not {"node_modules", "dist"} & set(p.relative_to(DASHBOARD).parts)
-)
+SKIP_DIRS = {"node_modules", "dist"}
+
+
+def _python_files():
+    """All *.py under ui_dashboard/, pruning node_modules/dist while walking (not after)."""
+    found = []
+    for root, dirnames, filenames in os.walk(DASHBOARD):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        found += [Path(root) / f for f in filenames if f.endswith(".py")]
+    return sorted(found)
+
+
+FILES = _python_files()
 
 
 def test_dashboard_has_python_files_to_check():
