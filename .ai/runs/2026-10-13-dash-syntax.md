@@ -34,14 +34,16 @@ Branch: `fix/dash-syntax` · Base: `main` @ 2d3dd7d · Issue: #108 · Role: Buil
 
 ## Progress
 
+PR: #116
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix and guard
 
-- [ ] 1.1 Remove the duplicated `""", unsafe_allow_html=True)` line from `ui_dashboard/app.py`
-- [ ] 1.2 Add `tests/test_ui_dashboard_syntax.py` parsing every Python file under `ui_dashboard/`
+- [x] 1.1 Remove the duplicated `""", unsafe_allow_html=True)` line from `ui_dashboard/app.py` — da10697
+- [x] 1.2 Add `tests/test_ui_dashboard_syntax.py` parsing every Python file under `ui_dashboard/` — 0bb114e
 
 ### Phase 2: Validate
 
-- [ ] 2.1 Full suite including slow: all green; the new test fails on the unfixed file
-- [ ] 2.2 Confirm only `ui_dashboard/app.py` (one line) and the new test changed; no `src/` or version change
+- [x] 2.1 Full suite including slow: all green; the new test fails on the unfixed file — 0bb114e
+- [x] 2.2 Confirm only `ui_dashboard/app.py` (one line) and the new test changed; no `src/` or version change — 0bb114e
