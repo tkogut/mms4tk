@@ -32,35 +32,35 @@ A symbol stuck in SCOUT_MODE for 24 h raises a Telegram alert (repeated every 24
 
 ## Progress
 
-PR: pending
+PR: #120
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: State tracking
 
-- [ ] 1.1 `LoggerDB.get_scout_since` + `scout_since` tracking/restore in `MMS4StateManager`
-- [ ] 1.2 Expose `scout_since/scout_age_hours/scout_ok/scout_exit_k` in `plan_allocation`
+- [x] 1.1 `LoggerDB.get_scout_since` + `scout_since` tracking/restore in `MMS4StateManager` — f88c6c2
+- [x] 1.2 Expose `scout_since/scout_age_hours/scout_ok/scout_exit_k` in `plan_allocation` — f88c6c2
 
 ### Phase 2: Alert
 
-- [ ] 2.1 `SCOUT_STALE_ALERT_HOURS` + `Daemon._check_scout_stale_alert` with persisted repeat key
-- [ ] 2.2 Call the check from `run_loop` (exception-safe)
+- [x] 2.1 `SCOUT_STALE_ALERT_HOURS` + `Daemon._check_scout_stale_alert` with persisted repeat key — f88c6c2
+- [x] 2.2 Call the check from `run_loop` (exception-safe) — f88c6c2
 
 ### Phase 3: E4 tail
 
-- [ ] 3.1 `hitl_resolve`: Optional + merge `directional_bias`/`risk_profile`; one-shot `scout_override`
-- [ ] 3.2 `/settings/update` `scout_mode` with optional `symbol`
+- [x] 3.1 `hitl_resolve`: Optional + merge `directional_bias`/`risk_profile`; one-shot `scout_override` — f88c6c2
+- [x] 3.2 `/settings/update` `scout_mode` with optional `symbol` — f88c6c2
 
 ### Phase 4: Tests
 
-- [ ] 4.1 Tests: scout_since restore, alert threshold/repeat/clear, plan_allocation fields
-- [ ] 4.2 Tests: hitl_resolve merge + one-shot, settings symbol
+- [x] 4.1 Tests: scout_since restore, alert threshold/repeat/clear, plan_allocation fields — f88c6c2
+- [x] 4.2 Tests: hitl_resolve merge + one-shot, settings symbol — f88c6c2
 
 ### Phase 5: Docs & release
 
-- [ ] 5.1 Update `.agents/MEMORY.md` SCOUT paragraph, `BACKWARD_COMPATIBILITY.md`, runbook note
-- [ ] 5.2 Version bump 0.48.13 (`VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`)
+- [x] 5.1 Update `.agents/MEMORY.md` SCOUT paragraph, `BACKWARD_COMPATIBILITY.md`, runbook note — b0f9b07
+- [x] 5.2 Version bump 0.48.13 (`VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`) — b0f9b07
 
 ### Phase 6: Validate
 
-- [ ] 6.1 Full suite including slow: 0 failures; handshake generated and validated
+- [x] 6.1 Full suite including slow: 0 failures; handshake generated and validated — b0f9b07
