@@ -1,0 +1,13 @@
+{
+  "conversation_id": "cd16d832-93c0-44c4-ab58-8d7d77823ce4-t109",
+  "role": "Builder Agent",
+  "status": "SUCCESS",
+  "files_modified": [
+    "tests/conftest.py",
+    "tests/test_position_sizing.py",
+    "tests/test_max_margin_allocation.py"
+  ],
+  "math_consistency_check": "N/A",
+  "timestamp": "2026-10-13T16:00:25Z",
+  "notes": "Isolate 2 sizing tests from symbols.json store (PR 114, issue 109). 667 passed, 0 failed; test-only."
+}
