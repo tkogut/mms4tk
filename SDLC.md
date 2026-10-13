@@ -45,7 +45,7 @@ graph TD
     that link to it (`README.md`'s Documentation table, `.agents/MEMORY.md`,
     any hardcoded path elsewhere — grep before assuming nothing points to it).
   - Bumps `VERSION` → `CHANGELOG.md` entry (already mandatory per
-    `.agents/MEMORY.md`'s SSOT 4-file sync rule; restated here as a Handshake
+    `.agents/MEMORY.md`'s SSOT 3-file sync rule; restated here as a Handshake
     gate, not just a convention).
   A trivial fix/refactor with no behavior, default, or file-topology change
   needs none of this — don't turn every commit into a documentation exercise.
