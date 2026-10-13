@@ -40,6 +40,7 @@ Defines the tool-call surface the external Hermes ops assistant invokes. A param
 
 - **P3 V2**: the stop-loss is always anchored to `base_entry_price`, never `avgPx`; an addon (`HIGH_RISK_ADD`) never carries its own independent SL. Reverting to a per-addon SL reopens a closed, previously-buggy design (see `task.md` archive, P3 V2 history) — treat any PR doing this as a protected-contract violation requiring explicit sign-off, not just a code review comment.
 - **SCOUT_MODE's documented contract** (`state_manager.py:98-99` docstring): "SCOUT_MODE -> BASE_MODE: Triggered on first Take-Profit (TP) hit." Any change that makes a symbol unable to exit SCOUT_MODE on a genuine profitable close (the #99 class of bug) is a correctness regression against this file's own stated contract, not just a new bug.
+  **Extended by E3 (#112):** a symbol also leaves SCOUT_MODE after `SCOUT_EXIT_K` (default 3) consecutive clean `FORCE_CLOSE` / `MIDLINE_INVALIDATION` full closes (gross `pnl_percent` above the measured round-trip cost, taken from a REAL fill price - an estimated PnL is neutral; in production only `FORCE_CLOSE` is booked today, `MIDLINE_INVALIDATION` exists in the backtest); a STOP_LOSS or a net-losing counting close resets the run; `FORCE_CLOSE_BE` / `BE_ESCAPE` / `CLOSED_EXTERNAL` and partial closes are neutral. This only ADDS an exit path — the first-take-profit exit above must keep working, and no change may stop a genuinely profitable full close from exiting SCOUT_MODE.
 
 ## Required path to change any of the above
 

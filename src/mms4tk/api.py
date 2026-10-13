@@ -1338,6 +1338,8 @@ def sync_settings_from_db() -> Dict[str, Any]:
         if logger_db:
             settings = logger_db.get_all_settings()
             for k, v in settings.items():
+                if k.startswith("scout_ok:"):
+                    continue  # per-symbol SCOUT counters (state_manager), not runtime settings
                 env_key = f"MMS4_{k.upper()}" if not k.upper().startswith("MMS4_") else k.upper()
                 os.environ[env_key] = str(v)
                 os.environ[k.upper()] = str(v)
