@@ -6,7 +6,7 @@ Protected contract surfaces for this repository, inventoried from the actual cod
 
 All routes are versioned under `/api/v1/`. Treat every route below as a protected surface — renaming a route, removing a response field another consumer reads, or changing a field's type/units is breaking.
 
-**Known external consumers**: the UI dashboard (Streamlit), the Hermes ops assistant (`scripts/hermes/*.py`), and the operator directly via `curl`/scripts used throughout this project's own history.
+**Known external consumers**: the UI dashboard (React/Vite, served by nginx), the Hermes ops assistant (`scripts/hermes/*.py`), and the operator directly via `curl`/scripts used throughout this project's own history.
 
 Key routes and why they're sensitive:
 - `GET /api/v1/positions`, `GET /api/v1/state`, `GET /api/v1/daemon/status` — polled continuously by the dashboard; a shape change breaks the UI silently (no version negotiation exists).
