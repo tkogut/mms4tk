@@ -30,25 +30,25 @@ The dashboard's hero number, Realized tile, Win Rate, Profit Factor and Max Draw
 
 ## Progress
 
-PR: pending
+PR: #123
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Backend
 
-- [ ] 1.1 `get_kpi_summary`: add `profit_factor_net`, `average_rr_net`, `max_drawdown_net_usd/_pct`
-- [ ] 1.2 `/api/v1/stats/pnl`: forward the new keys (top level and `since_epoch`)
-- [ ] 1.3 Tests: gross>0 / net<0 fixture, old keys unchanged, endpoint shape (mutation-checked)
+- [x] 1.1 `get_kpi_summary`: add `profit_factor_net`, `average_rr_net`, `max_drawdown_net_usd/_pct` — 718621e
+- [x] 1.2 `/api/v1/stats/pnl`: forward the new keys (top level and `since_epoch`) — 718621e
+- [x] 1.3 Tests: gross>0 / net<0 fixture, old keys unchanged, endpoint shape (mutation-checked) — 718621e
 
 ### Phase 2: Dashboard
 
-- [ ] 2.1 `AggregatedPnLCard.jsx`: net hero value, net Realized/Win Rate/PF/Max DD, labels
-- [ ] 2.2 `npm run build` passes
+- [x] 2.1 `AggregatedPnLCard.jsx`: net hero value, net Realized/Win Rate/PF/Max DD, labels — 718621e
+- [x] 2.2 `npm run build` passes — 718621e
 
 ### Phase 3: Docs & release
 
-- [ ] 3.1 `BACKWARD_COMPATIBILITY.md` note (additive keys), version bump 0.48.14 (`VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`)
+- [x] 3.1 `BACKWARD_COMPATIBILITY.md` note (additive keys), version bump 0.48.14 (`VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`) — a969e6b
 
 ### Phase 4: Validate
 
-- [ ] 4.1 Full suite including slow: 0 failures; handshake generated and validated
+- [x] 4.1 Full suite including slow: 0 failures; handshake generated and validated — a969e6b
