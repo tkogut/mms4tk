@@ -1305,6 +1305,36 @@ class LoggerDB:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_scout_since(self, symbol: str) -> Optional[str]:
+        """Timestamp the symbol entered its CURRENT run of SCOUT_MODE, or None.
+
+        The earliest row of the trailing contiguous run of SCOUT_MODE rows for `symbol`
+        (rows are tagged by the symbol column). None when the symbol has no row or its
+        latest row is not SCOUT_MODE.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT state FROM state_history WHERE symbol = ? ORDER BY id DESC LIMIT 1",
+                (symbol,),
+            )
+            latest = cursor.fetchone()
+            if not latest or latest["state"] != "SCOUT_MODE":
+                return None
+            cursor.execute(
+                "SELECT COALESCE(MAX(id), 0) AS last_other FROM state_history "
+                "WHERE symbol = ? AND state != 'SCOUT_MODE'",
+                (symbol,),
+            )
+            last_other = cursor.fetchone()["last_other"]
+            cursor.execute(
+                "SELECT MIN(timestamp) AS since FROM state_history "
+                "WHERE symbol = ? AND id > ?",
+                (symbol, last_other),
+            )
+            row = cursor.fetchone()
+            return row["since"] if row and row["since"] else None
+
     def get_latest_state(self) -> Optional[Dict[str, Any]]:
         """Retrieve the latest state record from state_history table, whichever symbol.
 
