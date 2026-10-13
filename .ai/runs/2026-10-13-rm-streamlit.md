@@ -38,19 +38,21 @@ Delete the legacy Streamlit dashboard leftovers that nothing runs, and drop `ui_
 
 ## Progress
 
+PR: #117
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Remove the dead files
 
-- [ ] 1.1 Remove `ui_dashboard/app.py`, `style.css`, `requirements.txt` and `static/`
-- [ ] 1.2 Remove the obsolete parse test and the stale mentions in two test docstrings
+- [x] 1.1 Remove `ui_dashboard/app.py`, `style.css`, `requirements.txt` and `static/` — 7822a54
+- [x] 1.2 Remove the obsolete parse test and the stale mentions in two test docstrings — 7822a54
 
 ### Phase 2: Version rule
 
-- [ ] 2.1 Change the SSOT version sync from 4 files to 3 in `.agents/MEMORY.md` and `SDLC.md`
+- [x] 2.1 Change the SSOT version sync from 4 files to 3 in `.agents/MEMORY.md` and `SDLC.md` — a4cb426
 
 ### Phase 3: Validate
 
-- [ ] 3.1 The React build succeeds from a copy of `ui_dashboard/` without the removed files
-- [ ] 3.2 Full suite including slow is green
-- [ ] 3.3 Repo-wide grep: only historical records still mention the removed files
+- [x] 3.1 The React build succeeds from a copy of `ui_dashboard/` without the removed files — a4cb426
+- [x] 3.2 Full suite including slow is green — a4cb426
+- [x] 3.3 Repo-wide grep: only historical records still mention the removed files — a4cb426
