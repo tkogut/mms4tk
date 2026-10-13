@@ -35,6 +35,16 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
   const avgRr = hasTraded && avgRrSource !== undefined ? Number(avgRrSource).toFixed(2) : '0.00';
   const isMock = Boolean(statsData?.is_mock);
 
+  // Tile colours follow the (net) result instead of being fixed: green only when it is actually good.
+  const winRateNum = Number(winRateSource);
+  const winRateColor = !hasTraded || !Number.isFinite(winRateNum)
+    ? 'text-slate-300'
+    : winRateNum >= 50 ? 'text-emerald-400' : winRateNum >= 40 ? 'text-amber-400' : 'text-rose-400';
+  const profitFactorNum = Number(profitFactorSource);
+  const profitFactorColor = !hasTraded || !Number.isFinite(profitFactorNum)
+    ? 'text-slate-300'
+    : profitFactorNum >= 1 ? 'text-emerald-400' : 'text-rose-400';
+
   // Return on capital % estimation
   const returnPct = totalEquity > 0
     ? ((totalCombinedPnl / (totalEquity - totalCombinedPnl > 0 ? (totalEquity - totalCombinedPnl) : totalEquity)) * 100)
@@ -229,14 +239,14 @@ export function AggregatedPnLCard({ statsData, openPositions = [], tradesHistory
 
         <div className="bg-slate-950/60 border border-slate-800/60 rounded px-2.5 py-1.5 flex items-center justify-between">
           <div className="text-[10px] text-slate-400 font-mono">Win Rate (netto)</div>
-          <div className="text-xs font-bold font-mono tabular-nums text-emerald-400 text-right">
+          <div className={`text-xs font-bold font-mono tabular-nums text-right ${winRateColor}`}>
             {hasTraded ? `${winRate}%` : '0.0%'}
           </div>
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800/60 rounded px-2.5 py-1.5 flex items-center justify-between">
           <div className="text-[10px] text-slate-400 font-mono">Profit Factor (netto)</div>
-          <div className="text-xs font-bold font-mono tabular-nums text-blue-400 text-right">
+          <div className={`text-xs font-bold font-mono tabular-nums text-right ${profitFactorColor}`}>
             {hasTraded ? profitFactor : '0.00'}
           </div>
         </div>
