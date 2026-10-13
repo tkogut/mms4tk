@@ -63,7 +63,6 @@ def load_mobile_pwa_assets():
         }
         </script>
     """, unsafe_allow_html=True)
-    """, unsafe_allow_html=True)
 
     css_path = os.path.join(os.path.dirname(__file__), "style.css")
     if os.path.exists(css_path):
