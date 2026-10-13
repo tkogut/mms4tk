@@ -78,10 +78,11 @@ def test_daemon_position_sizing_calculation():
 
 
 def test_per_symbol_allocation_overrides_trade_amount_usd(empty_symbols_store):
-    """Intended behavior, pinned (#109): a configured per-symbol `allocation_usd` wins over the
-    constructor's `trade_amount_usd`. With allocation_usd=100 the base leg is 70% of it
-    (70 USD at 1x), i.e. 10x the 7 USD the $10 constructor default would give."""
-    empty_symbols_store["BTC/USDC"] = {"is_active": True, "allocation_usd": 100.0, "base_ratio": 70, "add_ratio": 30}
+    """Intended behavior, pinned (#109): a configured per-symbol `allocation_usd` AND `base_ratio`
+    win over the constructor's `trade_amount_usd` and the default 70/30 split. With
+    allocation_usd=100 and base_ratio=60 the base leg is 60 USD at 1x, i.e. not the 7 USD the $10
+    constructor default would give, and not the 70 USD a 70% ratio would give."""
+    empty_symbols_store["BTC/USDC"] = {"is_active": True, "allocation_usd": 100.0, "base_ratio": 60, "add_ratio": 40}
     daemon, executor = _build_daemon()
 
     asyncio.run(daemon.execute_cycle())
@@ -89,7 +90,7 @@ def test_per_symbol_allocation_overrides_trade_amount_usd(empty_symbols_store):
     executor.execute_order.assert_called_once_with(
         symbol="BTC/USDC",
         side="BUY",
-        amount=round(70.0 / 64800.0, 6),
+        amount=round(60.0 / 64800.0, 6),
         stop_loss_pct=0.02,
         leverage=1.0,
         price=64800.0,
