@@ -2403,47 +2403,54 @@ class MMS4Daemon:
 
         The time of the last alert is persisted (`scout_stale_alerted:{symbol}`, cleared
         when the symbol leaves SCOUT) so a restart neither re-fires nor loses the cadence.
-        Pure observability: the caller (run_loop) swallows exceptions.
+        Pure observability: a failure for one symbol is logged and never blocks the others
+        or the trading loop.
         """
-        from mms4tk.state_manager import SCOUT_EXIT_K, SCOUT_STALE_ALERT_HOURS, _SCOUT_STALE_KEY_PREFIX
         now = datetime.now(timezone.utc)
         for symbol in self.state_manager.scout_symbols():
-            since = self.state_manager.get_scout_since(symbol)
-            if since is None:
-                continue
-            age_hours = (now - since).total_seconds() / 3600.0
-            if age_hours < SCOUT_STALE_ALERT_HOURS:
-                continue
-            key = f"{_SCOUT_STALE_KEY_PREFIX}{symbol}"
-            raw_last = self.logger_db.get_setting(key)
-            if isinstance(raw_last, str):
-                try:
-                    last = datetime.fromisoformat(raw_last.replace("Z", "+00:00"))
-                    if last.tzinfo is None:
-                        last = last.replace(tzinfo=timezone.utc)
-                    if (now - last).total_seconds() / 3600.0 < SCOUT_STALE_ALERT_HOURS:
-                        continue
-                except ValueError:
-                    logger.warning(f"Ignoring invalid persisted {key}={raw_last!r}")
+            try:
+                self._scout_stale_alert_for(symbol, now)
+            except Exception as e:
+                logger.error(f"SCOUT_STALE check failed for {symbol}: {type(e).__name__}: {e}")
 
-            from mms4tk.hermes_webhook import HermesWebhookClient
-            sent = HermesWebhookClient.send_telegram(
-                title=f"⚠️ SCOUT_STALE {symbol}: {age_hours:.0f}h w SCOUT_MODE",
-                body=(
-                    f"`{symbol}` jest w SCOUT_MODE od {since.isoformat()} ({age_hours:.1f}h, "
-                    f"próg: {SCOUT_STALE_ALERT_HOURS:.0f}h).\n"
-                    f"Czyste zamknięcia: {self.state_manager.get_scout_ok(symbol)}/{SCOUT_EXIT_K}.\n\n"
-                    f"Zwolnij ręcznie: POST /api/v1/strategy/profile "
-                    f"{{\"scout_override\": true, \"symbol\": \"{symbol}\"}} albo poczekaj na "
-                    f"{SCOUT_EXIT_K} czyste zamknięcia. Alert powtórzy się za "
-                    f"{SCOUT_STALE_ALERT_HOURS:.0f}h, jeśli SCOUT trwa."
-                ),
-                priority=6,
-                dedupe_key=f"SCOUT_STALE_{symbol}",
-                ttl_override=3600.0,
-            )
-            if sent:
-                self.logger_db.set_setting(key, now.isoformat(), updated_by="daemon")
+    def _scout_stale_alert_for(self, symbol: str, now: datetime) -> None:
+        from mms4tk.state_manager import SCOUT_EXIT_K, SCOUT_STALE_ALERT_HOURS, _SCOUT_STALE_KEY_PREFIX
+        since = self.state_manager.get_scout_since(symbol)
+        if since is None:
+            return
+        age_hours = (now - since).total_seconds() / 3600.0
+        if age_hours < SCOUT_STALE_ALERT_HOURS:
+            return
+        key = f"{_SCOUT_STALE_KEY_PREFIX}{symbol}"
+        raw_last = self.logger_db.get_setting(key)
+        if isinstance(raw_last, str):
+            try:
+                last = datetime.fromisoformat(raw_last.replace("Z", "+00:00"))
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if (now - last).total_seconds() / 3600.0 < SCOUT_STALE_ALERT_HOURS:
+                    return
+            except ValueError:
+                logger.warning(f"Ignoring invalid persisted {key}={raw_last!r}")
+
+        from mms4tk.hermes_webhook import HermesWebhookClient
+        sent = HermesWebhookClient.send_telegram(
+            title=f"⚠️ SCOUT_STALE {symbol}: {age_hours:.0f}h w SCOUT_MODE",
+            body=(
+                f"`{symbol}` jest w SCOUT_MODE od {since.isoformat()} ({age_hours:.1f}h, "
+                f"próg: {SCOUT_STALE_ALERT_HOURS:.0f}h).\n"
+                f"Czyste zamknięcia: {self.state_manager.get_scout_ok(symbol)}/{SCOUT_EXIT_K}.\n\n"
+                f"Zwolnij ręcznie: POST /api/v1/strategy/profile "
+                f"{{\"scout_override\": true, \"symbol\": \"{symbol}\"}} albo poczekaj na "
+                f"{SCOUT_EXIT_K} czyste zamknięcia. Alert powtórzy się za "
+                f"{SCOUT_STALE_ALERT_HOURS:.0f}h, jeśli SCOUT trwa."
+            ),
+            priority=6,
+            dedupe_key=f"SCOUT_STALE_{symbol}",
+            ttl_override=3600.0,
+        )
+        if sent:
+            self.logger_db.set_setting(key, now.isoformat(), updated_by="daemon")
 
     async def run_loop(self) -> None:
         """Background loop executing multi-symbol cycles at configured intervals."""

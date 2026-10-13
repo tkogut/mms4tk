@@ -20,9 +20,9 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
   the start of the symbol's current run of SCOUT rows in `state_history`.
 - 🔧 **`hitl_resolve`**: `directional_bias` / `risk_profile` are optional and keep the current
   profile when omitted (previously they silently reset it to `BOTH` / `MODERATE`).
-- 🔧 **`scout_override` is one-shot**: never carried from the stored profile into a later write.
+- 🔧 **`scout_override` is one-shot**: acted on in the request and never stored (the response still echoes it), so it is neither carried into a later write nor restored after a restart.
 - 🔧 **`/settings/update`**: `scout_mode` accepts an optional `symbol` (omitted = primary).
-- 🧪 `tests/test_scout_stale.py` (17 tests, mutation-checked).
+- 🧪 `tests/test_scout_stale.py` (20 tests, mutation-checked).
 
 ## 🚀 [0.48.12] - 2026-10-12
 

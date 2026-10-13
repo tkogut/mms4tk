@@ -245,3 +245,28 @@ def test_settings_invalid_symbol_rejected(sm):
     res = client.post("/api/v1/settings/update", json={"scout_mode": False, "symbol": "XAG:USDC"}, headers=AUTH_HEADERS)
     assert res.status_code == 422
     assert sm.get_symbol_state(XAG) == MMS4State.SCOUT_MODE
+
+
+def test_scout_override_not_stored_true(sm):
+    res = client.post("/api/v1/strategy/profile", json={"scout_override": True, "symbol": XAG}, headers=AUTH_HEADERS)
+    assert res.json()["scout_override"] is True          # response echoes the request
+    assert sm.strategy_profile.scout_override is False   # but nothing stays armed
+    hitl = client.post(
+        "/api/v1/hermes/hitl_resolve", json={"decision": "SWEEP_WICK", "symbol": XAG}, headers=AUTH_HEADERS
+    )
+    assert hitl.json()["scout_override"] is True
+    assert sm.strategy_profile.scout_override is False
+
+
+def test_marker_write_failure_does_not_block_other_symbols(tmp_path: Path):
+    db, sm, daemon = _make(tmp_path)
+    _scout_for(sm, XAG, SCOUT_STALE_ALERT_HOURS + 1)
+    _scout_for(sm, "ETH/USDC", SCOUT_STALE_ALERT_HOURS + 1)
+    with patch(SEND, return_value=True) as send, patch.object(db, "set_setting", side_effect=RuntimeError("db")):
+        daemon._check_scout_stale_alert()
+    assert send.call_count == 2
+
+
+def test_settings_scout_mode_mirrors_when_symbol_is_primary(sm):
+    client.post("/api/v1/settings/update", json={"scout_mode": True, "symbol": BTC}, headers=AUTH_HEADERS)
+    assert sm.get_symbol_state(BTC) == MMS4State.SCOUT_MODE

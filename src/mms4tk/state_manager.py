@@ -92,7 +92,7 @@ SCOUT_COUNTING_REASONS = frozenset({"FORCE_CLOSE", "MIDLINE_INVALIDATION"})
 _SCOUT_OK_KEY_PREFIX = "scout_ok:"
 # A symbol that stays in SCOUT_MODE this long raises a SCOUT_STALE alert (repeated every
 # SCOUT_STALE_ALERT_HOURS); the last-alert time is persisted under `scout_stale_alerted:{symbol}`.
-SCOUT_STALE_ALERT_HOURS: float = _env_number("MMS4_SCOUT_STALE_ALERT_HOURS", 24.0)
+SCOUT_STALE_ALERT_HOURS: float = max(1.0, _env_number("MMS4_SCOUT_STALE_ALERT_HOURS", 24.0))
 _SCOUT_STALE_KEY_PREFIX = "scout_stale_alerted:"
 
 # Split of the per-symbol margin cap between the base entry and the high-risk add.
@@ -216,7 +216,6 @@ class MMS4StateManager:
 
         # Per-symbol count of consecutive clean closes while in SCOUT_MODE (see
         # SCOUT_EXIT_K); persisted under system_settings key `scout_ok:{symbol}`.
-        self._scout_ok: Dict[str, int] = {}
         self._scout_ok: Dict[str, int] = {}
 
         # Per-symbol moment the symbol entered its current run of SCOUT_MODE (UTC).

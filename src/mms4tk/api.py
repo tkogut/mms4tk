@@ -985,8 +985,8 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     """
     Partially update the active strategy profile configuration: only fields
     present (non-None) in the request overwrite the persisted profile, every
-    other field is left exactly as it was. If the merged scout_override is
-    True, relaxes SCOUT_MODE to BASE_MODE immediately.
+    other field is left exactly as it was. If scout_override is
+    True in the request, relaxes SCOUT_MODE to BASE_MODE immediately.
     Protected by X-MMS4-API-KEY header.
 
     Faza 6 C.1.2: previously took the full `StrategyProfile` model, so any
@@ -1000,15 +1000,16 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     merged = StrategyProfile(
         directional_bias=profile.directional_bias if profile.directional_bias is not None else current.directional_bias,
         risk_profile=profile.risk_profile if profile.risk_profile is not None else current.risk_profile,
-        # One-shot: a stored scout_override=True is never carried into the next write, or a
-        # later bias/risk update would silently relax a SCOUT that was entered afterwards.
-        scout_override=bool(profile.scout_override),
+        # One-shot: scout_override=True is acted on here and never stored, or a later write
+        # (or a restart) would see a stale True; the response still echoes the request.
+        scout_override=False,
         reason=profile.reason if profile.reason is not None else current.reason,
     )
+    requested = bool(profile.scout_override)
     updated = state_manager.update_strategy_profile(merged)
-    if updated.scout_override:
+    if requested:
         state_manager.relax_scout_mode(_format_symbol(profile.symbol) if profile.symbol else None)
-    return updated
+    return updated.model_copy(update={"scout_override": requested})
 
 
 # ─── Hermes Webhook & HITL Endpoints ─────────────────────────────────────────
@@ -1106,10 +1107,10 @@ async def hitl_resolve(req: HITLResolveRequest) -> Dict[str, Any]:
     profile = StrategyProfile(
         directional_bias=req.directional_bias if req.directional_bias is not None else current.directional_bias,
         risk_profile=req.risk_profile if req.risk_profile is not None else current.risk_profile,
-        scout_override=scout_override,
+        scout_override=False,  # one-shot: acted on below, never stored
         reason=f"HITL: {req.decision} — {req.reason}",
     )
-    updated = state_manager.update_strategy_profile(profile)
+    updated = state_manager.update_strategy_profile(profile).model_copy(update={"scout_override": scout_override})
     relaxed = False
     target_symbol = _format_symbol(req.symbol) if req.symbol else None
     if scout_override:
@@ -1436,7 +1437,7 @@ async def update_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
     if req.scout_mode is not None:
         scout_target = _format_symbol(req.symbol) if req.symbol else None
         state_manager.set_scout_mode(bool(req.scout_mode), scout_target)
-        if scout_target is None:
+        if scout_target is None or scout_target == state_manager.trading_symbol:
             # system_settings["scout_mode"] mirrors the primary symbol only.
             db_updates["scout_mode"] = str(state_manager.scout_mode)
     if req.capital_split_ratio is not None:
