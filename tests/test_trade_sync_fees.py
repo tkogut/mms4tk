@@ -293,3 +293,34 @@ def test_stale_opening_order_is_dropped_by_the_fifo_age_cap(tmp_path, monkeypatc
     worker2, db2, _ = _worker(other, pages)
     _run(worker2.sync_closed_trades())
     assert db2.get_closed_trades(limit=None)[0]["fee_usd"] == pytest.approx(0.04)
+
+
+def test_inferred_entry_warning_is_logged_once_not_on_every_pass(tmp_path, caplog):
+    import logging
+    # a close whose opening order is not in the stored set -> entry inferred from PnL
+    data = [_close(1, 1_786_000_060_000)]
+
+    async def pages(params):
+        return {"data": list(data)}
+
+    worker, _, _ = _worker(tmp_path, pages)
+    with caplog.at_level(logging.WARNING, logger="mms4tk.trade_sync"):
+        for _ in range(3):
+            _run(worker.sync_closed_trades())
+    msgs = [r.getMessage() for r in caplog.records if "inferred from PnL" in r.getMessage()]
+    assert len(msgs) == 1, msgs
+
+
+def test_stale_leg_warning_is_logged_once_not_on_every_pass(tmp_path, caplog):
+    import logging
+    data = [_close(1, 1_786_000_000_000 + 200 * 3_600_000), _open(1, 1_786_000_000_000)]
+
+    async def pages(params):
+        return {"data": list(data)}
+
+    worker, _, _ = _worker(tmp_path, pages)
+    with caplog.at_level(logging.WARNING, logger="mms4tk.trade_sync"):
+        for _ in range(3):
+            _run(worker.sync_closed_trades())
+    msgs = [r.getMessage() for r in caplog.records if "Dropping stale opening order" in r.getMessage()]
+    assert len(msgs) == 1, msgs
