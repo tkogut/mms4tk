@@ -638,15 +638,12 @@ class LoggerDB:
                 for row in cursor.fetchall()
             }
 
-    def upsert_okx_order(self, order: Dict[str, Any]) -> bool:
-        """Store (or refresh) one raw OKX order as returned by the history endpoints.
-
-        Returns False when the order has no usable id. The full payload is kept in
-        `raw_json` so a later recomputation sees exactly what OKX reported.
-        """
+    @staticmethod
+    def _okx_order_row(order: Dict[str, Any]) -> Optional[tuple]:
+        """Column values for one raw OKX order, or None when it has no usable id."""
         ord_id = order.get("ordId") or order.get("clOrdId")
         if not ord_id:
-            return False
+            return None
         try:
             fill_time = int(order.get("fillTime") or order.get("uTime") or order.get("cTime") or 0)
         except (TypeError, ValueError):
@@ -659,8 +656,23 @@ class LoggerDB:
             pnl = float(order.get("pnl") or 0.0)
         except (TypeError, ValueError):
             pnl = 0.0
+        return (
+            str(ord_id), order.get("instId"), order.get("side"), order.get("posSide"),
+            order.get("state"), fill_time, fee, pnl,
+            datetime.now(timezone.utc).isoformat(), json.dumps(order, default=str),
+        )
+
+    def upsert_okx_orders(self, orders: List[Dict[str, Any]]) -> int:
+        """Store (or refresh) raw OKX orders in ONE transaction; returns how many were written.
+
+        The full payload is kept in `raw_json` so a later recomputation sees exactly what
+        OKX reported. Orders without a usable id are skipped.
+        """
+        rows = [r for r in (self._okx_order_row(o) for o in orders) if r is not None]
+        if not rows:
+            return 0
         with self._get_connection() as conn:
-            conn.execute(
+            conn.executemany(
                 """
                 INSERT INTO okx_orders (ord_id, inst_id, side, pos_side, state, fill_time, fee, pnl, updated_at, raw_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -669,14 +681,30 @@ class LoggerDB:
                     state=excluded.state, fill_time=excluded.fill_time, fee=excluded.fee,
                     pnl=excluded.pnl, updated_at=excluded.updated_at, raw_json=excluded.raw_json
                 """,
-                (
-                    str(ord_id), order.get("instId"), order.get("side"), order.get("posSide"),
-                    order.get("state"), fill_time, fee, pnl,
-                    datetime.now(timezone.utc).isoformat(), json.dumps(order, default=str),
-                ),
+                rows,
             )
             conn.commit()
-        return True
+        return len(rows)
+
+    def upsert_okx_order(self, order: Dict[str, Any]) -> bool:
+        """Single-order convenience wrapper around `upsert_okx_orders`; False when the order has no id."""
+        return self.upsert_okx_orders([order]) == 1
+
+    def get_okx_order_index(self) -> Dict[str, tuple]:
+        """`{ord_id: (state, fee)}` of every stored order, so the sync can tell which fetched
+        orders are new or changed and stop paging once it reaches ones it already has."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ord_id, state, fee FROM okx_orders")
+            return {row[0]: (row[1], float(row[2] or 0.0)) for row in cursor.fetchall()}
+
+    def has_provisional_closed_trades(self) -> bool:
+        """True while any provisional `recon_*` closed-trade row (written by the daemon's
+        reconciliation, awaiting its authoritative OKX fill) is still stored."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM closed_trades WHERE trade_id LIKE 'recon\\_%' ESCAPE '\\' LIMIT 1")
+            return cursor.fetchone() is not None
 
     def load_okx_orders(self, since_ms: Optional[int] = None) -> List[Dict[str, Any]]:
         """Stored raw OKX orders (oldest first), optionally only those filled at/after `since_ms`."""

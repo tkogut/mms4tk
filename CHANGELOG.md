@@ -22,7 +22,13 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
   every pass. A WARNING is logged when an entry price has to be inferred.
 - ⚠️ Existing degraded rows are not repaired here; the one-off repair (dry-run + backup) is #124
   part 2.
-- 🧪 `tests/test_trade_sync_fees.py` (9 tests, mutation-checked 8/8).
+- ✅ **Review hardening**: the recent and archive endpoints overlap, so the cursor-progress check
+  is per endpoint (a shared set cut the archive walk after one page); paging stops at a page of
+  orders already stored unchanged and only new/changed orders are written (one transaction);
+  provisional `recon_*` rows are still cleaned up for already-synced closes; a kept fee also
+  keeps `pnl_pct` consistent; opening legs older than `MMS4_TRADE_SYNC_OPEN_LEG_MAX_AGE_HOURS`
+  (default 168) are dropped from the FIFO queue so one orphan cannot mis-pair later closes.
+- 🧪 `tests/test_trade_sync_fees.py` (14 tests, mutation-checked 13/13).
 
 ## 🚀 [0.48.14] - 2026-10-13
 

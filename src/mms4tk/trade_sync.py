@@ -148,23 +148,38 @@ class OKXTradeSyncWorker:
             dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
 
+    @staticmethod
+    def _order_signature(item: Dict[str, Any]) -> tuple:
+        """(state, absolute fee) of a raw OKX order - what the stored index is compared with."""
+        try:
+            fee = abs(float(item.get("fee") or item.get("fee_usd") or 0.0))
+        except (TypeError, ValueError):
+            fee = 0.0
+        return (item.get("state"), fee)
+
     async def _fetch_orders_paginated(
         self,
         endpoint: str,
         base_params: Dict[str, Any],
         start_ms: Optional[int],
         seen_ord_ids: set,
+        known: Optional[Dict[str, tuple]] = None,
     ) -> List[Dict[str, Any]]:
         """All orders of one OKX history endpoint, walking pages with the `after` ordId cursor.
 
         Without `limit`/`after` OKX returns only its default ~100 most recent orders, which
         is what used to hide opening orders (and their fees). Stops on a short page, a page
-        that adds no new ordId (a cursor that does not advance), a page already older than
-        the sync cut-off, or the page cap (`MMS4_TRADE_SYNC_MAX_PAGES`, default 30).
+        that adds no ordId THIS endpoint has not already returned (a cursor that does not
+        advance - tracked per endpoint, because the archive endpoint also lists the recent
+        days), a page already older than the sync cut-off, a page made up entirely of orders
+        already stored unchanged (`known`: everything older was stored by an earlier pass), or
+        the page cap (`MMS4_TRADE_SYNC_MAX_PAGES`, default 30). `seen_ord_ids` only de-duplicates
+        across endpoints.
         """
         fn = getattr(self.executor.exchange, endpoint)
         max_pages = max(1, int(os.getenv("MMS4_TRADE_SYNC_MAX_PAGES", "30")))
         out: List[Dict[str, Any]] = []
+        walked: set = set()
         after: Optional[str] = None
         for _ in range(max_pages):
             page_params = dict(base_params, limit=str(self._PAGE_LIMIT))
@@ -175,14 +190,21 @@ class OKXTradeSyncWorker:
             if not data:
                 break
             new_items = 0
+            all_known = bool(known)
             for item in data:
                 oid = item.get("ordId") or item.get("clOrdId")
-                if oid and oid not in seen_ord_ids:
+                if not oid:
+                    continue
+                if oid not in walked:
+                    walked.add(oid)
+                    new_items += 1
+                if oid not in seen_ord_ids:
                     seen_ord_ids.add(oid)
                     out.append(item)
-                    new_items += 1
+                if all_known and known.get(str(oid)) != self._order_signature(item):
+                    all_known = False
             last_id = data[-1].get("ordId")
-            if len(data) < self._PAGE_LIMIT or new_items == 0 or not last_id:
+            if len(data) < self._PAGE_LIMIT or new_items == 0 or not last_id or all_known:
                 break
             if start_ms:
                 try:
@@ -223,23 +245,32 @@ class OKXTradeSyncWorker:
             sync_start_iso = os.getenv("MMS4_TRADE_SYNC_START_ISO", "2026-08-15T21:00:00+00:00")
             start_ms = self._iso_to_ms(sync_start_iso)
 
+            try:
+                known_orders = self.logger_db.get_okx_order_index()
+            except Exception as k_err:
+                logger.warning(f"Failed to read stored OKX orders index: {k_err}")
+                known_orders = {}
+
             for endpoint, label in (
                 ("private_get_trade_orders_history", "recent"),
                 ("private_get_trade_orders_history_archive", "archive"),
             ):
                 try:
-                    fetched.extend(await self._fetch_orders_paginated(endpoint, params, start_ms, seen_ord_ids))
+                    fetched.extend(await self._fetch_orders_paginated(endpoint, params, start_ms, seen_ord_ids, known_orders))
                 except Exception as f_err:
                     logger.warning(f"Failed to fetch {label} orders history from OKX: {f_err}")
 
             # #124: OKX only returns a short window per call, so a close's opening order
             # eventually drops out of it. Keep every order we have ever seen and build the
             # closed trades from that stored set (what OKX just returned wins by ordId).
-            for item in fetched:
-                try:
-                    self.logger_db.upsert_okx_order(item)
-                except Exception as s_err:
-                    logger.warning(f"Failed to store OKX order {item.get('ordId')}: {s_err}")
+            changed = [
+                item for item in fetched
+                if known_orders.get(str(item.get("ordId") or item.get("clOrdId"))) != self._order_signature(item)
+            ]
+            try:
+                self.logger_db.upsert_okx_orders(changed)
+            except Exception as s_err:
+                logger.warning(f"Failed to store {len(changed)} OKX orders: {s_err}")
             merged: Dict[str, Dict[str, Any]] = {}
             try:
                 for item in self.logger_db.load_okx_orders(since_ms=start_ms):
@@ -258,6 +289,10 @@ class OKXTradeSyncWorker:
             except Exception as e_err:
                 logger.warning(f"Failed to read stored closed trades: {e_err}")
                 existing_trades = {}
+            try:
+                provisional_present = self.logger_db.has_provisional_closed_trades()
+            except Exception:
+                provisional_present = True  # unknown: take the full path, as before #124
 
             # 1. Normalize the raw fills, oldest first, so opens can be paired with closes.
             fills: List[Dict[str, Any]] = []
@@ -297,6 +332,11 @@ class OKXTradeSyncWorker:
             #    so opens carry the entry price and closes carry the result.
             open_legs: Dict[tuple, List[Dict[str, Any]]] = {}
             synced_count = 0
+            # An opening leg that no later close ever consumes (a zero-PnL close treated as an
+            # open, a position closed without a history order) would otherwise sit at the head
+            # of its FIFO queue forever and mis-pair every later close. Legs older than this
+            # relative to the close being matched are dropped.
+            max_leg_age_ms = int(float(os.getenv("MMS4_TRADE_SYNC_OPEN_LEG_MAX_AGE_HOURS", "168")) * 3_600_000)
 
             for f in fills:
                 key = (f["symbol"], f["pos_side"] or f["side"])
@@ -307,6 +347,13 @@ class OKXTradeSyncWorker:
                     open_legs.setdefault(key, []).append(f)
                     continue
 
+                queue = open_legs.get(key)
+                while queue and f["ts_ms"] - queue[0]["ts_ms"] > max_leg_age_ms:
+                    stale = queue.pop(0)
+                    logger.warning(
+                        f"Dropping stale opening order {stale['ord_id']} ({stale['symbol']}) older than the "
+                        f"FIFO age cap before matching close {f['ord_id']}"
+                    )
                 entry_price, open_fee = self._consume_open_legs(open_legs.get(key, []), f["size"])
                 if entry_price <= 0:
                     # No matching open in this window (position opened before the sync
@@ -324,15 +371,23 @@ class OKXTradeSyncWorker:
                 is_win = pnl_net > 0
 
                 exit_price = f["price"]
-                exit_price = f["price"]
                 prev = existing_trades.get(f["ord_id"])
+                if prev is not None and prev["fee_usd"] > total_fee:
+                    # Never go below a fee already booked: keep it AND everything derived
+                    # from it (net, win flag, pnl_pct) consistent.
+                    total_fee = prev["fee_usd"]
+                    pnl_net = pnl_gross - total_fee
+                    is_win = pnl_net > 0
                 if (
                     prev is not None
-                    and prev["fee_usd"] >= total_fee - 1e-9
+                    and not provisional_present
+                    and abs(prev["fee_usd"] - total_fee) < 1e-9
                     and abs(prev["pnl_usd"] - pnl_gross) < 1e-9
                     and abs(prev["exit_price"] - exit_price) < 1e-9
                 ):
-                    continue  # unchanged (or fee already higher): nothing to write
+                    # Unchanged. Skipped only while no provisional `recon_*` row is waiting:
+                    # its cleanup / reason carry-over below must still run for every close.
+                    continue
                 lever = f["lever"] or 1.0
                 # `size` is in OKX contracts, not coins — scale by ctVal or notional
                 # (and therefore margin and pnl_pct) comes out 100x-10000x too large,
