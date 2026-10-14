@@ -534,17 +534,21 @@ class MMS4StateManager:
         if self.get_symbol_state(target_sym) != MMS4State.SCOUT_MODE:
             return False
         if respect_cooldown and SCOUT_OVERRIDE_MIN_HOURS > 0:
-            since = self._scout_since.get(target_sym)
-            if since is not None:
-                elapsed_hours = (datetime.now(timezone.utc) - since).total_seconds() / 3600.0
-                if elapsed_hours < SCOUT_OVERRIDE_MIN_HOURS:
-                    remaining = SCOUT_OVERRIDE_MIN_HOURS - elapsed_hours
-                    logger.warning(
-                        f"scout_override for {target_sym} blocked by cooldown: "
-                        f"{elapsed_hours:.1f}h of {SCOUT_OVERRIDE_MIN_HOURS:.0f}h minimum elapsed "
-                        f"since entering SCOUT_MODE ({remaining:.1f}h remaining)."
-                    )
-                    return False
+            # Fail CLOSED on a missing `_scout_since` entry (treat as "just entered"): in
+            # production this key is always set by set_symbol_state()/the DB restore whenever
+            # state is SCOUT_MODE, so this only guards a theoretical gap, but the whole point of
+            # this cooldown is to not re-arm risk early -- missing data must never be the reason
+            # it does.
+            since = self._scout_since.get(target_sym, datetime.now(timezone.utc))
+            elapsed_hours = (datetime.now(timezone.utc) - since).total_seconds() / 3600.0
+            if elapsed_hours < SCOUT_OVERRIDE_MIN_HOURS:
+                remaining = SCOUT_OVERRIDE_MIN_HOURS - elapsed_hours
+                logger.warning(
+                    f"scout_override for {target_sym} blocked by cooldown: "
+                    f"{elapsed_hours:.1f}h of {SCOUT_OVERRIDE_MIN_HOURS:.0f}h minimum elapsed "
+                    f"since entering SCOUT_MODE ({remaining:.1f}h remaining)."
+                )
+                return False
         self.set_symbol_state(target_sym, MMS4State.BASE_MODE, reason="SCOUT_MODE relaxed via strategy profile scout_override")
         return True
 

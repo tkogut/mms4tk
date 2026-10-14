@@ -93,6 +93,16 @@ def test_take_profit_exit_ignores_cooldown_entirely():
     assert sm.get_symbol_state(ETH) == MMS4State.BASE_MODE
 
 
+def test_missing_scout_since_fails_closed():
+    """A missing _scout_since entry (shouldn't happen in production -- always set by
+    set_symbol_state()/the DB restore) must block, not silently allow, the relax."""
+    sm = MMS4StateManager(logger_db=None, trading_symbol=BTC)
+    sm._symbol_states[ETH] = MMS4State.SCOUT_MODE  # bypass set_symbol_state on purpose
+    assert ETH not in sm._scout_since
+    assert sm.relax_scout_mode(ETH) is False
+    assert sm.get_symbol_state(ETH) == MMS4State.SCOUT_MODE
+
+
 def test_scout_exit_k_ignores_cooldown_entirely():
     """The K-consecutive-clean-closes path also bypasses relax_scout_mode() -- must stay immediate."""
     sm = _scout_sm()  # scout_since ~= now, well inside the cooldown window

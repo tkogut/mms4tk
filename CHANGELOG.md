@@ -13,14 +13,20 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
   — 2026-08-24, 2026-09-18, 2026-09-21 — account for -17.49 USD brutto / -18.37 USD netto, 23% of
   all realized SL loss, from a single market move stopping out both symbols independently.
 - ✅ A fresh BASE_LONG/BASE_SHORT entry is now blocked (`CORRELATION_GUARD_BLOCKED_*` outcome)
-  when the symbol's configured correlated partner already holds a same-direction base position.
-  Checked using the account's already-fetched `live_positions` snapshot (zero extra API calls),
+  when the symbol's configured correlated partner already holds — or has itself just reserved in
+  the same concurrent cycle-batch — a same-direction base position. `reserve_correlation_guard()`
+  serializes check-then-commit across `asyncio.gather`'d symbol cycles the same way
+  `reserve_portfolio_margin()` does for the margin cap: production evidence shows the 2026-09-18
+  BTC/ETH entries landing ~0.1s apart, same cycle-batch, which a plain `live_positions` read-check
+  cannot see (neither order has landed on the exchange yet when both cycles check). Checked
   BEFORE the Portfolio Margin Guard reservation so a blocked entry never consumes margin headroom.
   Default pair: `BTC/USDC` + `ETH/USDC`, configurable via `MMS4_CORRELATED_PAIRS`
   (`"BTC/USDC:ETH/USDC,XAU/USDC:XAG/USDC"`-style, comma-separated). XAU/USDC and XAG/USDC are
   NOT included by default — no comparable correlated-SL pattern found in the analysis.
-- 🧪 `tests/test_correlation_guard.py` (9 new tests) for the extracted pure
-  `check_correlation_guard()` / `_correlated_symbol()` helpers.
+- 🧪 `tests/test_correlation_guard.py` (11 new tests) for the extracted pure
+  `check_correlation_guard()` / `_correlated_symbol()` helpers and the
+  `reserve_correlation_guard()` / `release_correlation_reservation()` race-closing pair,
+  including a same-cycle-batch concurrency test reproducing the 2026-09-18 scenario.
 - 📄 `BACKWARD_COMPATIBILITY.md` §5 — new, purely additive entry-blocking guard, noted because it
   changes production entry behavior.
 
