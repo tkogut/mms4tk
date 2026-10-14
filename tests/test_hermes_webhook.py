@@ -6,11 +6,12 @@ import json
 import os
 import sqlite3
 import tempfile
+from datetime import datetime, timedelta, timezone
 import pytest
 from unittest.mock import MagicMock, patch
 
 from mms4tk.hermes_webhook import HermesWebhookClient, HermesWebhookEvent
-from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
+from mms4tk.state_manager import MMS4StateManager, MMS4State, SCOUT_OVERRIDE_MIN_HOURS, StrategyProfile
 from mms4tk.logger_db import LoggerDB
 
 
@@ -196,6 +197,12 @@ class TestHITLResolveEndpoint:
             initial_state=MMS4State.SCOUT_MODE,
             logger_db=test_logger_db,
             hermes_webhook=test_webhook,
+        )
+        # Issue #129: scout_override only relaxes SCOUT_MODE past SCOUT_OVERRIDE_MIN_HOURS;
+        # backdate so these HITL tests exercise "override after the cooldown", not the
+        # (separately tested) cooldown-blocked case.
+        test_state_manager._scout_since[test_state_manager.trading_symbol] = (
+            datetime.now(timezone.utc) - timedelta(hours=SCOUT_OVERRIDE_MIN_HOURS + 1)
         )
 
         api.logger_db = test_logger_db

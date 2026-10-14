@@ -4,6 +4,30 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.17] - 2026-10-14
+
+### 🐛 Fixed — scout_override cooldown (#129)
+- 🐛 **Problem**: `relax_scout_mode()` relaxed SCOUT_MODE -> BASE_MODE instantly and
+  unconditionally, with no minimum time in SCOUT_MODE. Production evidence
+  (`.ai/analysis/2026-10-14-sl-loss-attribution.md` §4, §6): Hermes classified a stop-loss as
+  SWEEP_WICK and called `scout_override` ~14h after entering SCOUT_MODE on 2026-09-18; three days
+  later BOTH BTC and ETH hit a second full-size (3x leverage) stop-loss within two minutes of each
+  other, for a combined -8.73 USD brutto — a loss SCOUT_MODE's reduced size would have cut
+  roughly 10x had it still been active.
+- ✅ `scout_override` (Hermes `SWEEP_WICK` decisions and the strategy-profile API) is now refused
+  while fewer than `MMS4_SCOUT_OVERRIDE_MIN_HOURS` (default 48) have elapsed since the symbol
+  entered SCOUT_MODE. `POST /api/v1/strategy/profile`'s `scout_override` response field now
+  echoes whether the relax actually happened, not merely whether it was requested. A deliberate
+  operator action (`/api/v1/settings/update`'s `scout_mode: false`, not exposed to Hermes)
+  bypasses the cooldown.
+- 🛡️ The first-Take-Profit exit and the `SCOUT_EXIT_K` consecutive-clean-closes exit (#112) are
+  untouched — both call `set_symbol_state()` directly and never go through `relax_scout_mode()`,
+  so a genuinely profitable close still exits SCOUT_MODE immediately, as `BACKWARD_COMPATIBILITY.md`
+  §5 requires.
+- 🧪 `tests/test_scout_override_cooldown.py` (9 new tests); updated `tests/test_scout_exit_k.py`
+  and `tests/test_scout_stale.py` for the new cooldown semantics.
+- 📄 `BACKWARD_COMPATIBILITY.md` §5 — `scout_override`'s semantics change is owner-approved.
+
 ## 🚀 [0.48.16] - 2026-10-14
 
 ### 🐛 Fixed — `trade_sync` warning spam after 0.48.15 (#124 follow-up)

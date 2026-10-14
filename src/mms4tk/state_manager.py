@@ -95,6 +95,22 @@ _SCOUT_OK_KEY_PREFIX = "scout_ok:"
 SCOUT_STALE_ALERT_HOURS: float = max(1.0, _env_number("MMS4_SCOUT_STALE_ALERT_HOURS", 24.0))
 _SCOUT_STALE_KEY_PREFIX = "scout_stale_alerted:"
 
+# ── scout_override cooldown (Issue #129) ──────────────────────────────────
+#
+# `relax_scout_mode()` used to relax SCOUT_MODE -> BASE_MODE unconditionally the instant it was
+# called, with no minimum time in SCOUT_MODE. Production evidence
+# (.ai/analysis/2026-10-14-sl-loss-attribution.md §4, §6): Hermes classified a stop-loss as
+# SWEEP_WICK and called `scout_override` ~14h after entering SCOUT_MODE on 2026-09-18; three days
+# later (2026-09-21) BOTH BTC and ETH hit a second full-size (3x leverage) stop-loss within two
+# minutes of each other, for a combined -8.73 USD brutto -- a loss SCOUT_MODE's reduced size would
+# have cut roughly 10x had it still been active.
+#
+# This does NOT affect the other two exit paths, by design: `on_take_profit_hit()` and the
+# SCOUT_EXIT_K consecutive-clean-closes path both call `set_symbol_state()` directly and never
+# go through `relax_scout_mode()` -- BACKWARD_COMPATIBILITY.md's "triggered on first Take-Profit
+# hit" contract keeps working unconditionally, as it must.
+SCOUT_OVERRIDE_MIN_HOURS: float = max(0.0, _env_number("MMS4_SCOUT_OVERRIDE_MIN_HOURS", 48.0))
+
 # Split of the per-symbol margin cap between the base entry and the high-risk add.
 BASE_ALLOCATION: float = float(os.getenv("MMS4_BASE_ALLOCATION", "0.70"))
 ADDON_ALLOCATION: float = float(os.getenv("MMS4_ADDON_ALLOCATION", str(round(1.0 - BASE_ALLOCATION, 10))))
@@ -501,16 +517,36 @@ class MMS4StateManager:
             return manual
         return self.get_symbol_htf_bias(symbol)
 
-    def relax_scout_mode(self, symbol: Optional[str] = None) -> bool:
+    def relax_scout_mode(self, symbol: Optional[str] = None, respect_cooldown: bool = True) -> bool:
         """
         If target symbol is currently in SCOUT_MODE, transition back to BASE_MODE.
         Returns True if a state transition occurred, False otherwise.
+
+        `respect_cooldown` (default True, Issue #129): while True, an early call is refused and
+        the symbol stays in SCOUT_MODE until SCOUT_OVERRIDE_MIN_HOURS have elapsed since it
+        entered SCOUT_MODE. Callers driven by scout_override (api.py, Hermes's SWEEP_WICK
+        decision) must use the default; an explicit human operator action (the dashboard's
+        manual SCOUT off toggle, `set_scout_mode(False)`) passes False to bypass it -- the
+        cooldown exists to stop an automated/one-shot judgment call from re-arming full risk
+        within minutes of a stop-loss, not to second-guess a deliberate operator decision.
         """
         target_sym = symbol or self.trading_symbol
-        if self.get_symbol_state(target_sym) == MMS4State.SCOUT_MODE:
-            self.set_symbol_state(target_sym, MMS4State.BASE_MODE, reason="SCOUT_MODE relaxed via strategy profile scout_override")
-            return True
-        return False
+        if self.get_symbol_state(target_sym) != MMS4State.SCOUT_MODE:
+            return False
+        if respect_cooldown and SCOUT_OVERRIDE_MIN_HOURS > 0:
+            since = self._scout_since.get(target_sym)
+            if since is not None:
+                elapsed_hours = (datetime.now(timezone.utc) - since).total_seconds() / 3600.0
+                if elapsed_hours < SCOUT_OVERRIDE_MIN_HOURS:
+                    remaining = SCOUT_OVERRIDE_MIN_HOURS - elapsed_hours
+                    logger.warning(
+                        f"scout_override for {target_sym} blocked by cooldown: "
+                        f"{elapsed_hours:.1f}h of {SCOUT_OVERRIDE_MIN_HOURS:.0f}h minimum elapsed "
+                        f"since entering SCOUT_MODE ({remaining:.1f}h remaining)."
+                    )
+                    return False
+        self.set_symbol_state(target_sym, MMS4State.BASE_MODE, reason="SCOUT_MODE relaxed via strategy profile scout_override")
+        return True
 
     @property
     def current_state(self) -> MMS4State:
@@ -559,12 +595,17 @@ class MMS4StateManager:
         self.set_scout_mode(enabled)
 
     def set_scout_mode(self, enabled: bool, symbol: Optional[str] = None) -> None:
-        """Force SCOUT_MODE on/off for `symbol` (default: the primary symbol)."""
+        """Force SCOUT_MODE on/off for `symbol` (default: the primary symbol).
+
+        This is the `/api/v1/settings/update` dashboard/operator toggle -- not exposed to
+        Hermes's tool schema (only `scout_override` is, see hermes_tools.py). A deliberate
+        human action bypasses the scout_override cooldown (Issue #129): `respect_cooldown=False`.
+        """
         target_sym = symbol or self.trading_symbol
         if enabled:
             self.set_symbol_state(target_sym, MMS4State.SCOUT_MODE, reason="SCOUT_MODE forced manually")
         else:
-            self.relax_scout_mode(target_sym)
+            self.relax_scout_mode(target_sym, respect_cooldown=False)
 
     def save_state(self, reason: str = "") -> None:
         """Persist the current state snapshot to logger_db (no-op without a DB attached)."""

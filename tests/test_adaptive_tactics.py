@@ -1,11 +1,12 @@
 import os
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from mms4tk.api import app, state_manager, daemon as api_daemon, executor as api_executor
 from mms4tk.analytics import Candle, IndicatorParams, HigherTimeframeAnalytics, MMS4SignalEngine
-from mms4tk.state_manager import MMS4StateManager, MMS4State, StrategyProfile
+from mms4tk.state_manager import MMS4StateManager, MMS4State, SCOUT_OVERRIDE_MIN_HOURS, StrategyProfile
 from mms4tk.logger_db import LoggerDB
 
 
@@ -258,7 +259,13 @@ def test_directional_bias_signal_filtering():
 
 
 def test_scout_mode_relaxation_by_scout_override(client, tmp_path):
-    """Test SCOUT_MODE relaxation to BASE_MODE triggered by scout_override."""
+    """Test SCOUT_MODE relaxation to BASE_MODE triggered by scout_override.
+
+    Issue #129: scout_override only takes effect once SCOUT_OVERRIDE_MIN_HOURS have elapsed
+    since entering SCOUT_MODE -- both relax attempts below backdate `_scout_since` past that
+    cooldown so this test still exercises "override requested after the cooldown", not the
+    (separately tested) cooldown-blocked case.
+    """
     db_file = os.path.join(str(tmp_path), "test_scout.db")
     logger_db = LoggerDB(db_path=db_file)
     sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE, logger_db=logger_db)
@@ -267,6 +274,7 @@ def test_scout_mode_relaxation_by_scout_override(client, tmp_path):
     transitioned = sm.on_stop_loss_hit(0.025)
     assert transitioned is True
     assert sm.current_state == MMS4State.SCOUT_MODE
+    sm._scout_since[sm.trading_symbol] = datetime.now(timezone.utc) - timedelta(hours=SCOUT_OVERRIDE_MIN_HOURS + 1)
 
     # Test relax_scout_mode direct call
     relaxed = sm.relax_scout_mode()
@@ -278,6 +286,8 @@ def test_scout_mode_relaxation_by_scout_override(client, tmp_path):
     assert sm.current_state == MMS4State.SCOUT_MODE
 
     # Test relaxation via API endpoint with scout_override=True
+    state_manager.set_symbol_state(state_manager.trading_symbol, MMS4State.SCOUT_MODE, reason="test: prior stop")
+    state_manager._scout_since[state_manager.trading_symbol] = datetime.now(timezone.utc) - timedelta(hours=SCOUT_OVERRIDE_MIN_HOURS + 1)
     api_key = os.getenv("MMS4_API_KEY", "test-api-auth-key-unit-test")
     resp = client.post(
         "/api/v1/strategy/profile",

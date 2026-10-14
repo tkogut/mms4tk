@@ -133,7 +133,7 @@ def test_re_entering_scout_starts_from_zero():
     sm = _scout_sm()
     _close(sm, "FORCE_CLOSE", CLEAN)
     _close(sm, "FORCE_CLOSE", CLEAN)
-    sm.relax_scout_mode(XAG)                     # operator override leaves SCOUT
+    sm.relax_scout_mode(XAG, respect_cooldown=False)  # operator override leaves SCOUT
     assert sm.get_scout_ok(XAG) == 0
     _close(sm, "STOP_LOSS", -0.021, sl_percent=0.021)  # BASE -> SCOUT again
     _close(sm, "FORCE_CLOSE", CLEAN)
