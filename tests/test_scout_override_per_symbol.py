@@ -4,11 +4,13 @@
 acted on the primary trading symbol: a stopped-out XAG could not be released by Hermes.
 Omitting `symbol` keeps the previous behavior (primary symbol).
 """
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
 import mms4tk.api as api
-from mms4tk.state_manager import MMS4State, MMS4StateManager
+from mms4tk.state_manager import MMS4State, MMS4StateManager, SCOUT_OVERRIDE_MIN_HOURS
 
 client = TestClient(api.app)
 AUTH_HEADERS = {"X-MMS4-API-KEY": "test-api-auth-key-unit-test"}
@@ -21,6 +23,12 @@ def sm(monkeypatch):
     monkeypatch.setattr(api, "state_manager", manager)
     manager.set_symbol_state(BTC, MMS4State.SCOUT_MODE, reason="test")
     manager.set_symbol_state(XAG, MMS4State.SCOUT_MODE, reason="test")
+    # Issue #129: scout_override only relaxes SCOUT_MODE past SCOUT_OVERRIDE_MIN_HOURS;
+    # backdate so this suite exercises "override after the cooldown", not the
+    # (separately tested) cooldown-blocked case.
+    backdated = datetime.now(timezone.utc) - timedelta(hours=SCOUT_OVERRIDE_MIN_HOURS + 1)
+    manager._scout_since[BTC] = backdated
+    manager._scout_since[XAG] = backdated
     return manager
 
 

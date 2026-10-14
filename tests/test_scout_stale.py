@@ -14,6 +14,7 @@ from mms4tk.logger_db import LoggerDB
 from mms4tk.okx_executor import OKXExecutor
 from mms4tk.state_manager import (
     SCOUT_EXIT_K,
+    SCOUT_OVERRIDE_MIN_HOURS,
     SCOUT_STALE_ALERT_HOURS,
     MMS4State,
     MMS4StateManager,
@@ -219,6 +220,8 @@ def test_hitl_explicit_fields_still_override(sm):
 
 
 def test_scout_override_is_one_shot(sm):
+    # Issue #129: scout_override only takes effect once the cooldown has elapsed.
+    _scout_for(sm, XAG, SCOUT_OVERRIDE_MIN_HOURS + 1)
     client.post("/api/v1/strategy/profile", json={"scout_override": True, "symbol": XAG}, headers=AUTH_HEADERS)
     assert sm.get_symbol_state(XAG) == MMS4State.BASE_MODE
     sm.set_symbol_state(XAG, MMS4State.SCOUT_MODE, reason="new stop-out")
@@ -248,8 +251,11 @@ def test_settings_invalid_symbol_rejected(sm):
 
 
 def test_scout_override_not_stored_true(sm):
+    # Issue #129: past the cooldown, the response echoes True because the relax actually happened
+    # (not merely because it was requested -- see test_scout_override_blocked_... for that case).
+    _scout_for(sm, XAG, SCOUT_OVERRIDE_MIN_HOURS + 1)
     res = client.post("/api/v1/strategy/profile", json={"scout_override": True, "symbol": XAG}, headers=AUTH_HEADERS)
-    assert res.json()["scout_override"] is True          # response echoes the request
+    assert res.json()["scout_override"] is True
     assert sm.strategy_profile.scout_override is False   # but nothing stays armed
     hitl = client.post(
         "/api/v1/hermes/hitl_resolve", json={"decision": "SWEEP_WICK", "symbol": XAG}, headers=AUTH_HEADERS
