@@ -59,6 +59,6 @@ from a single market move (Issue #130).
 
 ### Phase 2: BTC/ETH Mutual Exclusion Guard (#130)
 
-- [ ] 2.1 Correlation guard in daemon.py
-- [ ] 2.2 Tests for correlation guard
-- [ ] 2.3 BACKWARD_COMPATIBILITY.md / CHANGELOG.md / VERSION
+- [x] 2.1 Correlation guard in daemon.py — c72415f
+- [x] 2.2 Tests for correlation guard — c72415f
+- [x] 2.3 BACKWARD_COMPATIBILITY.md / CHANGELOG.md / VERSION — c72415f
