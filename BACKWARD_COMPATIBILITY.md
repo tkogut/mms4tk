@@ -46,6 +46,8 @@ Defines the tool-call surface the external Hermes ops assistant invokes. A param
 
   **Extended by #122 (0.48.14):** `/api/v1/stats/pnl` (and `since_epoch`) gain the additive keys `profit_factor_net`, `average_rr_net`, `max_drawdown_net_usd`, `max_drawdown_net_pct`. The existing keys (`win_rate`, `profit_factor`, `max_drawdown*`, `average_rr`, `realized_pnl`) keep their GROSS meaning; only the dashboard now displays the net variants. No schema change.
 
+  **Extended by #124 (0.48.15):** new additive table `okx_orders` (raw OKX orders, upsert-only, never deleted; no change to existing tables or columns). `closed_trades` is now built from that stored set, and `upsert_closed_trade` never LOWERS `fee_usd` on conflict (`pnl_net_usd` / `is_win` follow the kept fee). New env `MMS4_TRADE_SYNC_MAX_PAGES` (default 30). Existing rows that already lost their opening fee are NOT repaired by this change; the one-off history repair ships separately (#124 part 2).
+
 ## Required path to change any of the above
 
 1. State explicitly in the PR description which protected surface is touched and why.

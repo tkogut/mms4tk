@@ -4,6 +4,26 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.15] - 2026-10-14
+
+### 🐛 Fixed — `trade_sync` lost opening fees and lowered booked fees (#124, part 1)
+- 🐛 **Problem**: `closed_trades.fee_usd` is the real OKX fee (opening + closing order), but
+  `trade_sync` rebuilt each close from the ~100 most recent orders OKX returns per call (no
+  `limit`/`after`). Once a close's opening order left that window its opening fee became 0, and
+  `ON CONFLICT` overwrote the booked fee (and `pnl_net_usd` / `is_win`) with the lower value.
+  Audit: rows up to 05.10 carry about half the real fee; from 06.10 they are complete.
+- ✅ **Pagination**: both history endpoints are walked with `limit=100` and the `after` ordId
+  cursor until a short page, a page with no new ordId, a page older than
+  `MMS4_TRADE_SYNC_START_ISO`, or `MMS4_TRADE_SYNC_MAX_PAGES` (default 30).
+- ✅ **`okx_orders`** (additive table): every fetched order is stored (upsert only, never
+  deleted) and closed trades are built from the stored set, so a close keeps its opening leg.
+- ✅ **No fee downgrade**: `upsert_closed_trade` keeps `MAX(existing, new)` for `fee_usd`;
+  `pnl_net_usd` and `is_win` follow the kept fee. Unchanged closes are no longer rewritten on
+  every pass. A WARNING is logged when an entry price has to be inferred.
+- ⚠️ Existing degraded rows are not repaired here; the one-off repair (dry-run + backup) is #124
+  part 2.
+- 🧪 `tests/test_trade_sync_fees.py` (9 tests, mutation-checked 8/8).
+
 ## 🚀 [0.48.14] - 2026-10-13
 
 ### 🐛 Fixed — Dashboard showed gross PnL as "Netto" (#122)
