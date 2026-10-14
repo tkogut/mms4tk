@@ -32,25 +32,25 @@ Branch: `fix/trade-sync-fees` · Base: `main` @ 4049bc9 · Issue: #124 (part 1 o
 
 ## Progress
 
-PR: pending
+PR: #126
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Storage
 
-- [ ] 1.1 `logger_db`: `okx_orders` table, `upsert_okx_order`, `load_okx_orders`
-- [ ] 1.2 `logger_db.upsert_closed_trade`: `fee_usd = MAX(existing, new)`, net and is_win follow it
+- [x] 1.1 `logger_db`: `okx_orders` table, `upsert_okx_order`, `load_okx_orders` — 42832c4
+- [x] 1.2 `logger_db.upsert_closed_trade`: `fee_usd = MAX(existing, new)`, net and is_win follow it — 42832c4
 
 ### Phase 2: Sync
 
-- [ ] 2.1 `trade_sync`: paginated, bounded fetch of both endpoints
-- [ ] 2.2 `trade_sync`: persist fetched orders, build closed trades from the stored set; warn on inferred entry
+- [x] 2.1 `trade_sync`: paginated, bounded fetch of both endpoints — 42832c4
+- [x] 2.2 `trade_sync`: persist fetched orders, build closed trades from the stored set; warn on inferred entry — 42832c4
 
 ### Phase 3: Tests, docs, release
 
-- [ ] 3.1 Tests (pagination, window slide keeps the opening fee, no fee downgrade, loop guards), mutation-checked
-- [ ] 3.2 `BACKWARD_COMPATIBILITY.md` note, version 0.48.15 (`VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`)
+- [x] 3.1 Tests (pagination, window slide keeps the opening fee, no fee downgrade, loop guards), mutation-checked — 42832c4
+- [x] 3.2 `BACKWARD_COMPATIBILITY.md` note, version 0.48.15 (`VERSION`, `src/mms4tk/__init__.py`, `CHANGELOG.md`) — 81d7e5c
 
 ### Phase 4: Validate
 
-- [ ] 4.1 Full suite including slow: 0 failures; handshake generated and validated
+- [x] 4.1 Full suite including slow: 0 failures; handshake generated and validated — 81d7e5c
