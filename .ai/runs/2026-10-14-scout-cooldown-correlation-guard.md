@@ -53,9 +53,9 @@ from a single market move (Issue #130).
 
 ### Phase 1: scout_override cooldown (#129)
 
-- [ ] 1.1 Cooldown gate in relax_scout_mode + api.py threading
-- [ ] 1.2 Tests for cooldown behavior
-- [ ] 1.3 BACKWARD_COMPATIBILITY.md / CHANGELOG.md / VERSION
+- [x] 1.1 Cooldown gate in relax_scout_mode + api.py threading — 152f7f1
+- [x] 1.2 Tests for cooldown behavior — 152f7f1
+- [x] 1.3 BACKWARD_COMPATIBILITY.md / CHANGELOG.md / VERSION — 152f7f1
 
 ### Phase 2: BTC/ETH Mutual Exclusion Guard (#130)
 
