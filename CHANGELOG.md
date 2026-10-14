@@ -4,6 +4,56 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.18] - 2026-10-14
+
+### ✨ Added — BTC/ETH Mutual Exclusion Guard (#130)
+- 🐛 **Problem**: BTC and ETH base positions open independently even when strongly correlated.
+  Production evidence (`.ai/analysis/2026-10-14-sl-loss-attribution.md` §6): of the 30 production
+  STOP-LOSS closes, three strictly-simultaneous (<=10 minutes apart, same side) BTC+ETH pairs
+  — 2026-08-24, 2026-09-18, 2026-09-21 — account for -17.49 USD brutto / -18.37 USD netto, 23% of
+  all realized SL loss, from a single market move stopping out both symbols independently.
+- ✅ A fresh BASE_LONG/BASE_SHORT entry is now blocked (`CORRELATION_GUARD_BLOCKED_*` outcome)
+  when the symbol's configured correlated partner already holds — or has itself just reserved in
+  the same concurrent cycle-batch — a same-direction base position. `reserve_correlation_guard()`
+  serializes check-then-commit across `asyncio.gather`'d symbol cycles the same way
+  `reserve_portfolio_margin()` does for the margin cap: production evidence shows the 2026-09-18
+  BTC/ETH entries landing ~0.1s apart, same cycle-batch, which a plain `live_positions` read-check
+  cannot see (neither order has landed on the exchange yet when both cycles check). Checked
+  BEFORE the Portfolio Margin Guard reservation so a blocked entry never consumes margin headroom.
+  Default pair: `BTC/USDC` + `ETH/USDC`, configurable via `MMS4_CORRELATED_PAIRS`
+  (`"BTC/USDC:ETH/USDC,XAU/USDC:XAG/USDC"`-style, comma-separated). XAU/USDC and XAG/USDC are
+  NOT included by default — no comparable correlated-SL pattern found in the analysis.
+- 🧪 `tests/test_correlation_guard.py` (11 new tests) for the extracted pure
+  `check_correlation_guard()` / `_correlated_symbol()` helpers and the
+  `reserve_correlation_guard()` / `release_correlation_reservation()` race-closing pair,
+  including a same-cycle-batch concurrency test reproducing the 2026-09-18 scenario.
+- 📄 `BACKWARD_COMPATIBILITY.md` §5 — new, purely additive entry-blocking guard, noted because it
+  changes production entry behavior.
+
+## 🚀 [0.48.17] - 2026-10-14
+
+### 🐛 Fixed — scout_override cooldown (#129)
+- 🐛 **Problem**: `relax_scout_mode()` relaxed SCOUT_MODE -> BASE_MODE instantly and
+  unconditionally, with no minimum time in SCOUT_MODE. Production evidence
+  (`.ai/analysis/2026-10-14-sl-loss-attribution.md` §4, §6): Hermes classified a stop-loss as
+  SWEEP_WICK and called `scout_override` ~14h after entering SCOUT_MODE on 2026-09-18; three days
+  later BOTH BTC and ETH hit a second full-size (3x leverage) stop-loss within two minutes of each
+  other, for a combined -8.73 USD brutto — a loss SCOUT_MODE's reduced size would have cut
+  roughly 10x had it still been active.
+- ✅ `scout_override` (Hermes `SWEEP_WICK` decisions and the strategy-profile API) is now refused
+  while fewer than `MMS4_SCOUT_OVERRIDE_MIN_HOURS` (default 48) have elapsed since the symbol
+  entered SCOUT_MODE. `POST /api/v1/strategy/profile`'s `scout_override` response field now
+  echoes whether the relax actually happened, not merely whether it was requested. A deliberate
+  operator action (`/api/v1/settings/update`'s `scout_mode: false`, not exposed to Hermes)
+  bypasses the cooldown.
+- 🛡️ The first-Take-Profit exit and the `SCOUT_EXIT_K` consecutive-clean-closes exit (#112) are
+  untouched — both call `set_symbol_state()` directly and never go through `relax_scout_mode()`,
+  so a genuinely profitable close still exits SCOUT_MODE immediately, as `BACKWARD_COMPATIBILITY.md`
+  §5 requires.
+- 🧪 `tests/test_scout_override_cooldown.py` (9 new tests); updated `tests/test_scout_exit_k.py`
+  and `tests/test_scout_stale.py` for the new cooldown semantics.
+- 📄 `BACKWARD_COMPATIBILITY.md` §5 — `scout_override`'s semantics change is owner-approved.
+
 ## 🚀 [0.48.16] - 2026-10-14
 
 ### 🐛 Fixed — `trade_sync` warning spam after 0.48.15 (#124 follow-up)

@@ -1002,7 +1002,9 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     Partially update the active strategy profile configuration: only fields
     present (non-None) in the request overwrite the persisted profile, every
     other field is left exactly as it was. If scout_override is
-    True in the request, relaxes SCOUT_MODE to BASE_MODE immediately.
+    True in the request, relaxes SCOUT_MODE to BASE_MODE -- unless the symbol entered
+    SCOUT_MODE less than SCOUT_OVERRIDE_MIN_HOURS ago (Issue #129), in which case the
+    response's `scout_override` echoes False even though it was requested as True.
     Protected by X-MMS4-API-KEY header.
 
     Faza 6 C.1.2: previously took the full `StrategyProfile` model, so any
@@ -1023,9 +1025,12 @@ async def set_strategy_profile(profile: StrategyProfileUpdate) -> StrategyProfil
     )
     requested = bool(profile.scout_override)
     updated = state_manager.update_strategy_profile(merged)
+    relaxed = False
     if requested:
-        state_manager.relax_scout_mode(_format_symbol(profile.symbol) if profile.symbol else None)
-    return updated.model_copy(update={"scout_override": requested})
+        relaxed = state_manager.relax_scout_mode(_format_symbol(profile.symbol) if profile.symbol else None)
+    # Issue #129: echo whether the relax actually happened, not merely whether it was requested --
+    # a cooldown-blocked request must not look identical to an accepted one to the caller (Hermes).
+    return updated.model_copy(update={"scout_override": relaxed})
 
 
 # ─── Hermes Webhook & HITL Endpoints ─────────────────────────────────────────

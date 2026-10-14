@@ -17,6 +17,67 @@ from mms4tk.inactivity_manager import MMS4InactivityManager, StaleAction
 logger = logging.getLogger("mms4tk.daemon")
 
 
+def _parse_correlated_pairs(raw: str) -> List[frozenset]:
+    """Parse `MMS4_CORRELATED_PAIRS` ("BTC/USDC:ETH/USDC,XAU/USDC:XAG/USDC") into a list of
+    2-symbol frozensets. Malformed entries are skipped with a warning rather than crashing the
+    daemon at import time."""
+    pairs: List[frozenset] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts = [p.strip() for p in chunk.split(":") if p.strip()]
+        if len(parts) != 2:
+            logger.warning(f"Ignoring malformed MMS4_CORRELATED_PAIRS entry: {chunk!r}")
+            continue
+        pairs.append(frozenset(normalize_symbol(p) for p in parts))
+    return pairs
+
+
+# ── Mutual Exclusion Guard for correlated symbols (Issue #130) ──────────────
+#
+# Production evidence (.ai/analysis/2026-10-14-sl-loss-attribution.md §6): of the 30 production
+# STOP-LOSS closes, three strictly-simultaneous (<=10 minutes apart, same side) BTC+ETH pairs
+# account for 23% of all realized SL loss (-17.49 USD brutto / -18.37 USD netto of -75.62/-79.83
+# total) -- a single market impulse repeatedly stopped out both symbols independently. Default
+# pair is BTC/USDC+ETH/USDC only; XAU/USDC and XAG/USDC showed no comparable correlated-SL
+# pattern in the analysis and are deliberately NOT included without evidence.
+CORRELATED_PAIRS: List[frozenset] = _parse_correlated_pairs(
+    os.getenv("MMS4_CORRELATED_PAIRS", "BTC/USDC:ETH/USDC")
+)
+
+
+def _correlated_symbol(target_symbol: str) -> Optional[str]:
+    """The other symbol in `target_symbol`'s configured correlated pair, if any."""
+    norm_target = normalize_symbol(target_symbol)
+    for pair in CORRELATED_PAIRS:
+        if norm_target in pair:
+            other = next((s for s in pair if s != norm_target), None)
+            if other:
+                return other
+    return None
+
+
+def check_correlation_guard(
+    live_positions: list, target_symbol: str, target_pos_side: str
+) -> Optional[Dict[str, Any]]:
+    """Pure check (no I/O, no locking needed): the correlated symbol's open same-direction
+    position, if any, that should block a fresh `target_pos_side` base entry on `target_symbol`.
+    Returns None when the entry is not blocked (no correlated pair configured, correlated symbol
+    flat, or correlated symbol holds the OPPOSITE side)."""
+    correlated_symbol = _correlated_symbol(target_symbol)
+    if not correlated_symbol or not target_pos_side:
+        return None
+    for p in live_positions:
+        if normalize_symbol(p.get("symbol", "")) != correlated_symbol:
+            continue
+        if _pos_contracts(p) <= 0:
+            continue
+        if _pos_side(p) == target_pos_side:
+            return p
+    return None
+
+
 def _pos_contracts(p: Dict[str, Any]) -> float:
     """Contract count of a CCXT/OKX position dict, 0.0 when absent."""
     try:
@@ -187,6 +248,17 @@ class MMS4Daemon:
         # symbol racing the same cap sees it as committed.
         self._reserved_notional_usd: float = 0.0
 
+        # Issue #130: `execute_symbol_cycle` fetches `live_positions` independently per symbol
+        # (default `live_positions=None` -> its own `fetch_positions()` call), and
+        # `execute_multi_symbol_cycle` runs every symbol concurrently via `asyncio.gather` --
+        # production evidence shows BTC's and ETH's entries landing ~0.1s apart (same
+        # cycle-batch, .ai/analysis/2026-10-14-sl-loss-attribution.md §4's 18.09 entry
+        # timestamps). A plain live_positions read-check never sees the sibling's
+        # about-to-be-placed order, exactly the case this guard exists for. Serializes
+        # check-then-commit the same way `_portfolio_margin_lock` does for the margin cap.
+        self._correlation_guard_lock: asyncio.Lock = asyncio.Lock()
+        self._pending_base_entries: Dict[str, str] = {}  # normalized symbol -> side ("long"/"short")
+
     # ── Portfolio Margin Guard ───────────────────────────────────────────
 
     def check_portfolio_margin_guard(
@@ -300,6 +372,39 @@ class MMS4Daemon:
             return
         async with self._portfolio_margin_lock:
             self._reserved_notional_usd = max(0.0, self._reserved_notional_usd - amount)
+
+    # ── Mutual Exclusion Guard (Issue #130) ──────────────────────────────
+
+    async def reserve_correlation_guard(
+        self, live_positions: list, target_symbol: str, target_pos_side: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Atomic check-and-commit wrapper around check_correlation_guard, mirroring
+        reserve_portfolio_margin's race-closing pattern. Returns the blocking position dict
+        (real or a pending-reservation placeholder) when blocked, None when the entry may
+        proceed; a None result reserves `target_symbol`'s side until
+        release_correlation_reservation() is called.
+        """
+        async with self._correlation_guard_lock:
+            blocked = check_correlation_guard(live_positions, target_symbol, target_pos_side)
+            if blocked is None:
+                correlated_symbol = _correlated_symbol(target_symbol)
+                if correlated_symbol and self._pending_base_entries.get(correlated_symbol) == target_pos_side:
+                    blocked = {"symbol": correlated_symbol, "side": target_pos_side, "contracts": 0.0, "pending": True}
+            if blocked is None:
+                self._pending_base_entries[normalize_symbol(target_symbol)] = target_pos_side
+            return blocked
+
+    async def release_correlation_reservation(self, target_symbol: str) -> None:
+        """
+        Release a reservation taken by reserve_correlation_guard.
+
+        Called once the order attempt this cycle is done (executed, failed, or skipped) — a
+        filled order becomes real, visible in the next fetch_positions(), so the reservation
+        must not linger past this cycle.
+        """
+        async with self._correlation_guard_lock:
+            self._pending_base_entries.pop(normalize_symbol(target_symbol), None)
 
     # ── Position sizing ─────────────────────────────────────────────────
 
@@ -2030,54 +2135,86 @@ class MMS4Daemon:
                     )
                     logger.info(f"⊘ {details}")
                 else:
-                    # ── Portfolio Margin Guard: reserve before checking, hold across the
-                    # await to execute_order() so a sibling symbol cycle racing the same cap
-                    # (they all run concurrently under asyncio.gather) sees this notional as
-                    # already committed instead of checking against a stale snapshot. ──
-                    pmg = await self.reserve_portfolio_margin(
-                        live_positions, notional_base_usd, target_symbol
+                    # ── Mutual Exclusion Guard (Issue #130): block a fresh same-direction base
+                    # entry on a symbol whose correlated partner (e.g. ETH for BTC) already holds
+                    # (or is itself mid-cycle reserving) one. Production evidence shows BTC's and
+                    # ETH's entries landing ~0.1s apart under asyncio.gather -- `live_positions`
+                    # alone can't see a sibling cycle's about-to-be-placed order, so this reserves
+                    # the side the same way the Portfolio Margin Guard reserves notional below.
+                    # Checked (and released) first so a blocked entry never consumes margin
+                    # headroom. ──
+                    correlated_block = await self.reserve_correlation_guard(
+                        live_positions, target_symbol, target_pos_side
                     )
-                    if not pmg["allowed"]:
-                        outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
+
+                    if correlated_block is not None:
+                        correlated_symbol = _correlated_symbol(target_symbol)
+                        outcome = f"CORRELATION_GUARD_BLOCKED_{signal.signal_type}"
                         details = (
-                            f"🛡️ Portfolio Margin Guard blocked {signal.signal_type} for {target_symbol}: "
-                            f"adding ${notional_base_usd:.2f} would push total from "
-                            f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap. "
-                            f"Headroom: ${pmg['headroom_usd']:.2f}"
+                            f"🔗 Correlation Guard blocked {signal.signal_type} for {target_symbol}: "
+                            f"{correlated_symbol} already holds (or just reserved) a "
+                            f"{target_pos_side.upper()} base position "
+                            f"({_pos_contracts(correlated_block)} contracts). A single market move has "
+                            f"repeatedly stopped out both symbols together — see "
+                            f".ai/analysis/2026-10-14-sl-loss-attribution.md §6."
                         )
                         logger.warning(details)
                     else:
-                        order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
                         try:
-                            order_info = await self.executor.execute_order(
-                                symbol=target_symbol,
-                                side=order_side,
-                                amount=base_order_amount,
-                                stop_loss_pct=self.base_sl_pct,
-                                leverage=sym_leverage,
-                                price=signal.price
+                            # ── Portfolio Margin Guard: reserve before checking, hold across the
+                            # await to execute_order() so a sibling symbol cycle racing the same
+                            # cap (they all run concurrently under asyncio.gather) sees this
+                            # notional as already committed instead of checking against a stale
+                            # snapshot. ──
+                            pmg = await self.reserve_portfolio_margin(
+                                live_positions, notional_base_usd, target_symbol
                             )
-                            outcome = f"EXECUTED_{signal.signal_type}"
-                            details = (
-                                f"Executed {signal.signal_type} base order for {target_symbol} "
-                                f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
-                                f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
-                            )
-                        except BelowMinimumNotional as e:
-                            # Not a failure: the intended size is under the venue's minimum, so
-                            # the correct action is to stand down rather than trade bigger.
-                            outcome = f"SKIPPED_{signal.signal_type}"
-                            details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
-                            logger.info(f"⊘ {details}")
-                        except Exception as e:
-                            outcome = f"ERROR_{signal.signal_type}"
-                            details = f"Failed to execute order for {target_symbol}: {str(e)}"
-                            logger.error(details, exc_info=True)
+                            if not pmg["allowed"]:
+                                outcome = f"PORTFOLIO_GUARD_BLOCKED_{signal.signal_type}"
+                                details = (
+                                    f"🛡️ Portfolio Margin Guard blocked {signal.signal_type} for {target_symbol}: "
+                                    f"adding ${notional_base_usd:.2f} would push total from "
+                                    f"${pmg['current_total_usd']:.2f} over ${pmg['cap_usd']:.2f} cap. "
+                                    f"Headroom: ${pmg['headroom_usd']:.2f}"
+                                )
+                                logger.warning(details)
+                            else:
+                                order_side = "SELL" if signal.signal_type == "BASE_SHORT" else "BUY"
+                                try:
+                                    order_info = await self.executor.execute_order(
+                                        symbol=target_symbol,
+                                        side=order_side,
+                                        amount=base_order_amount,
+                                        stop_loss_pct=self.base_sl_pct,
+                                        leverage=sym_leverage,
+                                        price=signal.price
+                                    )
+                                    outcome = f"EXECUTED_{signal.signal_type}"
+                                    details = (
+                                        f"Executed {signal.signal_type} base order for {target_symbol} "
+                                        f"(${self.base_trade_usd:.2f} USD margin, ${notional_base_usd:.2f} USD notional) "
+                                        f"with SL={self.base_sl_pct*100:.2f}% (leverage x{sym_leverage})"
+                                    )
+                                except BelowMinimumNotional as e:
+                                    # Not a failure: the intended size is under the venue's minimum, so
+                                    # the correct action is to stand down rather than trade bigger.
+                                    outcome = f"SKIPPED_{signal.signal_type}"
+                                    details = f"{signal.signal_type} for {target_symbol} skipped — {e}"
+                                    logger.info(f"⊘ {details}")
+                                except Exception as e:
+                                    outcome = f"ERROR_{signal.signal_type}"
+                                    details = f"Failed to execute order for {target_symbol}: {str(e)}"
+                                    logger.error(details, exc_info=True)
+                                finally:
+                                    # Whichever branch ran, this cycle is done deciding on this
+                                    # notional. A filled order becomes real notional via next cycle's
+                                    # fetch_positions(); the reservation must not outlive this cycle.
+                                    await self.release_portfolio_reservation(notional_base_usd)
                         finally:
-                            # Whichever branch ran, this cycle is done deciding on this
-                            # notional. A filled order becomes real notional via next cycle's
-                            # fetch_positions(); the reservation must not outlive this cycle.
-                            await self.release_portfolio_reservation(notional_base_usd)
+                            # Mirrors the portfolio-margin reservation's lifetime: this cycle is
+                            # done deciding on this symbol's side, win or lose. A filled order
+                            # becomes visible in live_positions via the next fetch_positions().
+                            await self.release_correlation_reservation(target_symbol)
 
         elif "HIGH_RISK_ADD" in signal.signal_type:
             if cooldown_active:
