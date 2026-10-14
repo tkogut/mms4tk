@@ -27,15 +27,15 @@ After the 0.48.15 deploy, `trade_sync` logged `Entry price for close ... inferre
 
 ## Progress
 
-PR: pending
+PR: #127
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Warn once per close / stale leg; test, mutation-checked
-- [ ] 1.2 Version 0.48.16 and changelog
+- [x] 1.1 Warn once per close / stale leg; test, mutation-checked — a90c567
+- [x] 1.2 Version 0.48.16 and changelog — 64a0d73
 
 ### Phase 2: Validate
 
-- [ ] 2.1 Full suite including slow: 0 failures; handshake generated and validated
+- [x] 2.1 Full suite including slow: 0 failures; handshake generated and validated — 64a0d73
