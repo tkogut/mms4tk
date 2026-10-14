@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import time
@@ -192,6 +193,24 @@ class LoggerDB:
                 cursor.execute("ALTER TABLE closed_trades ADD COLUMN reason TEXT")
             if "entry_timestamp" not in columns:
                 cursor.execute("ALTER TABLE closed_trades ADD COLUMN entry_timestamp TEXT")
+            # #124: raw OKX orders, kept so a closed trade's opening leg (and its fee) survives
+            # after the order drops out of the ~100-order window the OKX history endpoints
+            # return. Append/upsert only — nothing ever deletes from this table.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS okx_orders (
+                    ord_id TEXT PRIMARY KEY,
+                    inst_id TEXT,
+                    side TEXT,
+                    pos_side TEXT,
+                    state TEXT,
+                    fill_time INTEGER NOT NULL DEFAULT 0,
+                    fee REAL NOT NULL DEFAULT 0.0,
+                    pnl REAL NOT NULL DEFAULT 0.0,
+                    updated_at TEXT NOT NULL,
+                    raw_json TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_okx_orders_fill_time ON okx_orders(fill_time)")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_addons (
                     symbol TEXT NOT NULL,
@@ -573,6 +592,12 @@ class LoggerDB:
         `COALESCE(excluded.reason, closed_trades.reason)` on conflict means a plain
         re-upsert with reason=None (the common case) never clobbers a reason set by
         an earlier call for the same trade_id.
+
+        #124: a re-upsert never LOWERS `fee_usd`. The sync recomputes every close from
+        whatever orders it can see; when a close's opening order has fallen out of that
+        view the recomputed opening fee is 0, and overwriting the booked (real) fee with
+        it halves the fee and inflates `pnl_net_usd`. On conflict `fee_usd` is the larger
+        of the stored and the new value, and `pnl_net_usd` / `is_win` follow the kept fee.
         """
         if pnl_net_usd is None:
             pnl_net_usd = pnl_usd - fee_usd
@@ -586,14 +611,88 @@ class LoggerDB:
                     exit_price=excluded.exit_price,
                     pnl_usd=excluded.pnl_usd,
                     pnl_pct=excluded.pnl_pct,
-                    is_win=excluded.is_win,
-                    fee_usd=excluded.fee_usd,
-                    pnl_net_usd=excluded.pnl_net_usd,
+                    is_win=CASE WHEN closed_trades.fee_usd > excluded.fee_usd
+                                THEN (excluded.pnl_usd - closed_trades.fee_usd > 0)
+                                ELSE excluded.is_win END,
+                    fee_usd=MAX(closed_trades.fee_usd, excluded.fee_usd),
+                    pnl_net_usd=CASE WHEN closed_trades.fee_usd > excluded.fee_usd
+                                     THEN excluded.pnl_usd - closed_trades.fee_usd
+                                     ELSE excluded.pnl_net_usd END,
                     reason=COALESCE(excluded.reason, closed_trades.reason)
                 """,
                 (trade_id, timestamp, symbol, side, entry_price, exit_price, amount, pnl_usd, pnl_pct, 1 if is_win else 0, leverage, fee_usd, pnl_net_usd, reason)
             )
             conn.commit()
+
+    def get_closed_trade_snapshot(self) -> Dict[str, Dict[str, float]]:
+        """`{trade_id: {fee_usd, pnl_usd, exit_price}}` for every stored closed trade.
+
+        Lets the sync skip rewriting rows whose recomputed values are unchanged instead
+        of issuing one write per historical close on every pass.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT trade_id, fee_usd, pnl_usd, exit_price FROM closed_trades")
+            return {
+                row[0]: {"fee_usd": float(row[1] or 0.0), "pnl_usd": float(row[2] or 0.0), "exit_price": float(row[3] or 0.0)}
+                for row in cursor.fetchall()
+            }
+
+    def upsert_okx_order(self, order: Dict[str, Any]) -> bool:
+        """Store (or refresh) one raw OKX order as returned by the history endpoints.
+
+        Returns False when the order has no usable id. The full payload is kept in
+        `raw_json` so a later recomputation sees exactly what OKX reported.
+        """
+        ord_id = order.get("ordId") or order.get("clOrdId")
+        if not ord_id:
+            return False
+        try:
+            fill_time = int(order.get("fillTime") or order.get("uTime") or order.get("cTime") or 0)
+        except (TypeError, ValueError):
+            fill_time = 0
+        try:
+            fee = abs(float(order.get("fee") or order.get("fee_usd") or 0.0))
+        except (TypeError, ValueError):
+            fee = 0.0
+        try:
+            pnl = float(order.get("pnl") or 0.0)
+        except (TypeError, ValueError):
+            pnl = 0.0
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO okx_orders (ord_id, inst_id, side, pos_side, state, fill_time, fee, pnl, updated_at, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ord_id) DO UPDATE SET
+                    inst_id=excluded.inst_id, side=excluded.side, pos_side=excluded.pos_side,
+                    state=excluded.state, fill_time=excluded.fill_time, fee=excluded.fee,
+                    pnl=excluded.pnl, updated_at=excluded.updated_at, raw_json=excluded.raw_json
+                """,
+                (
+                    str(ord_id), order.get("instId"), order.get("side"), order.get("posSide"),
+                    order.get("state"), fill_time, fee, pnl,
+                    datetime.now(timezone.utc).isoformat(), json.dumps(order, default=str),
+                ),
+            )
+            conn.commit()
+        return True
+
+    def load_okx_orders(self, since_ms: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Stored raw OKX orders (oldest first), optionally only those filled at/after `since_ms`."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if since_ms:
+                cursor.execute("SELECT raw_json FROM okx_orders WHERE fill_time >= ? ORDER BY fill_time, ord_id", (since_ms,))
+            else:
+                cursor.execute("SELECT raw_json FROM okx_orders ORDER BY fill_time, ord_id")
+            out: List[Dict[str, Any]] = []
+            for (raw,) in cursor.fetchall():
+                try:
+                    out.append(json.loads(raw))
+                except (TypeError, ValueError):
+                    continue
+            return out
 
     def peek_provisional_reason(self, symbol: str, side: str, entry_price: float, tolerance_pct: float = 0.001) -> Optional[str]:
         """

@@ -46,6 +46,8 @@ class OKXTradeSyncWorker:
         # exchange, but unbounded concurrent self-contention on one shared instance.
         self._sync_lock: asyncio.Lock = asyncio.Lock()
 
+    _PAGE_LIMIT = 100  # OKX maximum page size for the order-history endpoints
+
     @staticmethod
     def _is_closing_fill(fill: Dict[str, Any]) -> bool:
         """
@@ -133,6 +135,65 @@ class OKXTradeSyncWorker:
         entry = exit_price - delta if fill["pos_side"] == "long" else exit_price + delta
         return entry if entry > 0 else exit_price
 
+    @staticmethod
+    def _iso_to_ms(iso: Optional[str]) -> Optional[int]:
+        """Epoch milliseconds of an ISO timestamp (naive = UTC); None when absent/unparsable."""
+        if not iso:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+
+    async def _fetch_orders_paginated(
+        self,
+        endpoint: str,
+        base_params: Dict[str, Any],
+        start_ms: Optional[int],
+        seen_ord_ids: set,
+    ) -> List[Dict[str, Any]]:
+        """All orders of one OKX history endpoint, walking pages with the `after` ordId cursor.
+
+        Without `limit`/`after` OKX returns only its default ~100 most recent orders, which
+        is what used to hide opening orders (and their fees). Stops on a short page, a page
+        that adds no new ordId (a cursor that does not advance), a page already older than
+        the sync cut-off, or the page cap (`MMS4_TRADE_SYNC_MAX_PAGES`, default 30).
+        """
+        fn = getattr(self.executor.exchange, endpoint)
+        max_pages = max(1, int(os.getenv("MMS4_TRADE_SYNC_MAX_PAGES", "30")))
+        out: List[Dict[str, Any]] = []
+        after: Optional[str] = None
+        for _ in range(max_pages):
+            page_params = dict(base_params, limit=str(self._PAGE_LIMIT))
+            if after:
+                page_params["after"] = after
+            res = await fn(page_params)
+            data = res.get("data") if isinstance(res, dict) else None
+            if not data:
+                break
+            new_items = 0
+            for item in data:
+                oid = item.get("ordId") or item.get("clOrdId")
+                if oid and oid not in seen_ord_ids:
+                    seen_ord_ids.add(oid)
+                    out.append(item)
+                    new_items += 1
+            last_id = data[-1].get("ordId")
+            if len(data) < self._PAGE_LIMIT or new_items == 0 or not last_id:
+                break
+            if start_ms:
+                try:
+                    oldest = min(int(x.get("uTime") or x.get("cTime") or 0) for x in data)
+                except (TypeError, ValueError):
+                    oldest = 0
+                if 0 < oldest < start_ms:
+                    break
+            after = str(last_id)
+        return out
+
     async def sync_closed_trades(self) -> int:
         """
         Fetch closed orders from OKX and insert/update them in closed_trades.
@@ -157,34 +218,49 @@ class OKXTradeSyncWorker:
             # Query closed orders history from OKX via CCXT
             # Combines recent orders history (last 7 days) and archive (older history)
             params = {"instType": "FUTURES"}
-            orders_data: List[Dict[str, Any]] = []
+            fetched: List[Dict[str, Any]] = []
             seen_ord_ids = set()
+            sync_start_iso = os.getenv("MMS4_TRADE_SYNC_START_ISO", "2026-08-15T21:00:00+00:00")
+            start_ms = self._iso_to_ms(sync_start_iso)
 
-            try:
-                recent_orders = await self.executor.exchange.private_get_trade_orders_history(params)
-                if isinstance(recent_orders, dict) and "data" in recent_orders:
-                    for ord_item in recent_orders["data"]:
-                        oid = ord_item.get("ordId") or ord_item.get("clOrdId")
-                        if oid and oid not in seen_ord_ids:
-                            seen_ord_ids.add(oid)
-                            orders_data.append(ord_item)
-            except Exception as r_err:
-                logger.warning(f"Failed to fetch recent orders history from OKX: {r_err}")
+            for endpoint, label in (
+                ("private_get_trade_orders_history", "recent"),
+                ("private_get_trade_orders_history_archive", "archive"),
+            ):
+                try:
+                    fetched.extend(await self._fetch_orders_paginated(endpoint, params, start_ms, seen_ord_ids))
+                except Exception as f_err:
+                    logger.warning(f"Failed to fetch {label} orders history from OKX: {f_err}")
 
+            # #124: OKX only returns a short window per call, so a close's opening order
+            # eventually drops out of it. Keep every order we have ever seen and build the
+            # closed trades from that stored set (what OKX just returned wins by ordId).
+            for item in fetched:
+                try:
+                    self.logger_db.upsert_okx_order(item)
+                except Exception as s_err:
+                    logger.warning(f"Failed to store OKX order {item.get('ordId')}: {s_err}")
+            merged: Dict[str, Dict[str, Any]] = {}
             try:
-                archive_orders = await self.executor.exchange.private_get_trade_orders_history_archive(params)
-                if isinstance(archive_orders, dict) and "data" in archive_orders:
-                    for ord_item in archive_orders["data"]:
-                        oid = ord_item.get("ordId") or ord_item.get("clOrdId")
-                        if oid and oid not in seen_ord_ids:
-                            seen_ord_ids.add(oid)
-                            orders_data.append(ord_item)
-            except Exception as a_err:
-                logger.warning(f"Failed to fetch archive orders history from OKX: {a_err}")
+                for item in self.logger_db.load_okx_orders(since_ms=start_ms):
+                    oid = item.get("ordId") or item.get("clOrdId")
+                    if oid:
+                        merged[str(oid)] = item
+            except Exception as l_err:
+                logger.warning(f"Failed to load stored OKX orders: {l_err}")
+            for item in fetched:
+                oid = item.get("ordId") or item.get("clOrdId")
+                if oid:
+                    merged[str(oid)] = item
+            orders_data: List[Dict[str, Any]] = list(merged.values())
+            try:
+                existing_trades = self.logger_db.get_closed_trade_snapshot()
+            except Exception as e_err:
+                logger.warning(f"Failed to read stored closed trades: {e_err}")
+                existing_trades = {}
 
             # 1. Normalize the raw fills, oldest first, so opens can be paired with closes.
             fills: List[Dict[str, Any]] = []
-            sync_start_iso = os.getenv("MMS4_TRADE_SYNC_START_ISO", "2026-08-15T21:00:00+00:00")
             for item in orders_data:
                 if item.get("state") not in ["filled", "partially_filled"]:
                     continue
@@ -236,6 +312,10 @@ class OKXTradeSyncWorker:
                     # No matching open in this window (position opened before the sync
                     # cutoff). Derive the entry from the realized PnL where possible.
                     entry_price = self._infer_entry_price(f)
+                    logger.warning(
+                        f"Entry price for close {f['ord_id']} ({f['symbol']}) inferred from PnL: no opening "
+                        f"order found, so its opening fee is unknown (booked fee will not be lowered)"
+                    )
 
                 close_fee = abs(float(f.get("fee_usd") or f.get("fee") or 0.0))
                 total_fee = open_fee + close_fee
@@ -244,6 +324,15 @@ class OKXTradeSyncWorker:
                 is_win = pnl_net > 0
 
                 exit_price = f["price"]
+                exit_price = f["price"]
+                prev = existing_trades.get(f["ord_id"])
+                if (
+                    prev is not None
+                    and prev["fee_usd"] >= total_fee - 1e-9
+                    and abs(prev["pnl_usd"] - pnl_gross) < 1e-9
+                    and abs(prev["exit_price"] - exit_price) < 1e-9
+                ):
+                    continue  # unchanged (or fee already higher): nothing to write
                 lever = f["lever"] or 1.0
                 # `size` is in OKX contracts, not coins — scale by ctVal or notional
                 # (and therefore margin and pnl_pct) comes out 100x-10000x too large,
