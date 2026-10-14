@@ -4,6 +4,16 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.16] - 2026-10-14
+
+### 🐛 Fixed — `trade_sync` warning spam after 0.48.15 (#124 follow-up)
+- 🐛 **Problem**: the sync revisits every stored close on each pass, so the WARNING
+  `Entry price for close ... inferred from PnL` (and the stale-opening-order one) was logged for
+  every affected close on every pass: ~108 lines a minute, about half of all log lines.
+- ✅ Each condition is now logged once per close / stale order per process (remembered in memory;
+  logged once more after a restart). No change to the sync logic, fees, schema or API.
+- 🧪 `tests/test_trade_sync_fees.py`: two passes over the same data give exactly one warning.
+
 ## 🚀 [0.48.15] - 2026-10-14
 
 ### 🐛 Fixed — `trade_sync` lost opening fees and lowered booked fees (#124, part 1)

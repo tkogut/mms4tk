@@ -45,6 +45,11 @@ class OKXTradeSyncWorker:
         # RequestTimeouts on unrelated endpoints (balance/positions) — not a slow
         # exchange, but unbounded concurrent self-contention on one shared instance.
         self._sync_lock: asyncio.Lock = asyncio.Lock()
+        # Close ids / stale opening orders already reported by a WARNING. The sync revisits every
+        # stored close on every pass (dashboard polls trigger it every few seconds), so without
+        # this each such condition was logged on every pass - ~100 lines a minute after #126.
+        self._warned_inferred_entry: set = set()
+        self._warned_stale_legs: set = set()
 
     _PAGE_LIMIT = 100  # OKX maximum page size for the order-history endpoints
 
@@ -350,19 +355,23 @@ class OKXTradeSyncWorker:
                 queue = open_legs.get(key)
                 while queue and f["ts_ms"] - queue[0]["ts_ms"] > max_leg_age_ms:
                     stale = queue.pop(0)
-                    logger.warning(
-                        f"Dropping stale opening order {stale['ord_id']} ({stale['symbol']}) older than the "
-                        f"FIFO age cap before matching close {f['ord_id']}"
-                    )
+                    if stale["ord_id"] not in self._warned_stale_legs:
+                        self._warned_stale_legs.add(stale["ord_id"])
+                        logger.warning(
+                            f"Dropping stale opening order {stale['ord_id']} ({stale['symbol']}) older than the "
+                            f"FIFO age cap before matching close {f['ord_id']}"
+                        )
                 entry_price, open_fee = self._consume_open_legs(open_legs.get(key, []), f["size"])
                 if entry_price <= 0:
                     # No matching open in this window (position opened before the sync
                     # cutoff). Derive the entry from the realized PnL where possible.
                     entry_price = self._infer_entry_price(f)
-                    logger.warning(
-                        f"Entry price for close {f['ord_id']} ({f['symbol']}) inferred from PnL: no opening "
-                        f"order found, so its opening fee is unknown (booked fee will not be lowered)"
-                    )
+                    if f["ord_id"] not in self._warned_inferred_entry:
+                        self._warned_inferred_entry.add(f["ord_id"])
+                        logger.warning(
+                            f"Entry price for close {f['ord_id']} ({f['symbol']}) inferred from PnL: no opening "
+                            f"order found, so its opening fee is unknown (booked fee will not be lowered)"
+                        )
 
                 close_fee = abs(float(f.get("fee_usd") or f.get("fee") or 0.0))
                 total_fee = open_fee + close_fee
