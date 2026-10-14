@@ -4,6 +4,26 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.18] - 2026-10-14
+
+### ✨ Added — BTC/ETH Mutual Exclusion Guard (#130)
+- 🐛 **Problem**: BTC and ETH base positions open independently even when strongly correlated.
+  Production evidence (`.ai/analysis/2026-10-14-sl-loss-attribution.md` §6): of the 30 production
+  STOP-LOSS closes, three strictly-simultaneous (<=10 minutes apart, same side) BTC+ETH pairs
+  — 2026-08-24, 2026-09-18, 2026-09-21 — account for -17.49 USD brutto / -18.37 USD netto, 23% of
+  all realized SL loss, from a single market move stopping out both symbols independently.
+- ✅ A fresh BASE_LONG/BASE_SHORT entry is now blocked (`CORRELATION_GUARD_BLOCKED_*` outcome)
+  when the symbol's configured correlated partner already holds a same-direction base position.
+  Checked using the account's already-fetched `live_positions` snapshot (zero extra API calls),
+  BEFORE the Portfolio Margin Guard reservation so a blocked entry never consumes margin headroom.
+  Default pair: `BTC/USDC` + `ETH/USDC`, configurable via `MMS4_CORRELATED_PAIRS`
+  (`"BTC/USDC:ETH/USDC,XAU/USDC:XAG/USDC"`-style, comma-separated). XAU/USDC and XAG/USDC are
+  NOT included by default — no comparable correlated-SL pattern found in the analysis.
+- 🧪 `tests/test_correlation_guard.py` (9 new tests) for the extracted pure
+  `check_correlation_guard()` / `_correlated_symbol()` helpers.
+- 📄 `BACKWARD_COMPATIBILITY.md` §5 — new, purely additive entry-blocking guard, noted because it
+  changes production entry behavior.
+
 ## 🚀 [0.48.17] - 2026-10-14
 
 ### 🐛 Fixed — scout_override cooldown (#129)
