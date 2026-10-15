@@ -153,6 +153,26 @@ class IndicatorParams(BaseModel):
     # it on a live account.
     high_vol_base_filter_enabled: bool = False
 
+    # ── Mid Volatility Sweep-Rejection Filter (Issue #134) ──
+    # The compression filter (VR < adaptive_vr_low) and the high-volatility filter
+    # above (VR > adaptive_vr_high, when enabled) both require a Sweep Rejection
+    # wick before a BASE entry — but the band IN BETWEEN them (adaptive_vr_low <=
+    # VR <= adaptive_vr_high, the "normal" regime) has no wick requirement at all.
+    # Production incident (2026-10-15, XAG/USDC): a BASE_SHORT fired on a candle
+    # with vol_ratio=1.17 (squarely inside this gap) whose close was only 0.12%
+    # below its open — no meaningful rejection, closer to a pause in a strong
+    # uptrend than a reversal — against a multi-hour rebound; the position went
+    # straight toward its stop. Reuses check_sweep_rejection's existing 20%
+    # (non-extreme) threshold, the SAME bar the compression filter already uses —
+    # not the 40% "extreme" bar from high_vol_base_filter_enabled, which a 2026-09-08
+    # backtest found made results worse in 3/4 windows (do not confuse the two).
+    # Per-symbol, default OFF: unvalidated until it clears the bar set for every
+    # other filter in this file — see Issue #134 for the required OOS backtest
+    # (primary metric: PnL of the REJECTED trades must be negative, >=3 of 4
+    # windows, per symbol — an overall PnL improvement from trading less is not
+    # sufficient evidence on its own).
+    mid_vol_sweep_filter_enabled: bool = False
+
     # ── Midline Partial Take-Profit (PLAN-009) ──
     # Audit P9.1 (2026-09-08): default False. This feature was rejected 6/6 in
     # backtest (CHANGELOG 0.42.1) and every other rejected filter in this module
@@ -630,6 +650,26 @@ class MMS4SignalEngine:
                         volatility_ratio=latest_vr
                     )
 
+            # Adaptive Fast-Path: Mid Volatility (VR_LOW <= VR <= VR_HIGH) — Issue
+            # #134. Closes the gap between the compression and high-volatility
+            # filters above; same 20% (non-extreme) bar as compression, not the 40%
+            # "extreme" bar. Unvalidated, default OFF — see IndicatorParams docstring.
+            if (
+                is_adaptive and params.mid_vol_sweep_filter_enabled
+                and params.adaptive_vr_low <= latest_vr <= params.adaptive_vr_high
+            ):
+                has_sweep = check_sweep_rejection(curr_c, "SHORT", extreme=False)
+                if not has_sweep:
+                    return SignalResult(
+                        signal_type="BASE_SHORT",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * (1.0 + base_sl_pct), 6),
+                        leverage=active_leverage,
+                        is_allowed=False,
+                        reason=f"BASE_SHORT blocked in mid volatility (VR {latest_vr:.2f} in [{params.adaptive_vr_low:.2f}, {params.adaptive_vr_high:.2f}]): no Sweep Rejection wick (SKIPPED_MID_VOL_NO_SWEEP)",
+                        volatility_ratio=latest_vr
+                    )
+
             return SignalResult(
                 signal_type="BASE_SHORT",
                 price=curr_c.close,
@@ -692,6 +732,24 @@ class MMS4SignalEngine:
                         leverage=active_leverage,
                         is_allowed=False,
                         reason=f"BASE_LONG blocked in low volatility compression (VR {latest_vr:.2f} < {params.adaptive_vr_low:.2f}): no Sweep Rejection wick (SKIPPED_COMPRESSION_NO_SWEEP)",
+                        volatility_ratio=latest_vr
+                    )
+
+            # Adaptive Fast-Path: Mid Volatility (VR_LOW <= VR <= VR_HIGH) — Issue
+            # #134. LONG mirror of the BASE_SHORT mid-volatility branch above.
+            if (
+                is_adaptive and params.mid_vol_sweep_filter_enabled
+                and params.adaptive_vr_low <= latest_vr <= params.adaptive_vr_high
+            ):
+                has_sweep = check_sweep_rejection(curr_c, "LONG", extreme=False)
+                if not has_sweep:
+                    return SignalResult(
+                        signal_type="BASE_LONG",
+                        price=curr_c.close,
+                        stop_loss=round(curr_c.close * (1.0 - base_sl_pct), 6),
+                        leverage=active_leverage,
+                        is_allowed=False,
+                        reason=f"BASE_LONG blocked in mid volatility (VR {latest_vr:.2f} in [{params.adaptive_vr_low:.2f}, {params.adaptive_vr_high:.2f}]): no Sweep Rejection wick (SKIPPED_MID_VOL_NO_SWEEP)",
                         volatility_ratio=latest_vr
                     )
 

@@ -4,6 +4,31 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.20] - 2026-10-15
+
+### ✨ Added — mid-volatility sweep-rejection filter (#134)
+- 🐛 **Problem**: `check_sweep_rejection()` already gates BASE entries on a wick
+  requirement in two VR regimes (VR < 0.8 unconditionally, VR > 1.6 behind
+  `high_vol_base_filter_enabled`) — but the band IN BETWEEN
+  (`adaptive_vr_low <= VR <= adaptive_vr_high`) has no wick requirement at all.
+  Production incident (2026-10-15, XAG/USDC): a `BASE_SHORT` fired at
+  `vol_ratio=1.17` (squarely in this gap) on a candle that closed only 0.12% below
+  its open — a pause in a strong multi-hour rebound, not a reversal.
+- ✅ New `mid_vol_sweep_filter_enabled` (`IndicatorParams`, default **False**,
+  per-symbol): when on, requires the existing 20% (non-extreme) Sweep Rejection
+  wick for `BASE_SHORT`/`BASE_LONG` whenever VR falls in
+  `[adaptive_vr_low, adaptive_vr_high]`. Reuses the compression filter's own 20%
+  bar — explicitly NOT the 40% "extreme" bar from `high_vol_base_filter_enabled`,
+  which a 2026-09-08 backtest already found made results worse in 3/4 windows.
+- 🧪 `tests/test_adaptive_tactics.py`: blocked/allowed/disabled-by-default, both
+  BASE_SHORT and BASE_LONG.
+- 🔬 Unvalidated by default — an OOS backtest report (primary metric: PnL of the
+  REJECTED trades, not overall PnL, per symbol) follows before any
+  `system_settings` enable. Two-candle confirmation (the other half of the
+  original proposal) was explicitly dropped for BTC/ETH after independent review
+  found the reward/cost asymmetry hits exactly the two symbols responsible for
+  84% of realized loss.
+
 ## 🚀 [0.48.19] - 2026-10-15
 
 ### 📝 Fixed — Hermes wasn't told about the scout_override cooldown (#129 follow-up)
