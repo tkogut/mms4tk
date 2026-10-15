@@ -1,7 +1,7 @@
 import pytest
 from mms4tk.state_manager import MMS4StateManager, MMS4State
 from mms4tk.state_manager import SCOUT_LEVERAGE, SCOUT_SIZE_MULT
-from mms4tk.api import app, configured_symbols_store, state_manager
+from mms4tk.api import app, configured_symbols_store, state_manager, save_symbols_config
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -112,6 +112,69 @@ def test_add_remove_trading_symbol_api():
     get_res2 = client.get("/api/v1/symbols")
     all_syms = [s["symbol"] for s in get_res2.json()["symbols"]]
     assert "DOGE/USDC" not in all_syms
+
+
+def test_add_rejects_already_configured_symbol_without_resetting_it():
+    """2026-10-15 incident: POST /api/v1/symbols/add and /update share one handler
+    that overwrites every omitted AddSymbolRequest field with its schema default.
+    /update is always called with the full current config (SymbolsTab.jsx), but
+    /add is not — a stray "Dodaj Nową Parę" click on an already-configured symbol
+    silently reset ALL of its settings to defaults in production, undoing the
+    PR #136 decision to keep htf_directional_gate_enabled on for BTC/USDC. /add
+    must now reject an existing symbol (409) instead of clobbering it; /update
+    remains the only path that can change an existing symbol's settings."""
+    headers = {"X-MMS4-API-KEY": "test-api-auth-key-unit-test"}
+    symbol = "BTC/USDC"
+
+    before = client.get("/api/v1/symbols").json()["symbols"]
+    before_row = next(s for s in before if s["symbol"] == symbol)
+
+    add_res = client.post(
+        "/api/v1/symbols/add",
+        json={"symbol": symbol},
+        headers=headers,
+    )
+    assert add_res.status_code == 409
+    assert symbol in add_res.json()["detail"]
+
+    after = client.get("/api/v1/symbols").json()["symbols"]
+    after_row = next(s for s in after if s["symbol"] == symbol)
+    assert after_row["allocation_usd"] == before_row["allocation_usd"]
+    assert after_row["htf_directional_gate_enabled"] == before_row["htf_directional_gate_enabled"]
+    assert after_row["stale_candles_threshold"] == before_row["stale_candles_threshold"]
+
+
+def test_update_still_allowed_on_already_configured_symbol():
+    """The /add 409 guard must be scoped to the /add route only — /update (the
+    dashboard's save/toggle path) must keep working on an existing symbol.
+
+    POST /update writes through save_symbols_config() to symbols.json AND the
+    SQLite symbol_configurations row, not just the in-memory
+    configured_symbols_store — the autouse _isolate_system_settings fixture
+    only restores the in-memory dict, not those two on-disk/SQLite writes (see
+    tests/test_inactivity_api_persistence.py's docstring, which documents this
+    exact gap from three prior reviews). Explicit try/finally here restores all
+    three places this endpoint writes."""
+    headers = {"X-MMS4-API-KEY": "test-api-auth-key-unit-test"}
+    symbol = "ETH/USDC"
+
+    before_full_config = configured_symbols_store.get(symbol)
+    assert before_full_config is not None, "ETH/USDC must already be configured for this test"
+
+    try:
+        res = client.post(
+            "/api/v1/symbols/update",
+            json={"symbol": symbol, "allocation_usd": 42.0},
+            headers=headers,
+        )
+        assert res.status_code == 200
+
+        get_res = client.get("/api/v1/symbols")
+        row = next(s for s in get_res.json()["symbols"] if s["symbol"] == symbol)
+        assert row["allocation_usd"] == 42.0
+    finally:
+        configured_symbols_store[symbol] = dict(before_full_config)
+        save_symbols_config(configured_symbols_store)
 
 
 def test_multi_symbol_daemon_cycle():

@@ -1967,9 +1967,30 @@ async def verify_symbol_direct(req: AddSymbolRequest) -> Dict[str, Any]:
 
 @app.post("/api/v1/symbols/add", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
 @app.post("/api/v1/symbols/update", tags=["Multi-Symbol"], dependencies=[Depends(verify_api_key)])
-async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
-    """Add, activate, or update per-symbol allocation ($ USD) & Base/Add ratio configuration."""
+async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) -> Dict[str, Any]:
+    """Add, activate, or update per-symbol allocation ($ USD) & Base/Add ratio configuration.
+
+    2026-10-15 incident: this handler backs BOTH routes and unconditionally
+    overwrote every AddSymbolRequest field with its schema default whenever a
+    caller omitted it — fine for /update (the dashboard always echoes the full
+    current config back, see SymbolsTab.jsx), but /add has no such guarantee.
+    A single "Dodaj Nową Parę" click on an already-configured symbol (e.g.
+    BTC/USDC) silently reset every one of its settings to defaults in
+    production, including undoing the PR #136 decision to keep
+    htf_directional_gate_enabled on. Reject /add on a symbol that already
+    exists instead — /update remains the only path that can change an
+    existing symbol's settings, and it always carries the full config.
+    """
     formatted_sym = _format_symbol(req.symbol)
+    if request.url.path.endswith("/symbols/add") and formatted_sym in configured_symbols_store:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{formatted_sym} is already configured. Use /api/v1/symbols/update "
+                "to change its settings — /add would reset every omitted field to "
+                "its default."
+            ),
+        )
 
     b_ratio = req.base_ratio
     a_ratio = 100 - b_ratio if b_ratio <= 100 else req.add_ratio

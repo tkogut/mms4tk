@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X, ShieldAlert, Lock } from 'lucide-react';
+import { Layers, Plus, Trash2, Shield, Activity, Power, CheckCircle, PauseCircle, AlertTriangle, Search, Check, X, ShieldAlert, Lock, Filter } from 'lucide-react';
 
 export function SymbolsTab({ apiKey }) {
   const [symbols, setSymbols] = useState([
@@ -414,10 +414,37 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
   const [staleAtr, setStaleAtr] = useState(symbolObj.stale_atr_threshold ?? 0.5);
   const [impulseNeg, setImpulseNeg] = useState(symbolObj.impulse_negation_enabled !== false);
   const [trendFilterEnabled, setTrendFilterEnabled] = useState(symbolObj.tma_trend_filter_enabled === true);
+  const [highVolFilter, setHighVolFilter] = useState(symbolObj.high_vol_base_filter_enabled === true);
+  const [htfGate, setHtfGate] = useState(symbolObj.htf_directional_gate_enabled === true);
+  const [midVolSweep, setMidVolSweep] = useState(symbolObj.mid_vol_sweep_filter_enabled === true);
+  const [addonFavorable, setAddonFavorable] = useState(symbolObj.addon_requires_favorable_price_enabled === true);
 
   useEffect(() => {
     setTrendFilterEnabled(symbolObj.tma_trend_filter_enabled === true);
   }, [symbolObj.tma_trend_filter_enabled]);
+
+  // Keyed on the primitive values, not [symbolObj] — the dashboard polls
+  // /api/v1/symbols every 10s and hands down a fresh symbolObj reference each
+  // time even when nothing changed server-side. A [symbolObj]-keyed effect
+  // fires on every poll, so an in-progress toggle flip gets silently
+  // overwritten by the server's last-saved value before the operator can
+  // click "Zapisz Ustawienia" — exactly the class of bug this file keeps
+  // reintroducing (see the #139 reset-bug fixes above).
+  useEffect(() => {
+    setHighVolFilter(symbolObj.high_vol_base_filter_enabled === true);
+  }, [symbolObj.high_vol_base_filter_enabled]);
+
+  useEffect(() => {
+    setHtfGate(symbolObj.htf_directional_gate_enabled === true);
+  }, [symbolObj.htf_directional_gate_enabled]);
+
+  useEffect(() => {
+    setMidVolSweep(symbolObj.mid_vol_sweep_filter_enabled === true);
+  }, [symbolObj.mid_vol_sweep_filter_enabled]);
+
+  useEffect(() => {
+    setAddonFavorable(symbolObj.addon_requires_favorable_price_enabled === true);
+  }, [symbolObj.addon_requires_favorable_price_enabled]);
 
   useEffect(() => {
     setAllocUsd(symbolObj.allocation_usd || 10.0);
@@ -639,6 +666,101 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
           </div>
         </div>
 
+        {/* Per-symbol filter/gate toggles — API-only until now (#139). All
+            default OFF; the evidence line under each button is on-screen text,
+            not a hover title, so it's visible on the touch devices this PWA
+            also targets. See AddSymbolRequest in api.py for the authoritative
+            evidence text these are condensed from. Not labeled "experimental"
+            as a group — htf_directional_gate_enabled and
+            addon_requires_favorable_price_enabled have strong positive
+            evidence; only the other two are genuinely not recommended. */}
+        <div className="pt-2 border-t border-slate-800/50">
+          <div className="flex items-center gap-2 mb-2">
+            <Filter className="w-3.5 h-3.5 text-purple-400" />
+            <span className="text-[10px] font-bold text-purple-400 font-mono tracking-wide">
+              FILTRY / BRAMKI (PER-SYMBOL)
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono truncate">
+                Filtr Wys. Zmienności:
+              </label>
+              <button
+                type="button"
+                onClick={() => setHighVolFilter(v => !v)}
+                className={`w-full py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-colors ${
+                  highVolFilter
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-500 border-slate-700'
+                }`}
+              >
+                {highVolFilter ? '✓ WŁ' : '✕ WYŁ'}
+              </button>
+              <span className="text-[9px] text-red-400/80 font-mono block mt-0.5 leading-tight">
+                Backtest 09-08: pogarsza wyniki — nie zalecane
+              </span>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono truncate">
+                Bramka Kierunkowa H4:
+              </label>
+              <button
+                type="button"
+                onClick={() => setHtfGate(v => !v)}
+                className={`w-full py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-colors ${
+                  htfGate
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-500 border-slate-700'
+                }`}
+              >
+                {htfGate ? '✓ WŁ' : '✕ WYŁ'}
+              </button>
+              <span className="text-[9px] text-emerald-400/80 font-mono block mt-0.5 leading-tight">
+                10/10 okien poprawiło PnL (p=0.002) — zalecane
+              </span>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono truncate">
+                Filtr Śred. Zmienności:
+              </label>
+              <button
+                type="button"
+                onClick={() => setMidVolSweep(v => !v)}
+                className={`w-full py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-colors ${
+                  midVolSweep
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-500 border-slate-700'
+                }`}
+              >
+                {midVolSweep ? '✓ WŁ' : '✕ WYŁ'}
+              </button>
+              <span className="text-[9px] text-amber-400/80 font-mono block mt-0.5 leading-tight">
+                #134: brak przewagi w żadnym symbolu
+              </span>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 font-mono truncate">
+                Addon Tylko Korzystny:
+              </label>
+              <button
+                type="button"
+                onClick={() => setAddonFavorable(v => !v)}
+                className={`w-full py-1.5 px-2 rounded-lg text-xs font-mono font-bold border transition-colors ${
+                  addonFavorable
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-500 border-slate-700'
+                }`}
+              >
+                {addonFavorable ? '✓ WŁ' : '✕ WYŁ'}
+              </button>
+              <span className="text-[9px] text-emerald-400/80 font-mono block mt-0.5 leading-tight">
+                #137: najsilniejszy dowód (p=0.001) — zalecane
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* Action Buttons: Save Settings & Delete Pair */}
         <div className="flex items-center gap-2 pt-1">
           <button
@@ -648,6 +770,10 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
               impulse_negation_enabled: impulseNeg
             }, {
               tma_trend_filter_enabled: trendFilterEnabled,
+              high_vol_base_filter_enabled: highVolFilter,
+              htf_directional_gate_enabled: htfGate,
+              mid_vol_sweep_filter_enabled: midVolSweep,
+              addon_requires_favorable_price_enabled: addonFavorable,
             })}
             className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold font-mono border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
           >
@@ -680,6 +806,10 @@ function SymbolCard({ symbolObj, isAutotradeReady, onToggle, onRequestDelete, on
               tma_trend_filter_enabled: true,
               tma_slope_lookback: lookback,
               tma_slope_threshold: threshold,
+              high_vol_base_filter_enabled: highVolFilter,
+              htf_directional_gate_enabled: htfGate,
+              mid_vol_sweep_filter_enabled: midVolSweep,
+              addon_requires_favorable_price_enabled: addonFavorable,
             })
           }
         />

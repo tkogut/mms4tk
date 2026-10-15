@@ -4,6 +4,52 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.23] - 2026-10-15
+
+### 🐛 Fixed — third settings-reset vector + real dashboard toggles for #139's flags
+- 🐛 **Production incident**: `POST /api/v1/symbols/add` and `/symbols/update` share
+  one handler (`add_or_update_trading_symbol`) that overwrites every
+  `AddSymbolRequest` field omitted by the caller with its schema default. ALL of
+  BTC/USDC's settings reset to defaults in production on 2026-10-15 (~18:49
+  UTC), undoing the PR #136 decision to keep `htf_directional_gate_enabled` on
+  for it — caught by comparing a dashboard screenshot against the
+  `system_settings` DB state. **Root cause is one of two pre-existing,
+  still-deployed frontend code paths, not fully distinguishable after the
+  fact** (the access log window covering 18:49 had already rotated out by the
+  time this was investigated): either `handleAddSymbol` ("Dodaj Nową Parę",
+  which sends only `{symbol, is_active}`) or `handleToggleSymbol`
+  (pause/▶️-resume, which sends only 5 of 15 fields) — both omit every field
+  this incident reset, and **both bugs still exist in the deployed
+  `ui_dashboard` container**, because that container's image was last built
+  2026-10-13 and has never shipped any fix from PR #139 or this PR (confirmed
+  2026-10-15: #139 only rebuilt `antigravity_core`). This PR's `/add` 409 guard
+  closes the `handleAddSymbol` half of the ambiguity regardless of frontend
+  deploy status; the `handleToggleSymbol` half requires actually deploying the
+  rebuilt `ui_dashboard` image, which has not happened yet.
+- ✅ `/api/v1/symbols/add` now returns **409** when the symbol already exists,
+  instead of silently clobbering it; `/update` is unaffected and remains the
+  only path that can change an existing symbol's settings. `tests/test_multi_symbol.py`:
+  2 new tests (reject-and-preserve on `/add`, confirm `/update` still works).
+- ✅ **Real dashboard toggles** for the four per-symbol filter/gate flags
+  (`high_vol_base_filter_enabled`, `htf_directional_gate_enabled`,
+  `mid_vol_sweep_filter_enabled`, `addon_requires_favorable_price_enabled`) —
+  previously API-only. Each shows its backtest evidence as on-screen text (not
+  a hover tooltip, which doesn't work on this PWA's touch targets).
+- 🐛 Fixed a related reactivity bug while adding the toggles: the four new
+  `useState` syncs were keyed on `[symbolObj]` (the whole object), which the
+  dashboard's 10s polling loop replaces with a new reference every cycle even
+  when nothing changed — an in-progress toggle click could be silently
+  reverted by the next poll before the operator saved. Re-keyed on the
+  individual primitive fields, matching the existing `tma_trend_filter_enabled`
+  pattern.
+- 📄 **BTC/USDC's `htf_directional_gate_enabled` is still `false` in production
+  as of this entry — NOT yet restored.** A direct SQLite write was attempted
+  and blocked by the auto-mode permission classifier (remote shell writes to
+  prod are intentionally gated); the operator needs to either run the
+  restoration command themselves or wait for this PR's dashboard toggle to
+  ship and flip it from the UI. Other BTC fields were left unassessed since
+  their pre-incident values aren't recoverable with confidence.
+
 ## 🚀 [0.48.22] - 2026-10-15
 
 ### ✨ Added — expose #134/#137 filters in Settings + fix UI reset bug
