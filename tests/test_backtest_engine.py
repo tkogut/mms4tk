@@ -659,6 +659,59 @@ def test_default_variant_sl_price_matches_production_formula_exactly(monkeypatch
     assert stop_losses[0]["exit_price"] == pytest.approx(expected, abs=1e-9)
 
 
+def _favorable_price_scenario(monkeypatch, addon_close, filter_enabled):
+    """BASE_SHORT entered at close=100.0 (base_entry_price=100.0); a scripted
+    HIGH_RISK_ADD_SHORT fires one candle later at `addon_close`; closed two candles
+    after that by a scripted BASE_LONG (TP_AND_FLIP) so the addon's fate is
+    observable on `addon_applied` without a real stop-out muddying the result."""
+    params = IndicatorParams(addon_requires_favorable_price_enabled=filter_enabled)
+    warmup = max(params.tma_length, params.atr_period) + 5 + 2
+    candles = _flat_candles(warmup + 10)
+    entry_idx, addon_idx, close_idx = warmup, warmup + 1, warmup + 3
+    # Sustain addon_close through to the close candle (no retracement) so Impulse
+    # Negation/Profit Giveback don't fire and steal the close before the scripted
+    # BASE_LONG gets evaluated -- this test is only about the addon gate itself.
+    for idx in range(addon_idx, close_idx + 1):
+        candles[idx] = Candle(timestamp=idx, open=addon_close, high=addon_close + 0.3,
+                               low=addon_close - 0.3, close=addon_close, volume=1.0)
+    _scripted_engine(monkeypatch, {
+        entry_idx: "BASE_SHORT",
+        addon_idx: "HIGH_RISK_ADD_SHORT",
+        close_idx: "BASE_LONG",
+    })
+    trades = be.run_backtest("BTC/USDC", candles, params, stale_candles_threshold=1000, trend_filter_enabled=False)
+    closes = [t for t in trades if t["exit_reason"] == "TP_AND_FLIP"]
+    assert len(closes) == 1, "the scripted BASE_LONG must close the position exactly once"
+    return closes[0]
+
+
+def test_favorable_price_gate_blocks_addon_fired_at_an_adverse_price(monkeypatch):
+    """Issue #137: base SHORT entered at 100.0; the add candidate closes at 101.0 --
+    WORSE than the base entry for a short (averaging into a loss), but short of the
+    2% stop (101.0 < 102.0) so the stop-loss doesn't close the position first.
+    With the gate on, the add must be skipped entirely."""
+    close = _favorable_price_scenario(monkeypatch, addon_close=101.0, filter_enabled=True)
+    assert close["addon_applied"] is False
+    assert close["weight"] == pytest.approx(1.0, abs=0.01)  # no addon notional at all
+
+
+def test_favorable_price_gate_allows_addon_fired_at_a_favorable_price(monkeypatch):
+    """Same setup, but the add candidate closes at 99.7 -- BETTER than the base
+    entry for a short (pyramiding a winner). The gate must let this through."""
+    close = _favorable_price_scenario(monkeypatch, addon_close=99.7, filter_enabled=True)
+    assert close["addon_applied"] is True
+    assert close["weight"] == pytest.approx(1.0 + be.ADDON_ALLOCATION / be.BASE_ALLOCATION, abs=0.01)
+
+
+def test_favorable_price_gate_disabled_by_default_lets_the_same_adverse_add_through(monkeypatch):
+    """Same exact geometry (adverse-price add) as the blocking test above -- the
+    ONLY difference is the default `addon_requires_favorable_price_enabled=False` --
+    proves the block above is caused by the new gate, not some incidental guard."""
+    close = _favorable_price_scenario(monkeypatch, addon_close=101.0, filter_enabled=False)
+    assert close["addon_applied"] is True
+    assert close["weight"] == pytest.approx(1.0 + be.ADDON_ALLOCATION / be.BASE_ALLOCATION, abs=0.01)
+
+
 def test_run_backtest_rejects_unknown_addon_sl_variant():
     params = IndicatorParams()
     candles = _flat_candles(50)

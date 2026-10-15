@@ -361,6 +361,75 @@ def test_second_addon_blocked_after_entry_price_drift(db):
     assert ex.execute_order.await_count == 1
 
 
+# ── Issue #137: Favorable-Price Addon Gate ───────────────────────────────
+
+def _last_cycle_details(db, symbol):
+    with db._get_connection() as conn:
+        row = conn.execute(
+            "SELECT details FROM cycle_logs WHERE symbol = ? ORDER BY id DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+        return row["details"] if row else ""
+
+
+def test_addon_blocked_at_adverse_price_when_gate_enabled(db):
+    """A SHORT base entered at $100; the add candidate is at $102 -- WORSE than the
+    base entry for a short (averaging into a loss). With the gate enabled, this
+    must be skipped, not executed."""
+    from mms4tk.analytics import SignalResult
+
+    db.set_setting("addon_requires_favorable_price_enabled:ETH/USDC", "True")
+    sig = SignalResult(signal_type="HIGH_RISK_ADD_SHORT", price=102.0, stop_loss=103.0, leverage=3.0)
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "short", entry=100.0, notional=7.0)])
+    d, _ = make_daemon(db, ex, sig)
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+    assert res["outcome"] == "SKIPPED_HIGH_RISK_ADD_SHORT"
+    assert "Favorable-Price Addon Gate" in _last_cycle_details(db, "ETH/USDC")
+
+
+def test_addon_allowed_at_favorable_price_when_gate_enabled(db):
+    """Same base entry, but the add candidate is at $98 -- BETTER than the base
+    entry for a short (pyramiding a winner). The gate must allow this through."""
+    from mms4tk.analytics import SignalResult
+
+    db.set_setting("addon_requires_favorable_price_enabled:ETH/USDC", "True")
+    sig = SignalResult(signal_type="HIGH_RISK_ADD_SHORT", price=98.0, stop_loss=99.0, leverage=3.0)
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "short", entry=100.0, notional=7.0)])
+    d, _ = make_daemon(db, ex, sig)
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+    assert res["outcome"] == "EXECUTED_HIGH_RISK_ADD_SHORT"
+
+
+def test_addon_gate_disabled_by_default_allows_adverse_price(db):
+    """mid_vol_sweep_filter_enabled's own sibling: unvalidated-by-default means the
+    SAME adverse-price add that test_addon_blocked_... rejects above must still go
+    through when the flag is left at its default (unset)."""
+    from mms4tk.analytics import SignalResult
+
+    sig = SignalResult(signal_type="HIGH_RISK_ADD_SHORT", price=102.0, stop_loss=103.0, leverage=3.0)
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "short", entry=100.0, notional=7.0)])
+    d, _ = make_daemon(db, ex, sig)
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+    assert res["outcome"] == "EXECUTED_HIGH_RISK_ADD_SHORT"
+
+
+def test_addon_blocked_at_adverse_price_long_side(db):
+    """LONG mirror: base entered at $100, add candidate at $98 -- worse for a long."""
+    from mms4tk.analytics import SignalResult
+
+    db.set_setting("addon_requires_favorable_price_enabled:ETH/USDC", "True")
+    sig = SignalResult(signal_type="HIGH_RISK_ADD_LONG", price=98.0, stop_loss=97.0, leverage=3.0)
+    ex = sizing_executor()
+    ex.fetch_positions = AsyncMock(return_value=[position("ETH/USDC", "long", entry=100.0, notional=7.0)])
+    d, _ = make_daemon(db, ex, sig)
+    res = asyncio.run(d.execute_symbol_cycle("ETH/USDC"))
+    assert res["outcome"] == "SKIPPED_HIGH_RISK_ADD_LONG"
+    assert "Favorable-Price Addon Gate" in _last_cycle_details(db, "ETH/USDC")
+
+
 # ── P1-6 / user request 3: is_allowed is honored, state is per-symbol ───
 
 def test_daemon_honors_is_allowed(db):
