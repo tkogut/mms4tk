@@ -605,6 +605,116 @@ def test_adaptive_engine_volatility_ratio_low_requires_sweep_rejection_long():
     assert "Base LONG signal" in sig_allowed.reason
 
 
+def test_adaptive_engine_mid_volatility_requires_sweep_rejection():
+    """Issue #134: VR_LOW <= VR <= VR_HIGH (the "normal" regime, with no filter at
+    all today) blocks a BASE_SHORT unless a Sweep Rejection wick (>=20%, same bar as
+    compression -- NOT the 40% "extreme" bar) is present, when
+    mid_vol_sweep_filter_enabled is on. Production incident (2026-10-15, XAG/USDC):
+    a BASE_SHORT fired at vol_ratio=1.17, squarely in this gap, on a candle whose
+    close was only 0.12% below its open."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    # Wide VR bracket so the synthetic candles' actual VR (~1-2, per the sibling
+    # compression/high-vol tests' choice of 5.0/0.1 to force their own branches)
+    # lands inside [adaptive_vr_low, adaptive_vr_high] -- the mid regime.
+    params_mid_vol = IndicatorParams(
+        engine_mode="ADAPTIVE", adaptive_vr_low=0.0, adaptive_vr_high=5.0,
+        time_lock_start="00:00", time_lock_end="00:01",
+        mid_vol_sweep_filter_enabled=True,
+    )
+
+    # 1. Tiny upper wick -- blocked.
+    candles_no_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_no_sweep[-2] = Candle(timestamp=23 * 60, open=107.8, high=108.0, low=99.0, close=99.2)
+    candles_no_sweep[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig_blocked = engine.evaluate_signals(candles_no_sweep, sm, params=params_mid_vol)
+    assert sig_blocked.signal_type == "BASE_SHORT"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_MID_VOL_NO_SWEEP" in sig_blocked.reason
+
+    # 2. Prominent upper wick (8.0 / 9.0 = 88.9%) -- allowed.
+    candles_with_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_with_sweep[-2] = Candle(timestamp=23 * 60, open=100.0, high=108.0, low=99.0, close=99.2)
+    candles_with_sweep[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig_allowed = engine.evaluate_signals(candles_with_sweep, sm, params=params_mid_vol)
+    assert sig_allowed.signal_type == "BASE_SHORT"
+    assert sig_allowed.is_allowed is True
+    assert "Base SHORT signal" in sig_allowed.reason
+
+
+def test_adaptive_engine_mid_volatility_requires_sweep_rejection_long():
+    """LONG mirror of the mid-volatility test above."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    params_mid_vol = IndicatorParams(
+        engine_mode="ADAPTIVE", adaptive_vr_low=0.0, adaptive_vr_high=5.0,
+        time_lock_start="00:00", time_lock_end="00:01",
+        mid_vol_sweep_filter_enabled=True,
+    )
+
+    candles_no_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_no_sweep[-2] = Candle(timestamp=23 * 60, open=92.2, high=101.0, low=92.0, close=100.8)
+    candles_no_sweep[-1] = Candle(timestamp=24 * 60, open=100.8, high=101.0, low=100.5, close=100.9)
+
+    sig_blocked = engine.evaluate_signals(candles_no_sweep, sm, params=params_mid_vol)
+    assert sig_blocked.signal_type == "BASE_LONG"
+    assert sig_blocked.is_allowed is False
+    assert "SKIPPED_MID_VOL_NO_SWEEP" in sig_blocked.reason
+
+    candles_with_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_with_sweep[-2] = Candle(timestamp=23 * 60, open=100.0, high=101.0, low=92.0, close=100.8)
+    candles_with_sweep[-1] = Candle(timestamp=24 * 60, open=100.8, high=101.0, low=100.5, close=100.9)
+
+    sig_allowed = engine.evaluate_signals(candles_with_sweep, sm, params=params_mid_vol)
+    assert sig_allowed.signal_type == "BASE_LONG"
+    assert sig_allowed.is_allowed is True
+    assert "Base LONG signal" in sig_allowed.reason
+
+
+def test_adaptive_engine_mid_volatility_filter_disabled_by_default():
+    """mid_vol_sweep_filter_enabled defaults to False, like every other adaptive
+    filter in this module -- unvalidated until Issue #134's OOS backtest clears it.
+    The same tiny-wick candle that gets blocked when the flag is explicitly on
+    (test above) must be ALLOWED at the default, even with the same VR bracket."""
+    engine = MMS4SignalEngine()
+    sm = MMS4StateManager(initial_state=MMS4State.BASE_MODE)
+
+    params_default = IndicatorParams(
+        engine_mode="ADAPTIVE", adaptive_vr_low=0.0, adaptive_vr_high=5.0,
+        time_lock_start="00:00", time_lock_end="00:01",
+        # mid_vol_sweep_filter_enabled intentionally omitted -> must default to False
+    )
+    assert params_default.mid_vol_sweep_filter_enabled is False
+
+    candles_no_sweep = [
+        Candle(timestamp=i * 60, open=100.0, high=100.5, low=99.5, close=100.0)
+        for i in range(25)
+    ]
+    candles_no_sweep[-2] = Candle(timestamp=23 * 60, open=107.8, high=108.0, low=99.0, close=99.2)
+    candles_no_sweep[-1] = Candle(timestamp=24 * 60, open=99.2, high=99.5, low=99.0, close=99.3)
+
+    sig = engine.evaluate_signals(candles_no_sweep, sm, params=params_default)
+    assert sig.signal_type == "BASE_SHORT"
+    assert sig.is_allowed is True
+    assert "Base SHORT signal" in sig.reason
+
+
 def test_adaptive_engine_us_open_time_lock_filtering():
     """In ADAPTIVE mode, time lock window (13:30 - 14:30 UTC) blocks BASE_SHORT without extreme sweep."""
     engine = MMS4SignalEngine()
