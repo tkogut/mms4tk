@@ -56,12 +56,13 @@ whether to enable it for any symbol.
 
 ### Phase 1: Production code + tests
 
-- [ ] 1.1 mid_vol_sweep_filter_enabled field
-- [ ] 1.2 BASE_SHORT/BASE_LONG gate
-- [ ] 1.3 Unit tests
+- [x] 1.1 mid_vol_sweep_filter_enabled field — d33ef12
+- [x] 1.2 BASE_SHORT/BASE_LONG gate — d33ef12
+- [x] 1.3 Unit tests — d33ef12
 
 ### Phase 2: OOS backtest report
 
-- [ ] 2.1 Fetch OHLCV, split windows
-- [ ] 2.2 Run baseline vs filtered backtest, diff rejected trades
-- [ ] 2.3 Report + Issue #134 verdict
+- [x] 2.1 Fetch OHLCV, split windows — common window 2026-01-28..2026-10-15, 4x ~65d
+- [x] 2.2 Run baseline backtest, tag would-reject trades — caught and fixed a
+      sum-vs-average methodology error along the way (see analysis doc §2)
+- [x] 2.3 Report + Issue #134 verdict — `.ai/analysis/2026-10-15-mid-vol-sweep-filter-backtest.md`: **no symbol clears the bar; do not enable for any symbol**
