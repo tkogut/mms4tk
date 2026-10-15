@@ -4,6 +4,28 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.19] - 2026-10-15
+
+### 📝 Fixed — Hermes wasn't told about the scout_override cooldown (#129 follow-up)
+- 🐛 **Problem**: 0.48.17 added a `MMS4_SCOUT_OVERRIDE_MIN_HOURS` (default 48h) cooldown that
+  silently refuses `scout_override`, but nothing Hermes actually reads was updated to say so —
+  neither `mms4_set_strategy_profile`'s `scout_override` parameter description nor
+  `mms4_hitl_resolve`'s description in `hermes_tools.py` (the LLM-facing tool schemas Hermes
+  calls through), and the `SCOUT_STALE` Telegram alert (fires at `SCOUT_STALE_ALERT_HOURS`,
+  default 24h — before the 48h cooldown elapses) told the operator/Hermes to call
+  `scout_override: true` with no warning that doing so before 48h would silently no-op.
+- ✅ Both tool schema descriptions now state the cooldown explicitly and tell the caller which
+  response field to check (`scout_override` on the profile endpoint, `scout_mode_relaxed` on
+  `hitl_resolve`) to know whether a relax actually happened. The `SCOUT_STALE` alert now checks
+  whether the cooldown has elapsed and sends a different message when it hasn't — explaining the
+  wait instead of suggesting a call that silently fails.
+- 🧪 `tests/test_hermes_integration.py::test_scout_override_tool_schemas_mention_the_cooldown`;
+  `tests/test_scout_stale.py::test_alert_warns_when_override_still_on_cooldown` and
+  `test_alert_offers_override_once_cooldown_elapsed`.
+- 📄 Pure additive text change to tool schema `description` fields — no parameter rename, no
+  required/optional change, no return-shape change, so not a `BACKWARD_COMPATIBILITY.md` §4
+  breaking change per that section's own definition.
+
 ## 🚀 [0.48.18] - 2026-10-14
 
 ### ✨ Added — BTC/ETH Mutual Exclusion Guard (#130)

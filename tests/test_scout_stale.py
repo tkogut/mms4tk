@@ -125,6 +125,32 @@ def test_alert_fires_once_then_repeats_after_threshold(tmp_path: Path):
     assert send.call_count == 1
 
 
+def test_alert_warns_when_override_still_on_cooldown(tmp_path: Path):
+    """Issue #129 follow-up: SCOUT_STALE_ALERT_HOURS (24h default) fires before
+    SCOUT_OVERRIDE_MIN_HOURS (48h default) -- the alert must say scout_override would
+    silently no-op right now, not suggest a call that fails."""
+    _, sm, daemon = _make(tmp_path)
+    age = SCOUT_STALE_ALERT_HOURS + 1
+    assert age < SCOUT_OVERRIDE_MIN_HOURS, "test assumes the alert fires inside the cooldown window"
+    _scout_for(sm, XAG, age)
+    with patch(SEND, return_value=True) as send:
+        daemon._check_scout_stale_alert()
+    body = send.call_args.kwargs["body"]
+    assert "ZABLOKOWANE przez cooldown" in body
+    assert "scout_override" in body and "false" in body
+    assert '"scout_override": true' not in body
+
+
+def test_alert_offers_override_once_cooldown_elapsed(tmp_path: Path):
+    _, sm, daemon = _make(tmp_path)
+    _scout_for(sm, XAG, SCOUT_OVERRIDE_MIN_HOURS + 1)
+    with patch(SEND, return_value=True) as send:
+        daemon._check_scout_stale_alert()
+    body = send.call_args.kwargs["body"]
+    assert '"scout_override": true' in body
+    assert "ZABLOKOWANE" not in body
+
+
 def test_alert_marker_survives_restart(tmp_path: Path):
     db, sm, daemon = _make(tmp_path)
     _scout_for(sm, XAG, SCOUT_STALE_ALERT_HOURS + 1)
