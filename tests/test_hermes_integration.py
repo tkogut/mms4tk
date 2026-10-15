@@ -46,6 +46,21 @@ def test_hermes_tool_schemas_validity():
     assert "emergency_reverse" not in names
 
 
+def test_scout_override_tool_schemas_mention_the_cooldown():
+    """Issue #129 follow-up: Hermes only ever sees these tool schemas, never the API
+    docstrings or BACKWARD_COMPATIBILITY.md -- the cooldown MUST be described here or
+    Hermes has no way to know scout_override can silently refuse."""
+    tools = {t["function"]["name"]: t["function"] for t in get_hermes_tools()}
+
+    profile_desc = tools["mms4_set_strategy_profile"]["parameters"]["properties"]["scout_override"]["description"]
+    assert "MMS4_SCOUT_OVERRIDE_MIN_HOURS" in profile_desc
+    assert "False" in profile_desc  # warns the response can echo False despite a True request
+
+    hitl_desc = tools["mms4_hitl_resolve"]["description"]
+    assert "MMS4_SCOUT_OVERRIDE_MIN_HOURS" in hitl_desc
+    assert "scout_mode_relaxed" in hitl_desc
+
+
 def test_emergency_reverse_tool_not_exposed_but_endpoint_still_501():
     """The tool is gone from the LLM-facing schema list; `get_tool_by_name`
     must refuse to find it (KeyError), while the underlying endpoint (tested

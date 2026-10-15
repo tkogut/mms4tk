@@ -2551,7 +2551,9 @@ class MMS4Daemon:
                 logger.error(f"SCOUT_STALE check failed for {symbol}: {type(e).__name__}: {e}")
 
     def _scout_stale_alert_for(self, symbol: str, now: datetime) -> None:
-        from mms4tk.state_manager import SCOUT_EXIT_K, SCOUT_STALE_ALERT_HOURS, _SCOUT_STALE_KEY_PREFIX
+        from mms4tk.state_manager import (
+            SCOUT_EXIT_K, SCOUT_OVERRIDE_MIN_HOURS, SCOUT_STALE_ALERT_HOURS, _SCOUT_STALE_KEY_PREFIX,
+        )
         since = self.state_manager.get_scout_since(symbol)
         if since is None:
             return
@@ -2570,6 +2572,23 @@ class MMS4Daemon:
             except ValueError:
                 logger.warning(f"Ignoring invalid persisted {key}={raw_last!r}")
 
+        if age_hours < SCOUT_OVERRIDE_MIN_HOURS:
+            # Issue #129 follow-up: scout_override is still on cooldown at this point if
+            # SCOUT_STALE_ALERT_HOURS (default 24h) fires before SCOUT_OVERRIDE_MIN_HOURS
+            # (default 48h) -- calling it now would silently no-op (response echoes
+            # scout_override=False). Say so explicitly instead of pointing at a call that fails.
+            remaining = SCOUT_OVERRIDE_MIN_HOURS - age_hours
+            override_line = (
+                f"⛔ Ręczne zwolnienie (scout_override) jeszcze ZABLOKOWANE przez cooldown "
+                f"({remaining:.1f}h do odblokowania, próg {SCOUT_OVERRIDE_MIN_HOURS:.0f}h) — "
+                f"wywołanie teraz po cichu nic nie zrobi (odpowiedź: scout_override=false)."
+            )
+        else:
+            override_line = (
+                f"Zwolnij ręcznie: POST /api/v1/strategy/profile "
+                f"{{\"scout_override\": true, \"symbol\": \"{symbol}\"}}"
+            )
+
         from mms4tk.hermes_webhook import HermesWebhookClient
         sent = HermesWebhookClient.send_telegram(
             title=f"⚠️ SCOUT_STALE {symbol}: {age_hours:.0f}h w SCOUT_MODE",
@@ -2577,8 +2596,7 @@ class MMS4Daemon:
                 f"`{symbol}` jest w SCOUT_MODE od {since.isoformat()} ({age_hours:.1f}h, "
                 f"próg: {SCOUT_STALE_ALERT_HOURS:.0f}h).\n"
                 f"Czyste zamknięcia: {self.state_manager.get_scout_ok(symbol)}/{SCOUT_EXIT_K}.\n\n"
-                f"Zwolnij ręcznie: POST /api/v1/strategy/profile "
-                f"{{\"scout_override\": true, \"symbol\": \"{symbol}\"}} albo poczekaj na "
+                f"{override_line} albo poczekaj na "
                 f"{SCOUT_EXIT_K} czyste zamknięcia. Alert powtórzy się za "
                 f"{SCOUT_STALE_ALERT_HOURS:.0f}h, jeśli SCOUT trwa."
             ),

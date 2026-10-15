@@ -201,7 +201,7 @@ class HermesToolGenerator:
                             "scout_override": {
                                 "type": "boolean",
                                 "default": False,
-                                "description": "Set True to allow early SCOUT_MODE relaxation"
+                                "description": "Set True to relax SCOUT_MODE early. REFUSED if the symbol entered SCOUT_MODE less than MMS4_SCOUT_OVERRIDE_MIN_HOURS ago (default 48h) -- when refused, the response's scout_override field comes back False even though you sent True, and SCOUT_MODE is unchanged. Check GET /api/v1/daemon/status's allocation_plan.scout_age_hours for the symbol before calling this, or expect a silent no-op within the first 48h."
                             },
                             "reason": {
                                 "type": "string",
@@ -237,7 +237,7 @@ class HermesToolGenerator:
                 "type": "function",
                 "function": {
                     "name": "mms4_hitl_resolve",
-                    "description": "Human-in-the-Loop resolution for uncertain H4 candle classification. Decision: SWEEP_WICK (relax SCOUT_MODE) or MARUBOZU_BREAKOUT (maintain SCOUT_MODE). Requires X-MMS4-API-KEY header.",
+                    "description": "Human-in-the-Loop resolution for uncertain H4 candle classification. Decision: SWEEP_WICK (attempts to relax SCOUT_MODE -- REFUSED if the symbol entered SCOUT_MODE less than MMS4_SCOUT_OVERRIDE_MIN_HOURS ago, default 48h; check the response's scout_mode_relaxed field, not just scout_override, to know if it actually happened) or MARUBOZU_BREAKOUT (maintain SCOUT_MODE). Requires X-MMS4-API-KEY header.",
                     "parameters": {
                         "type": "object",
                         "properties": {
