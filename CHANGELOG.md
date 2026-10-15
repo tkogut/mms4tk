@@ -4,6 +4,37 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.22] - 2026-10-15
+
+### ✨ Added — expose #134/#137 filters in Settings + fix UI reset bug
+- ✅ `mid_vol_sweep_filter_enabled` (#134) and `addon_requires_favorable_price_enabled`
+  (#137) are now API-settable via `POST /api/v1/symbols/update`: `AddSymbolRequest`,
+  `_trend_filter_fields()`, `get_trading_symbols()`, and
+  `add_or_update_trading_symbol()`'s `system_settings` write all carry both flags,
+  same per-symbol-qualified pattern as the existing
+  `high_vol_base_filter_enabled`/`htf_directional_gate_enabled` (neither of which
+  has a dashboard checkbox either — this is parity, not a new UI control).
+- 🐛 **Two UI reset bugs found and fixed in `SymbolsTab.jsx`**, both the same root
+  cause: this endpoint applies the Pydantic schema default to any field the
+  request body omits, so a payload that doesn't echo back a field's *current*
+  value silently resets it.
+  1. `handleUpdateSymbolSettings` ("Zapisz Ustawienia") omitted
+     `high_vol_base_filter_enabled`/`htf_directional_gate_enabled` entirely —
+     **every settings save was resetting `htf_directional_gate_enabled` to
+     False**, undoing the PR #136 decision to keep that gate on for XAU/XAG.
+  2. **Worse**: `handleToggleSymbol` (the pause/▶️-resume button — used far more
+     often than the settings form) sent only 5 fields, resetting **all nine**
+     others on every click, including flipping `impulse_negation_enabled` to its
+     default `True` and every `*_filter_enabled`/`htf_directional_gate_enabled`
+     flag to `False`.
+  Fixed both call sites by echoing every persisted field back from `symObj`
+  (`?? symObj.X ?? <default>`), confirmed `symObj` carries all of them via the
+  existing `GET /api/v1/symbols` response (`_trend_filter_fields()`).
+- 🧪 `tests/test_inactivity_api_persistence.py`: 2 new tests — persistence of both
+  new flags through POST + GET, and default-to-False when omitted. 746 passed.
+- 📄 Both new flags still ship default **False** — exposure only, no behavior
+  change to any symbol's current config.
+
 ## 🚀 [0.48.21] - 2026-10-15
 
 ### ✨ Added — Favorable-Price Addon Gate (#137)

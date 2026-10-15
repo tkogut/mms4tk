@@ -114,7 +114,21 @@ export function SymbolsTab({ apiKey }) {
           allocation_usd: parseFloat(symObj.allocation_usd || 10.0),
           base_ratio: parseInt(symObj.base_ratio || 70),
           add_ratio: parseInt(symObj.add_ratio || 30),
-          timeframe: symObj.timeframe || '15m'
+          timeframe: symObj.timeframe || '15m',
+          // Preserve every other persisted setting — this endpoint applies the
+          // schema default to any omitted field, so a bare activate/pause toggle
+          // was silently resetting all of these (incl. flipping
+          // impulse_negation_enabled to its default True) on every click.
+          stale_candles_threshold: symObj.stale_candles_threshold ?? 12,
+          stale_atr_threshold: symObj.stale_atr_threshold ?? 0.5,
+          impulse_negation_enabled: symObj.impulse_negation_enabled ?? true,
+          tma_trend_filter_enabled: symObj.tma_trend_filter_enabled ?? false,
+          tma_slope_lookback: symObj.tma_slope_lookback ?? 5,
+          tma_slope_threshold: symObj.tma_slope_threshold ?? 0.002,
+          high_vol_base_filter_enabled: symObj.high_vol_base_filter_enabled ?? false,
+          htf_directional_gate_enabled: symObj.htf_directional_gate_enabled ?? false,
+          mid_vol_sweep_filter_enabled: symObj.mid_vol_sweep_filter_enabled ?? false,
+          addon_requires_favorable_price_enabled: symObj.addon_requires_favorable_price_enabled ?? false
         })
       });
       if (res.ok) {
@@ -178,6 +192,17 @@ export function SymbolsTab({ apiKey }) {
           tma_trend_filter_enabled: trendFilterConfig.tma_trend_filter_enabled ?? symObj.tma_trend_filter_enabled ?? false,
           tma_slope_lookback: trendFilterConfig.tma_slope_lookback ?? symObj.tma_slope_lookback ?? 5,
           tma_slope_threshold: trendFilterConfig.tma_slope_threshold ?? symObj.tma_slope_threshold ?? 0.002,
+          // Bug fix (found 2026-10-15, alongside Issue #134/#137): these four flags
+          // have no UI control of their own, but were OMITTED from this payload
+          // entirely — any routine settings save (even just changing allocation)
+          // silently reset them to the schema default (False) on the backend,
+          // including htf_directional_gate_enabled right after validating it stays
+          // on for XAU/XAG. Same "pass through from symObj unless overridden"
+          // pattern as the trend-filter fields above.
+          high_vol_base_filter_enabled: trendFilterConfig.high_vol_base_filter_enabled ?? symObj.high_vol_base_filter_enabled ?? false,
+          htf_directional_gate_enabled: trendFilterConfig.htf_directional_gate_enabled ?? symObj.htf_directional_gate_enabled ?? false,
+          mid_vol_sweep_filter_enabled: trendFilterConfig.mid_vol_sweep_filter_enabled ?? symObj.mid_vol_sweep_filter_enabled ?? false,
+          addon_requires_favorable_price_enabled: trendFilterConfig.addon_requires_favorable_price_enabled ?? symObj.addon_requires_favorable_price_enabled ?? false,
         })
       });
       if (res.ok) {

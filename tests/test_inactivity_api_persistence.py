@@ -97,6 +97,86 @@ def test_symbols_update_persists_inactivity_fields_to_system_settings():
             save_symbols_config(configured_symbols_store)
 
 
+def test_symbols_update_persists_mid_vol_and_addon_gate_fields():
+    """Issue #134/#137: POST /api/v1/symbols/update must persist
+    mid_vol_sweep_filter_enabled and addon_requires_favorable_price_enabled into
+    system_settings, the same per-symbol-qualified pattern as the sibling filters
+    — and GET /api/v1/symbols must read them back, not a stale in-memory default."""
+    symbol = "ETH/USDC"
+    keys = [
+        f"mid_vol_sweep_filter_enabled:{symbol}",
+        f"addon_requires_favorable_price_enabled:{symbol}",
+    ]
+    before_settings = {k: logger_db.get_setting(k) for k in keys}
+    before_full_config = configured_symbols_store.get(symbol)
+    try:
+        res = client.post(
+            "/api/v1/symbols/update",
+            json={
+                "symbol": symbol,
+                "mid_vol_sweep_filter_enabled": True,
+                "addon_requires_favorable_price_enabled": True,
+            },
+            headers=AUTH_HEADERS,
+        )
+        assert res.status_code == 200
+        assert logger_db.get_setting(keys[0]) == "True"
+        assert logger_db.get_setting(keys[1]) == "True"
+
+        get_res = client.get("/api/v1/symbols")
+        row = next(s for s in get_res.json()["symbols"] if s["symbol"] == symbol)
+        assert row["mid_vol_sweep_filter_enabled"] is True
+        assert row["addon_requires_favorable_price_enabled"] is True
+    finally:
+        for k in keys:
+            if before_settings[k] is None:
+                logger_db.delete_setting(k)
+            else:
+                logger_db.set_setting(k, before_settings[k], updated_by="test_cleanup")
+        if before_full_config is not None:
+            configured_symbols_store[symbol] = dict(before_full_config)
+            save_symbols_config(configured_symbols_store)
+        else:
+            configured_symbols_store.pop(symbol, None)
+            logger_db.delete_symbol_config(symbol)
+            save_symbols_config(configured_symbols_store)
+
+
+def test_symbols_update_defaults_mid_vol_and_addon_gate_fields_to_false():
+    """Omitting the two new fields entirely must leave them at False (the safe,
+    unvalidated-by-default convention every filter in this file follows), not
+    raise or silently inherit some other value."""
+    symbol = "ETH/USDC"
+    keys = [
+        f"mid_vol_sweep_filter_enabled:{symbol}",
+        f"addon_requires_favorable_price_enabled:{symbol}",
+    ]
+    before_settings = {k: logger_db.get_setting(k) for k in keys}
+    before_full_config = configured_symbols_store.get(symbol)
+    try:
+        res = client.post(
+            "/api/v1/symbols/update",
+            json={"symbol": symbol},
+            headers=AUTH_HEADERS,
+        )
+        assert res.status_code == 200
+        assert logger_db.get_setting(keys[0]) == "False"
+        assert logger_db.get_setting(keys[1]) == "False"
+    finally:
+        for k in keys:
+            if before_settings[k] is None:
+                logger_db.delete_setting(k)
+            else:
+                logger_db.set_setting(k, before_settings[k], updated_by="test_cleanup")
+        if before_full_config is not None:
+            configured_symbols_store[symbol] = dict(before_full_config)
+            save_symbols_config(configured_symbols_store)
+        else:
+            configured_symbols_store.pop(symbol, None)
+            logger_db.delete_symbol_config(symbol)
+            save_symbols_config(configured_symbols_store)
+
+
 def test_get_symbols_reads_inactivity_fields_from_system_settings_not_stale_in_memory():
     """Simulates the exact bug this ticket fixes: system_settings has the operator's
     real setting, but configured_symbols_store (the in-memory store rebuilt fresh on
