@@ -1759,6 +1759,8 @@ class AddSymbolRequest(BaseModel):
     tma_slope_threshold: float = Field(default=0.002, description="PLAN-008 Ph3: |TMA slope| above which a counter-trend BASE entry is blocked")
     high_vol_base_filter_enabled: bool = Field(default=False, description="Require an extreme sweep-rejection wick for BASE entries when VR > adaptive_vr_high (reuses that threshold, no separate one). Per-symbol, default OFF — a 2026-09-08 backtest found it worsens results in most tested windows; do not enable without re-validating.")
     htf_directional_gate_enabled: bool = Field(default=False, description="Faza 3.2: force directional_bias LONG_ONLY/SHORT_ONLY from this symbol's H4 TMA-band position (Hermes async-supervision model), on top of any manual override. Per-symbol, default OFF — measured 2026-09-11 on 10 independent 122-day windows: 10/10 improved net PnL (sign test p=0.0020), reduces losses in a strong trend, does not make the strategy net profitable.")
+    mid_vol_sweep_filter_enabled: bool = Field(default=False, description="Issue #134: require a 20% Sweep Rejection wick for BASE entries when VR is in [adaptive_vr_low, adaptive_vr_high] (the gap between the compression and high-vol filters above, unguarded until now). Per-symbol, default OFF — a 2026-10-15 backtest found this rejects 44-77% of all entries with no significant quality difference (BTC 2/4, ETH 2/4, XAU 2/4, XAG 3/4 windows); not recommended for any symbol on the current evidence.")
+    addon_requires_favorable_price_enabled: bool = Field(default=False, description="Issue #137: block HIGH_RISK_ADD when it would fire on the adverse side of this position's base_entry_price (averaging into a loss instead of pyramiding a winner). Per-symbol, default OFF — a 2026-10-15 backtest found adverse-price adds average -0.508% net vs +0.031% for favorable-price adds (14/15 windows agree, sign test p=0.0010, consistent on every symbol); the strongest-evidenced opt-in filter in this file so far.")
 
 
 okx_verification_cache: Dict[str, Dict[str, Any]] = {}
@@ -1815,6 +1817,10 @@ def _trend_filter_fields(sym: str, config: Dict[str, Any]) -> Dict[str, Any]:
         "tma_slope_threshold": _qualified_float("tma_slope_threshold", 0.002),
         "high_vol_base_filter_enabled": _qualified_bool("high_vol_base_filter_enabled", False),
         "htf_directional_gate_enabled": _qualified_bool("htf_directional_gate_enabled", False),
+        # Issue #134/#137: same qualified-key, default-OFF pattern as the three
+        # filters above — not a separate helper, just two more fields of the same shape.
+        "mid_vol_sweep_filter_enabled": _qualified_bool("mid_vol_sweep_filter_enabled", False),
+        "addon_requires_favorable_price_enabled": _qualified_bool("addon_requires_favorable_price_enabled", False),
         "stale_candles_threshold": _qualified_int("stale_candles_threshold", 12),
         "stale_atr_threshold": _qualified_float("stale_atr_threshold", 0.5),
         "impulse_negation_enabled": _qualified_bool("impulse_negation_enabled", True),
@@ -1863,6 +1869,8 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "tma_slope_threshold": trend_filter["tma_slope_threshold"],
             "high_vol_base_filter_enabled": trend_filter["high_vol_base_filter_enabled"],
             "htf_directional_gate_enabled": trend_filter["htf_directional_gate_enabled"],
+            "mid_vol_sweep_filter_enabled": trend_filter["mid_vol_sweep_filter_enabled"],
+            "addon_requires_favorable_price_enabled": trend_filter["addon_requires_favorable_price_enabled"],
             "okx_verified": v_res.get("okx_verified", True),
             "autotrade_permitted": v_res.get("autotrade_permitted", True),
             "okx_status": v_res.get("okx_status", "AUTOTRADE_READY"),
@@ -1981,6 +1989,8 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
         "tma_slope_threshold": float(req.tma_slope_threshold),
         "high_vol_base_filter_enabled": bool(req.high_vol_base_filter_enabled),
         "htf_directional_gate_enabled": bool(req.htf_directional_gate_enabled),
+        "mid_vol_sweep_filter_enabled": bool(req.mid_vol_sweep_filter_enabled),
+        "addon_requires_favorable_price_enabled": bool(req.addon_requires_favorable_price_enabled),
     }
     save_symbols_config(configured_symbols_store)
 
@@ -2000,6 +2010,8 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest) -> Dict[str, Any]:
                 f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
                 f"high_vol_base_filter_enabled:{formatted_sym}": bool(req.high_vol_base_filter_enabled),
                 f"htf_directional_gate_enabled:{formatted_sym}": bool(req.htf_directional_gate_enabled),
+                f"mid_vol_sweep_filter_enabled:{formatted_sym}": bool(req.mid_vol_sweep_filter_enabled),
+                f"addon_requires_favorable_price_enabled:{formatted_sym}": bool(req.addon_requires_favorable_price_enabled),
                 # Audit P6.1 (2026-09-08): same bug, same fix — these 3 Inactivity
                 # Manager fields were previously written only to
                 # configured_symbols_store/symbols.json, silently resetting to
