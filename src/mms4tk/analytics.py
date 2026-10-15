@@ -173,6 +173,29 @@ class IndicatorParams(BaseModel):
     # sufficient evidence on its own).
     mid_vol_sweep_filter_enabled: bool = False
 
+    # ── Favorable-Price Addon Gate (Issue #137) ──
+    # HIGH_RISK_ADD fires on a pure 2-candle continuation pattern
+    # (`prev_was_base_short`/`prev_was_base_long` + confirmation) with no awareness
+    # of the open position's own entry price -- it can average into a loss just as
+    # readily as it can pyramid a winner. Production incident (2026-10-15,
+    # XAG/USDC): an add fired at $56.96 against a $56.63 base SHORT entry,
+    # worsening the blended average while increasing size on an unmoved stop.
+    # OOS backtest (`.ai/analysis/2026-10-15-addon-favorable-price-backtest.md`):
+    # across BTC/ETH/XAU/XAG, adds fired at an adverse price (worse than
+    # base_entry_price) averaged -0.508% net per closed position vs +0.031% for
+    # adds fired at a favorable/neutral price -- 14/15 window comparisons agree,
+    # sign test p=0.0010, consistent symbol-by-symbol (unlike
+    # `mid_vol_sweep_filter_enabled`'s mixed per-symbol result). This is NOT
+    # applied inside `evaluate_signals` -- the signal engine has no parameter
+    # carrying the open position's entry price, so both `backtest_engine.py` and
+    # `daemon.py` gate the already-returned HIGH_RISK_ADD signal at their own
+    # execution sites instead, each against `base_entry_price` (pinned at entry,
+    # never touched by a prior addon's averaging -- the same anchor the SL uses
+    # under P3 V2), not the exchange's current (possibly already-blended) average.
+    # Per-symbol, default OFF despite the strong result -- pending owner review,
+    # same bar every other filter in this file clears before being flipped live.
+    addon_requires_favorable_price_enabled: bool = False
+
     # ── Midline Partial Take-Profit (PLAN-009) ──
     # Audit P9.1 (2026-09-08): default False. This feature was rejected 6/6 in
     # backtest (CHANGELOG 0.42.1) and every other rejected filter in this module

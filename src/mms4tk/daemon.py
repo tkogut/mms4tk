@@ -1103,6 +1103,16 @@ class MMS4Daemon:
             tma_slope_lookback=_sym_int("tma_slope_lookback", defaults.tma_slope_lookback),
             tma_slope_threshold=_sym_float("tma_slope_threshold", defaults.tma_slope_threshold),
             high_vol_base_filter_enabled=_sym_bool("high_vol_base_filter_enabled", defaults.high_vol_base_filter_enabled),
+            # Issue #137 follow-up fix: #135 added mid_vol_sweep_filter_enabled to
+            # IndicatorParams and to the backtest harness, but never wired it into
+            # THIS construction — system_settings could never actually turn it on
+            # in production (it silently stayed at the dataclass default, False,
+            # no matter what was persisted). Caught while wiring the new addon gate
+            # below; same per-symbol-qualified pattern as every other filter here.
+            mid_vol_sweep_filter_enabled=_sym_bool("mid_vol_sweep_filter_enabled", defaults.mid_vol_sweep_filter_enabled),
+            addon_requires_favorable_price_enabled=_sym_bool(
+                "addon_requires_favorable_price_enabled", defaults.addon_requires_favorable_price_enabled
+            ),
             htf_directional_gate_enabled=_sym_bool("htf_directional_gate_enabled", defaults.htf_directional_gate_enabled),
             midline_partial_tp_enabled=_sym_bool("midline_partial_tp_enabled", defaults.midline_partial_tp_enabled),
             midline_tp_fraction=_sym_float("midline_tp_fraction", defaults.midline_tp_fraction),
@@ -2244,6 +2254,25 @@ class MMS4Daemon:
                 margin_cap_usd = alloc["notional_cap_usd"]
                 would_exceed_cap = (existing_notional + notional_addon_usd) > margin_cap_usd * (1.0 + 0.10)
 
+                # Issue #137: block the add if it would fire on the ADVERSE side of
+                # the pinned base_entry_price (averaging into a loss) — always this
+                # anchor, never `match_entry` (today's exchange avgPx, which a prior
+                # addon may have already moved). Production incident (2026-10-15,
+                # XAG/USDC): an add fired at $56.96 against a $56.63 base SHORT
+                # entry; OOS backtest (.ai/analysis/2026-10-15-addon-favorable-price-
+                # backtest.md) found adds fired this way average -0.508% net per
+                # closed position vs +0.031% for favorable-price adds (14/15 window
+                # comparisons, sign test p=0.0010).
+                base_entry_px_for_add = self._base_entry_price(target_symbol, target_pos_side, fallback=match_entry)
+                addon_adverse = (
+                    ind_params.addon_requires_favorable_price_enabled
+                    and base_entry_px_for_add > 0
+                    and (
+                        (signal.price > base_entry_px_for_add) if target_pos_side == "short"
+                        else (signal.price < base_entry_px_for_add)
+                    )
+                )
+
                 if sym_state != MMS4State.BASE_MODE:
                     outcome = f"BLOCKED_{signal.signal_type}"
                     details = f"High Risk Add blocked for {target_symbol} in state {sym_state.value}"
@@ -2260,6 +2289,14 @@ class MMS4Daemon:
                         f"High Risk Add already executed {addons_done}x on this {target_pos_side.upper()} "
                         f"position for {target_symbol} (entry=${match_entry:,.4f}). Single Addon Guard active."
                     )
+                elif addon_adverse:
+                    outcome = f"SKIPPED_{signal.signal_type}"
+                    details = (
+                        f"🔗 Favorable-Price Addon Gate blocked High Risk Add for {target_symbol}: "
+                        f"add price ${signal.price:,.4f} is on the adverse side of base entry "
+                        f"${base_entry_px_for_add:,.4f} — averaging into a loss, not pyramiding a winner."
+                    )
+                    logger.warning(details)
                 elif would_exceed_cap:
                     outcome = f"SKIPPED_{signal.signal_type}"
                     details = (

@@ -4,6 +4,35 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.21] - 2026-10-15
+
+### ✨ Added — Favorable-Price Addon Gate (#137)
+- 🐛 **Problem**: `HIGH_RISK_ADD` fires on a pure 2-candle price-continuation
+  pattern with zero awareness of the open position's own entry price — it can (and,
+  2026-10-15, did) average into a loss. XAG/USDC: a SHORT base entered at $56.63
+  got an addon at $56.96 — worse than the base entry — worsening the blended
+  average while increasing size on an unmoved 2% stop.
+- 🔬 **OOS backtest** (`.ai/analysis/2026-10-15-addon-favorable-price-backtest.md`):
+  across BTC/ETH/XAU/XAG, adds fired at an adverse price averaged **-0.508% net**
+  per closed position vs **+0.031%** for favorable-price adds — 14/15 window
+  comparisons agree, sign test **p=0.0010**, consistent symbol-by-symbol (unlike
+  #135's mixed per-symbol result). Adverse adds are a minority (17.5%) of all
+  adds, so this is a targeted cut, not a wholesale behavior change.
+- ✅ New `addon_requires_favorable_price_enabled` (`IndicatorParams`, default
+  **False**, per-symbol): blocks `HIGH_RISK_ADD` when the add would fire on the
+  adverse side of the pinned `base_entry_price` (never the exchange's current,
+  possibly-already-blended average). Gated in both `backtest_engine.py` (for
+  parity) and `daemon.py`'s `HIGH_RISK_ADD` execution branch.
+- 🐛 **Fixed a related #135 gap along the way**: `mid_vol_sweep_filter_enabled`
+  was added to `IndicatorParams` and the backtest harness, but never wired into
+  `daemon._get_indicator_params`'s construction — `system_settings` could never
+  actually turn it on in production. Fixed in the same construction call as this
+  issue's new flag.
+- 🧪 `tests/test_backtest_engine.py` (3) + `tests/test_audit_remediation.py` (4):
+  blocked/allowed/disabled-by-default, both SHORT/LONG sides.
+- 📄 Despite the strength of the result, the flag ships **default OFF** pending
+  owner review — same bar every other filter in this file clears first.
+
 ## 🚀 [0.48.20] - 2026-10-15
 
 ### ✨ Added — mid-volatility sweep-rejection filter (#134)

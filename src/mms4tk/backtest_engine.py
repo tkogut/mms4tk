@@ -922,10 +922,19 @@ def run_backtest(
             matching_add = "HIGH_RISK_ADD_LONG" if side == "long" else "HIGH_RISK_ADD_SHORT"
             opposite_signal = "BASE_SHORT" if side == "long" else "BASE_LONG"
             d1_exhaustion_blocked = bool(d1_exhausted is not None and d1_exhausted[i])
+            # Issue #137: block the add if it would fire on the ADVERSE side of the
+            # pinned base_entry_price (averaging into a loss) -- never the blended
+            # `position["entry_price"]`, which a prior addon may have already moved.
+            addon_adverse_blocked = (
+                params.addon_requires_favorable_price_enabled
+                and ((curr_c.close > position["base_entry_price"]) if side == "short"
+                     else (curr_c.close < position["base_entry_price"]))
+            )
             if (signal.signal_type == matching_add
                     and sm.get_symbol_state(symbol) == MMS4State.BASE_MODE  # addons blocked in SCOUT — daemon.py
                     and not position.get("addon_done", False)                # Single Addon Guard, never reset
-                    and not d1_exhaustion_blocked):                          # Phase 3-4: D1 overextension filter
+                    and not d1_exhaustion_blocked                            # Phase 3-4: D1 overextension filter
+                    and not addon_adverse_blocked):                         # Issue #137: favorable-price gate
                 # Weighted-average entry price: an EXPLICIT APPROXIMATION of OKX's
                 # own avgPx merge — production never computes this in code (relies
                 # on the exchange reporting the merged average for the same-side
