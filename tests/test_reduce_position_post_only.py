@@ -147,6 +147,34 @@ def test_post_only_timeout_cancels_and_falls_back_to_market():
     assert fake.market_orders[0]["params"].get("postOnly") is None
 
 
+class _PollErrorsExchange(_NeverFillsExchange):
+    """fetch_order raises mid-poll (simulated transient network error) --
+    the resting order must still get cancelled before the market fallback."""
+
+    async def fetch_order(self, order_id, symbol):
+        raise ConnectionError("simulated transient fetch_order failure")
+
+
+@pytest.mark.allow_real_okx_network
+def test_post_only_poll_error_still_cancels_and_falls_back_to_market():
+    """A transient error while polling for a fill is not a confirmed fill --
+    the resting reduceOnly order must be cancelled (not left dangling) before
+    the guaranteed market order executes, same as a clean timeout."""
+    fake = _PollErrorsExchange()
+    ex = _make_executor_with_position(fake)
+
+    result = asyncio.run(
+        ex.reduce_position(
+            symbol="BTC/USDC", side="long", reduction_pct=0.50,
+            reason="STALE_FORCE_CLOSE", use_post_only=True, post_only_timeout_seconds=3.0,
+        )
+    )
+
+    assert result["id"] == "market-2"
+    assert fake.cancelled == ["maker-2"]
+    assert len(fake.market_orders) == 1
+
+
 @pytest.mark.allow_real_okx_network
 def test_post_only_cancel_failure_still_falls_back_to_market():
     """Even if cancelling the stale maker order itself errors, the position

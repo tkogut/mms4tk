@@ -1411,24 +1411,39 @@ class OKXExecutor:
         if not order_id:
             return None
 
+        # Once the order is resting, EVERY exit from here but a confirmed fill
+        # must attempt to cancel it before returning — otherwise a transient
+        # error while polling (not just a timeout) would leave this order live
+        # on the book while the caller places its market fallback, risking a
+        # double-close. (reduceOnly on both legs caps the worst case to "the
+        # second order has nothing left to reduce and no-ops", but an unwanted
+        # resting order is still worth cleaning up proactively.)
         deadline = time.monotonic() + timeout_seconds
         poll_interval = 1.0
-        while time.monotonic() < deadline:
-            await asyncio.sleep(poll_interval)
-            fetched = await self.exchange.fetch_order(order_id, target_symbol)
-            status = str(fetched.get("status", "")).lower()
-            if status in ("closed", "filled"):
-                logger.info(
-                    f"✓ reduce_position (maker): {order_id} filled {reduce_amount} "
-                    f"contracts of {target_symbol} ({reason})"
-                )
-                return fetched
-            if status in ("canceled", "cancelled", "rejected", "expired"):
-                # The exchange itself ended the order (e.g. postOnly would have
-                # crossed the spread) — nothing left to cancel, fall back.
-                return None
+        try:
+            while time.monotonic() < deadline:
+                await asyncio.sleep(poll_interval)
+                fetched = await self.exchange.fetch_order(order_id, target_symbol)
+                status = str(fetched.get("status", "")).lower()
+                if status in ("closed", "filled"):
+                    logger.info(
+                        f"✓ reduce_position (maker): {order_id} filled {reduce_amount} "
+                        f"contracts of {target_symbol} ({reason})"
+                    )
+                    return fetched
+                if status in ("canceled", "cancelled", "rejected", "expired"):
+                    # The exchange itself ended the order (e.g. postOnly would
+                    # have crossed the spread) — nothing left to cancel.
+                    return None
+            # Timed out waiting for a passive fill.
+        except Exception as poll_err:
+            logger.warning(
+                f"reduce_position: error polling post-only order {order_id} for "
+                f"{target_symbol}: {type(poll_err).__name__}: {poll_err} — "
+                f"attempting to cancel before falling back to market"
+            )
 
-        # Timed out waiting for a passive fill — cancel and let the caller's
+        # Not filled (timeout or a polling error) — cancel and let the caller's
         # existing market-order path take over.
         try:
             await self.exchange.cancel_order(order_id, target_symbol)
