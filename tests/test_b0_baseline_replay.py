@@ -265,21 +265,21 @@ def fixture_db(tmp_path):
     # A split position: two legs, one shared entry_timestamp -> one Position.
     conn.execute(
         "INSERT INTO closed_trades VALUES (?,?,?,?,?,?,?,?,?,?)",
-        ("t1", "2026-09-20T10:05:00+00:00", "XAG-USD_UM_XPERP-310509", "short", 56.63, 56.90, -0.20, -0.25, 0.05, "2026-09-20T10:00:00+00:00"),
+        ("t1", "2026-09-20T10:05:00+00:00", "XAG-USD_UM_XPERP-310509", "SHORT", 56.63, 56.90, -0.20, -0.25, 0.05, "2026-09-20T10:00:00+00:00"),
     )
     conn.execute(
         "INSERT INTO closed_trades VALUES (?,?,?,?,?,?,?,?,?,?)",
-        ("t2", "2026-09-20T14:00:00+00:00", "XAG-USD_UM_XPERP-310509", "short", 56.63, 57.78, -1.00, -1.05, 0.05, "2026-09-20T10:00:00+00:00"),
+        ("t2", "2026-09-20T14:00:00+00:00", "XAG-USD_UM_XPERP-310509", "SHORT", 56.63, 57.78, -1.00, -1.05, 0.05, "2026-09-20T10:00:00+00:00"),
     )
     # An unrelated, non-addon, single-leg position.
     conn.execute(
         "INSERT INTO closed_trades VALUES (?,?,?,?,?,?,?,?,?,?)",
-        ("t3", "2026-09-21T08:00:00+00:00", "BTC-USD_UM_XPERP-310404", "long", 80000.0, 81000.0, 10.0, 9.9, 0.1, "2026-09-21T06:00:00+00:00"),
+        ("t3", "2026-09-21T08:00:00+00:00", "BTC-USD_UM_XPERP-310404", "LONG", 80000.0, 81000.0, 10.0, 9.9, 0.1, "2026-09-21T06:00:00+00:00"),
     )
     # A leg with no entry_timestamp (pre-09-18-style unreliable row) -- must be excluded.
     conn.execute(
         "INSERT INTO closed_trades VALUES (?,?,?,?,?,?,?,?,?,?)",
-        ("t4", "2026-08-01T08:00:00+00:00", "ETH-USD_UM_XPERP-310404", "long", 3000.0, 3010.0, 1.0, 0.9, 0.1, None),
+        ("t4", "2026-08-01T08:00:00+00:00", "ETH-USD_UM_XPERP-310404", "LONG", 3000.0, 3010.0, 1.0, 0.9, 0.1, None),
     )
     # position_addons row matching the XAG split position's pinned entry (56.63).
     conn.execute(
@@ -310,6 +310,39 @@ def test_load_positions_groups_split_legs_into_one_position(fixture_db):
     assert xag.leg_count == 2
     assert xag.actual_net_usd == pytest.approx(-0.25 + -1.05)
     assert xag.is_addon_affected is True
+
+
+def test_load_positions_normalizes_side_to_lowercase(fixture_db):
+    """Regression: closed_trades.side is stored UPPERCASE ("LONG"/"SHORT") in
+    production, but every downstream comparison in this script (simulate_exit,
+    the okx_orders cross-check) uses lowercase "long"/"short" to match
+    okx_orders.pos_side. The first full run against real data silently flipped
+    every SL/TP direction before this normalization was added -- this test
+    pins the fix."""
+    conn = b0.connect_readonly(fixture_db)
+    try:
+        positions = b0.load_positions(conn)
+    finally:
+        conn.close()
+    for p in positions:
+        assert p.side in ("long", "short"), f"{p.symbol} side was not normalized: {p.side!r}"
+
+
+def test_load_positions_derives_realistic_notional_from_real_pnl(fixture_db):
+    """Regression: notional must come from the position's own realized
+    pnl_usd/pct-move, never from entry_price alone (treating `entry_price * 1`
+    as "notional" produced a nonsensical ~$56,000 notional for a position that
+    actually traded a few tens of dollars, before this fix)."""
+    conn = b0.connect_readonly(fixture_db)
+    try:
+        positions = b0.load_positions(conn)
+    finally:
+        conn.close()
+    xag = next(p for p in positions if p.symbol == "XAG-USD_UM_XPERP-310509")
+    # Derived from the bigger leg (t2: pnl_usd=-1.00, entry=56.63, exit=57.78, short).
+    assert xag.notional_usd == pytest.approx(49.24, abs=0.1)
+    assert xag.notional_usd < 1000  # sanity bound: nowhere near entry_price-as-notional (~$56)
+    assert xag.total_fees_usd == pytest.approx(0.05 + 0.05)
 
 
 def test_load_positions_excludes_rows_without_entry_timestamp(fixture_db):

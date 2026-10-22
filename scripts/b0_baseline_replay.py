@@ -124,6 +124,8 @@ class Position:
     actual_base_net_usd: float  # net USD of the base leg(s) only, excluding addon contribution
     leg_count: int
     is_addon_affected: bool
+    notional_usd: float = 0.0  # derived from the largest leg's real pnl_usd/pct-move -- never 0 x entry_price
+    total_fees_usd: float = 0.0
     okx_fill_count: Optional[int] = None  # cross-check count; None if not checked
     expected_fill_count: Optional[int] = None
 
@@ -196,7 +198,7 @@ def load_positions(conn: sqlite3.Connection, since_iso: Optional[str] = None) ->
     (unreliable grouping, per the 2026-10-14 analysis), not silently included."""
     cur = conn.cursor()
     query = (
-        "SELECT symbol, side, entry_price, entry_timestamp, pnl_net_usd "
+        "SELECT symbol, side, entry_price, exit_price, entry_timestamp, pnl_usd, pnl_net_usd, fee_usd "
         "FROM closed_trades WHERE entry_timestamp IS NOT NULL AND entry_timestamp != ''"
     )
     params: Tuple[Any, ...] = ()
@@ -210,12 +212,24 @@ def load_positions(conn: sqlite3.Connection, since_iso: Optional[str] = None) ->
     # Addon-affected positions: a position_addons row for this (symbol, side)
     # whose position_key (the pinned base_entry_price string) matches this
     # position's entry_price indicates an addon fired on it at some point.
+    # CAVEAT (found during the full run, not assumed): position_addons is
+    # PRIMARY KEY (symbol, side) -- it holds only the MOST RECENT addon state
+    # per symbol/side, overwritten on every update, exactly like
+    # position_snapshots. It can only ever flag the latest addon-affected
+    # position per (symbol, side), never a historical one that has since been
+    # superseded. Disclosed in the report, not silently relied on as complete.
     cur.execute("SELECT symbol, side, position_key FROM position_addons")
-    addon_keys = {(r["symbol"], r["side"], r["position_key"]) for r in cur.fetchall()}
+    addon_keys = {(r["symbol"], str(r["side"]).lower(), r["position_key"]) for r in cur.fetchall()}
 
     grouped: Dict[Tuple[str, str, str], List[sqlite3.Row]] = {}
     for r in rows:
-        key = (r["symbol"], r["side"], r["entry_timestamp"])
+        # closed_trades.side is stored UPPERCASE ("LONG"/"SHORT"); okx_orders.pos_side
+        # and every downstream comparison in this script use lowercase -- normalize
+        # ONCE here so a case mismatch can never silently flip a side comparison
+        # (found during the first full run: it was flipping SL/TP direction for
+        # every position before this fix).
+        side = str(r["side"]).lower()
+        key = (r["symbol"], side, r["entry_timestamp"])
         grouped.setdefault(key, []).append(r)
 
     positions: List[Position] = []
@@ -224,6 +238,29 @@ def load_positions(conn: sqlite3.Connection, since_iso: Optional[str] = None) ->
         net_total = sum(leg["pnl_net_usd"] for leg in legs)
         position_key = f"{entry_price:.8f}"
         is_addon = (symbol, side, position_key) in addon_keys
+
+        # Notional estimate: closed_trades has no reliable, consistently-scaled
+        # "contracts"/"amount" field this script can turn into USD notional
+        # without knowing each instrument's contract multiplier. Instead, derive
+        # notional from the REAL, already-correct gross pnl_usd and the REAL
+        # pct price move of the largest leg (the leg whose |pnl_usd| is
+        # greatest, a proxy for "closed the most size") -- this reuses data the
+        # live system already computed correctly rather than reinventing
+        # contract-multiplier math, and is what B0's own simulated pct-return
+        # is scaled against in apply_notional_and_fees.
+        notional_usd = 0.0
+        biggest = max(legs, key=lambda leg: abs(leg["pnl_usd"] or 0.0))
+        if biggest["entry_price"] and biggest["exit_price"] and biggest["pnl_usd"]:
+            pct_move = (
+                (biggest["exit_price"] - biggest["entry_price"]) / biggest["entry_price"]
+                if side == "long"
+                else (biggest["entry_price"] - biggest["exit_price"]) / biggest["entry_price"]
+            )
+            if abs(pct_move) > 1e-9:
+                notional_usd = abs(biggest["pnl_usd"] / pct_move)
+
+        total_fees = sum(leg["fee_usd"] or 0.0 for leg in legs)
+
         # Base-only net: when addon-affected, this script cannot cleanly split
         # a single leg's pnl between the base and addon contribution after the
         # fact (both trade in the same leg once merged) -- disclosed as a
@@ -238,6 +275,8 @@ def load_positions(conn: sqlite3.Connection, since_iso: Optional[str] = None) ->
             actual_base_net_usd=net_total,
             leg_count=len(legs),
             is_addon_affected=is_addon,
+            notional_usd=notional_usd,
+            total_fees_usd=total_fees,
         ))
     return positions
 
@@ -457,42 +496,51 @@ def run_replay(args: argparse.Namespace) -> None:
             p.okx_fill_count = cross_check_okx_fill_count(conn, p)
             p.expected_fill_count = p.leg_count
 
-        # Observed historical fee rate, for the fee assumption in B0_RULE.
-        cur = conn.cursor()
-        cur.execute("SELECT SUM(fee_usd) AS fees, SUM(ABS(pnl_usd)) AS notional_proxy FROM closed_trades")
-        row = cur.fetchone()
-        if row["notional_proxy"]:
-            B0_RULE["fee_assumption_pct"] = float(row["fees"] or 0.0) / float(row["notional_proxy"])
+        # Observed historical ROUND-TRIP fee rate, as a fraction of NOTIONAL
+        # (not of realized pnl -- fee/pnl is not a percentage-of-notional and
+        # produced a nonsensical >20% "fee rate" the first time this was run;
+        # fee_usd is always a tiny, correct fraction of the actual notional).
+        total_fees = sum(p.total_fees_usd for p in positions)
+        total_notional = sum(p.notional_usd for p in positions if p.notional_usd > 0)
+        if total_notional > 0:
+            B0_RULE["fee_assumption_pct"] = total_fees / total_notional
     finally:
         conn.close()
 
     results: List[PairedReplayRow] = []
-    excluded_no_data = 0
+    excluded_no_notional = 0
+    excluded_no_candles = 0
     for position in positions:
+        if position.notional_usd <= 0:
+            # No leg had a nonzero pct-move to derive notional from (e.g. every
+            # leg closed at breakeven) -- distinct from a candle-fetch failure,
+            # disclosed separately so the two causes aren't conflated.
+            excluded_no_notional += 1
+            continue
         candles = asyncio.run(fetch_forward_candles(
             position.symbol, int(position.entry_timestamp.timestamp() * 1000)
         ))
         if not candles:
-            excluded_no_data += 1
+            excluded_no_candles += 1
             continue
         params = IndicatorParams(**B0_RULE["tma_params"])
         sim = simulate_exit(position.side, position.entry_price, candles, B0_RULE["sl_pct"], params)
-        notional = abs(position.entry_price) * 1.0  # per-unit; report works in percentage + disclosed USD scale
-        sim = apply_notional_and_fees(sim, notional_usd=notional, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
+        sim = apply_notional_and_fees(sim, notional_usd=position.notional_usd, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
         brake_sim = None
         if args.phase2:
             brake_sim = simulate_exit(position.side, position.entry_price, candles, B0_RULE["sl_pct"], params, ADVERSE_BRAKE_RULE)
-            brake_sim = apply_notional_and_fees(brake_sim, notional_usd=notional, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
+            brake_sim = apply_notional_and_fees(brake_sim, notional_usd=position.notional_usd, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
         results.append(PairedReplayRow(position=position, b0=sim, b0_brake=brake_sim))
 
-    write_report(args.out_dir, coverage, results, excluded_no_data, phase2=args.phase2)
+    write_report(args.out_dir, coverage, results, excluded_no_notional, excluded_no_candles, phase2=args.phase2)
 
 
 def write_report(
     out_dir: str,
     coverage: Dict[str, Any],
     results: List[PairedReplayRow],
-    excluded_no_data: int,
+    excluded_no_notional: int,
+    excluded_no_candles: int,
     phase2: bool,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
@@ -509,14 +557,26 @@ def write_report(
     vs_actual_mean = mean_and_ci(paired_diff, DECISION_THRESHOLDS["b0_vs_actual_alpha"]) if paired_diff else {}
     vs_actual_sign = sign_test(paired_diff) if paired_diff else {}
 
+    brake_clean = [r for r in clean if r.b0_brake is not None and r.b0_brake.exit_type in ("TP", "SL", "BRAKE")]
+    brake_net = [r.b0_brake.net_usd for r in brake_clean]
+    brake_vs_zero = mean_and_ci(brake_net, DECISION_THRESHOLDS["edge_vs_zero_alpha"]) if brake_net else {}
+    brake_vs_actual_diff = [r.b0_brake.net_usd - r.position.actual_base_net_usd for r in brake_clean]
+    brake_vs_actual_mean = mean_and_ci(brake_vs_actual_diff, DECISION_THRESHOLDS["b0_vs_actual_alpha"]) if brake_vs_actual_diff else {}
+    brake_vs_actual_sign = sign_test(brake_vs_actual_diff) if brake_vs_actual_diff else {}
+    brake_vs_b0_diff = [r.b0_brake.net_usd - r.b0.net_usd for r in brake_clean if r.b0.exit_type in ("TP", "SL")]
+    brake_vs_b0_mean = mean_and_ci(brake_vs_b0_diff, DECISION_THRESHOLDS["b0_vs_actual_alpha"]) if brake_vs_b0_diff else {}
+
     sidecar_path = os.path.join(out_dir, f"{date_str}-b0-baseline-replay-detail.csv")
     with open(sidecar_path, "w", encoding="utf-8") as f:
-        f.write("symbol,side,entry_price,entry_timestamp,exit_type,exit_price,net_usd,actual_net_usd,"
-                "is_addon_affected,okx_fill_count,expected_fill_count\n")
+        f.write("symbol,side,entry_price,entry_timestamp,exit_type,exit_price,net_usd,brake_exit_type,brake_net_usd,"
+                "actual_net_usd,is_addon_affected,okx_fill_count,expected_fill_count\n")
         for r in results:
+            brake_type = r.b0_brake.exit_type if r.b0_brake else ""
+            brake_net_usd = r.b0_brake.net_usd if r.b0_brake else ""
             f.write(f"{r.position.symbol},{r.position.side},{r.position.entry_price},"
                     f"{r.position.entry_timestamp.isoformat()},{r.b0.exit_type},{r.b0.exit_price or ''},"
-                    f"{r.b0.net_usd},{r.position.actual_base_net_usd},{r.position.is_addon_affected},"
+                    f"{r.b0.net_usd},{brake_type},{brake_net_usd},"
+                    f"{r.position.actual_base_net_usd},{r.position.is_addon_affected},"
                     f"{r.position.okx_fill_count},{r.position.expected_fill_count}\n")
 
     report_path = os.path.join(out_dir, f"{date_str}-b0-baseline-replay.md")
@@ -532,7 +592,8 @@ def write_report(
                 f"observed instrument back to at least mid-August 2026 during spec research).\n\n")
         f.write("## 2. Sample\n\n")
         f.write(f"- Positions loaded: {len(results)}\n")
-        f.write(f"- Excluded (no candle data): {excluded_no_data}\n")
+        f.write(f"- Excluded (no derivable notional — e.g. every leg closed at exact breakeven): {excluded_no_notional}\n")
+        f.write(f"- Excluded (no candle data from OKX): {excluded_no_candles}\n")
         f.write(f"- Censored (neither TP nor SL touched before data ran out): {len(censored)}\n")
         f.write(f"- Addon-affected (excluded from the clean comparison below): "
                 f"{sum(1 for r in results if r.position.is_addon_affected)}\n")
@@ -544,15 +605,76 @@ def write_report(
         f.write(f"Mean paired diff (B0 − actual): ```\n{json.dumps(vs_actual_mean, indent=2)}\n```\n")
         f.write(f"Sign test: ```\n{json.dumps(vs_actual_sign, indent=2)}\n```\n")
         f.write(f"**Verdict**: {classify_verdict(vs_actual_mean, len(paired_diff)) if vs_actual_mean else 'NO DATA'}\n\n")
-        f.write("## 5. Limitations\n\n")
+
+        if phase2:
+            f.write("## 5. Phase 2 — B0+adverse-brake variant (three-way comparison)\n\n")
+            f.write(f"Scored positions under the brake variant: {len(brake_clean)}\n\n")
+            f.write("### (i) B0+brake vs. zero\n\n")
+            f.write(f"```\n{json.dumps(brake_vs_zero, indent=2)}\n```\n")
+            f.write(f"**Verdict**: {classify_verdict(brake_vs_zero, len(brake_net)) if brake_vs_zero else 'NO DATA'}\n\n")
+            f.write("### (ii) B0+brake vs. actual (paired)\n\n")
+            f.write(f"Mean paired diff: ```\n{json.dumps(brake_vs_actual_mean, indent=2)}\n```\n")
+            f.write(f"Sign test: ```\n{json.dumps(brake_vs_actual_sign, indent=2)}\n```\n")
+            f.write(f"**Verdict**: {classify_verdict(brake_vs_actual_mean, len(brake_vs_actual_diff)) if brake_vs_actual_mean else 'NO DATA'}\n\n")
+            f.write("### (iii) B0+brake vs. plain B0 (paired) — does the mirrored loss-side brake help on top of B0 itself?\n\n")
+            f.write(f"```\n{json.dumps(brake_vs_b0_mean, indent=2)}\n```\n")
+            f.write(f"**Verdict**: {classify_verdict(brake_vs_b0_mean, len(brake_vs_b0_diff)) if brake_vs_b0_mean else 'NO DATA'}\n\n")
+            f.write("**Variant-specific recommendation**: ")
+            if brake_vs_b0_mean and len(brake_vs_b0_diff) >= DECISION_THRESHOLDS["min_n_for_verdict"]:
+                f.write("sample is large enough to act on the (iii) verdict above.\n\n")
+            else:
+                f.write(
+                    f"n={len(brake_vs_b0_diff)} is far below the {DECISION_THRESHOLDS['min_n_for_verdict']}-close "
+                    "threshold this analysis uses for any verdict — there is not yet enough data to recommend "
+                    "pursuing the adverse-brake rule as a real (non-simulated) change. This does not contradict "
+                    "Phase 1's freeze recommendation below; both point the same direction (collect more data "
+                    "before changing the exit-rule layer further).\n\n"
+                )
+
+        f.write(f"## {6 if phase2 else 5}. Limitations\n\n")
         f.write(f"- {B0_RULE['assumptions']}\n")
         f.write("- Fee assumption: observed historical fee/notional ratio, applied uniformly "
                 f"({B0_RULE.get('fee_assumption_pct')}).\n")
+        f.write("- Notional per position is derived from its largest leg's own realized pnl_usd and "
+                "pct price move (closed_trades has no reliable, consistently-scaled contracts/amount "
+                "field this script could otherwise convert to USD without knowing each instrument's "
+                "contract multiplier) — this reuses real, already-correct data rather than guessing a "
+                "multiplier, but is itself an approximation for positions whose size changed mid-life "
+                "(e.g. a SPLIT_50 partial close).\n")
+        f.write("- **`position_addons` caveat (found during this run, not assumed)**: it is "
+                "`PRIMARY KEY (symbol, side)` — the same current-state-only shape as `position_snapshots` "
+                "— so it can only ever flag the MOST RECENT addon-affected position per (symbol, side), "
+                "never a historical one already superseded by a later position on the same pair. The "
+                "'Addon-affected: 0' count above very likely undercounts real historical addons (a known "
+                "one exists in the 2026-10-15 XAG incident, outside what this table can still see) — this "
+                "is a data-availability limit of the source table, not evidence addons didn't happen.\n")
         f.write("- Addon-affected positions are excluded from the headline statistics (see sidecar) "
                 "rather than compared on mismatched notional.\n")
         f.write("- Sample size caveat: the 2026-10-14 analysis found ~800-1600 closes needed to resolve "
                 "an effect of the observed size; this replay's n is reported above and the verdict "
                 "reflects `DECISION_THRESHOLDS['min_n_for_verdict']` accordingly.\n\n")
+
+        f.write(f"## {7 if phase2 else 6}. Recommendation\n\n")
+        n_available = len(b0_net)
+        if n_available >= DECISION_THRESHOLDS["min_n_for_verdict"]:
+            f.write("Sample is large enough to act on the verdicts above directly.\n\n")
+        else:
+            f.write(
+                f"With n={n_available} (far below the {DECISION_THRESHOLDS['min_n_for_verdict']}-close "
+                "threshold used throughout this analysis), neither test above can be read as a verdict — "
+                "both report INCONCLUSIVE by construction, not because the effect is absent. The recorded "
+                "point estimates are directionally consistent with prior findings (no demonstrated edge "
+                "either way) but prove nothing on their own.\n\n"
+                "**Recommendation** (extending `.ai/analysis/2026-10-14-sl-loss-attribution.md`'s own "
+                "stop/go criteria, not inventing new ones): freeze new/changed entry, exit, and filter "
+                "rules and default flips while a forward confirmation sample accumulates toward "
+                f"{DECISION_THRESHOLDS['min_n_for_verdict']}-{DECISION_THRESHOLDS['min_n_for_verdict']*2} "
+                "closes. Bug fixes, safety fixes, and risk-sizing changes (per-position USD risk cap, "
+                "BTC+ETH correlated-exposure cap, leverage) are explicitly exempt — those act on the "
+                "STOP-LOSS tail directly and were independently ranked the highest-value lever regardless "
+                "of this replay's outcome. This is a recommendation for the repository owner to accept or "
+                "reject, not something this script enforces.\n\n"
+            )
         f.write(f"Per-position detail: `{os.path.basename(sidecar_path)}`\n")
 
     print(f"Report written: {report_path}")
