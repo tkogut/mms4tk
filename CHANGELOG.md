@@ -21,29 +21,45 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
   `TMAIndicator`/`IndicatorParams` unchanged; position grouping reuses the
   existing `cycle_logs`-derived `entry_timestamp` (NOT `position_snapshots`,
   confirmed `PRIMARY KEY (symbol, side)` — current-state-only, no history).
-- 🐛 **Two real bugs found and fixed before trusting the first run's numbers**
-  (the initial result was an absurd −$6,224/position average, every one of 234
-  positions negative, p≈7e-71 — a red flag investigated, not reported as a
-  finding): (1) `closed_trades.side` is stored UPPERCASE while every comparison
-  in the script used lowercase, silently flipping SL/TP direction for every
-  position; (2) notional was computed as `entry_price × 1`, overstating this
-  bot's actual ~$10–100 position sizes by 100–1000x. Fixed by normalizing side
-  at load time and deriving notional from each position's own real, already-
-  correct `pnl_usd`/price-move ratio instead of guessing a contract multiplier.
-- ✅ Result (`.ai/analysis/2026-10-22-b0-baseline-replay.md`, n=219 positions):
-  both pre-registered tests (B0 vs. zero; B0 vs. actual, paired) are
-  **INCONCLUSIVE (underpowered, n=219 < 800)** — consistent with, not
-  contradicting, the 2026-10-14 analysis's own finding of no demonstrated edge.
-  The Phase 2 adverse-brake variant shows a small positive point estimate
-  (+$0.09/position vs. plain B0) but is equally underpowered.
+- 🐛 **Three real bugs found and fixed during self-review, before trusting any
+  run's numbers**:
+  1. The first full run produced an absurd −$6,224/position average loss,
+     every one of 234 positions negative, p≈7e-71 — a red flag investigated,
+     not reported as a finding. Root causes: `closed_trades.side` is stored
+     UPPERCASE while every comparison in the script used lowercase, silently
+     flipping SL/TP direction for every position; and notional was computed
+     as `entry_price × 1`, overstating this bot's actual ~$10–100 position
+     sizes by 100–1000x. Fixed by normalizing side at load time and deriving
+     notional from each position's own real `pnl_usd`/price-move ratio.
+  2. Forward candles were fetched starting exactly AT entry with no pre-entry
+     history, leaving the TMA/ATR rolling windows unseeded (NaN) for the
+     first ~20-34 candles of every position — SL detection was unaffected,
+     but TP detection was silently skipped there, one-sidedly biasing every
+     simulation toward missing early TP touches. Fixed by fetching 60
+     pre-entry candles to seed the bands and passing the real entry index
+     into the simulator.
+  3. A fresh OKX client was created and `load_markets()` called once PER
+     POSITION (~226 times) — slow, and a single transient network timeout
+     anywhere crashed the whole run, discarding all prior work. Fixed by
+     loading markets once on a shared client, plus a 3-attempt retry on each
+     position's own candle fetch so one instrument's failure only excludes
+     that position.
+- ✅ Result (`.ai/analysis/2026-10-22-b0-baseline-replay.md`, n=222 positions,
+  real production data): both pre-registered tests (B0 vs. zero; B0 vs.
+  actual, paired) are **INCONCLUSIVE (underpowered, n=222 < 800)** —
+  consistent with, not contradicting, the 2026-10-14 analysis's own finding
+  of no demonstrated edge. The Phase 2 adverse-brake variant shows a small
+  positive point estimate (+$0.15/position vs. plain B0) but is equally
+  underpowered.
 - 📄 Recommendation (not enforced by this PR): freeze new/changed entry/exit/
   filter rules while a forward confirmation sample accumulates toward 800–1600
   closes; bug fixes, safety fixes, and risk-sizing changes are exempt. A
   decision for the repository owner, not this script.
-- 🧪 `tests/test_b0_baseline_replay.py`: 28 tests — the forward-walk simulator
+- 🧪 `tests/test_b0_baseline_replay.py`: 29 tests — the forward-walk simulator
   (TP-first, SL-first, same-candle tie-break, censored, the adverse-brake
-  variant), the statistics helpers, and position reconstruction against a
-  disposable fixture db (never the live-mounted production file), including
+  variant, entry-index/pre-seed isolation), the statistics helpers, and
+  position reconstruction against a disposable fixture db (never the
+  live-mounted production file), including
   regression tests for both bugs found above.
 - 📄 No production code changed — this is a diagnostic script + report only.
 
