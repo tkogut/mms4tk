@@ -58,7 +58,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -313,9 +315,19 @@ def simulate_exit(
     sl_pct: float,
     tma_params: Optional[IndicatorParams] = None,
     adverse_brake: Optional[Dict[str, Any]] = None,
+    entry_index: int = 0,
 ) -> ExitSimResult:
-    """Walk forward through `candles` (must start at or after the entry candle)
-    and return the first-touch exit under the B0 rule, by candle high/low.
+    """Walk forward from `entry_index` (default 0 -- the caller may pass pure
+    post-entry series, as every test fixture in this file does) and return the
+    first-touch exit under the B0 rule, by candle high/low.
+
+    `entry_index` matters when `candles` ALSO carries pre-entry history to seed
+    the rolling TMA/ATR windows (as the live run does, via
+    `fetch_forward_candles`'s `seed_candles`) -- without it, the opposite-band
+    level is NaN for the first ~tma_length+atr_period candles of every
+    position, one-sidedly biasing the simulator toward missing early TP
+    touches (SL detection doesn't depend on the band, so it isn't affected --
+    this was a real, asymmetric bug found during self-review, not a wash).
 
     TP = opposite TMA band, recomputed every candle via TMAIndicator (so the
     whole `candles` series -- including enough history BEFORE entry to seed the
@@ -337,15 +349,11 @@ def simulate_exit(
 
     sl_level = entry_price * (1 - sl_pct) if side == "long" else entry_price * (1 + sl_pct)
 
-    # Find the index of the first candle at/after entry (the caller passes a
-    # series that may include pre-entry history to seed the rolling windows).
-    entry_idx = next((i for i, c in enumerate(candles) if c.timestamp >= candles[0].timestamp), 0)
-
     worst_profit_atr = 0.0  # most adverse excursion so far, in ATR units (brake tracking)
     stall_count = 0
     last_extreme = entry_price
 
-    for i in range(entry_idx, len(candles)):
+    for i in range(entry_index, len(candles)):
         c = candles[i]
         band_row = bands.iloc[i]
         tp_level = band_row["upper_band"] if side == "long" else band_row["lower_band"]
@@ -451,36 +459,82 @@ def classify_verdict(stats: Dict[str, float], n: int, thresholds: Dict[str, Any]
 
 # ── Live candle fetching (public OKX market data -- no account credentials) ─
 
-async def fetch_forward_candles(
-    instrument_native_id: str,
-    since_ms: int,
-    timeframe: str = "1h",
-    max_candles: int = 2000,
-) -> List[Candle]:
-    """Fetch OHLCV for `instrument_native_id` starting from `since_ms`, via
-    ccxt's public OKX client -- no credentials needed for market data, and this
-    script never touches order/account endpoints. `ohlcv_cache` was found empty
-    (Step 1) so this is the primary candle source, not a fallback for gaps."""
+# Enough candles before entry to seed TMA/ATR's rolling windows (tma_length=20
+# needs two 10-bar SMA passes; atr_period=14) before the simulator has to judge
+# a TP/SL touch -- found necessary during self-review: fetching candles
+# starting exactly AT entry left the opposite-band level NaN (unseeded) for the
+# first ~20-34 candles of every position, silently biasing every simulation
+# toward missing early TP touches (SL detection doesn't depend on the band, so
+# it was unaffected -- an asymmetric, one-sided bug, not a wash).
+SEED_CANDLES = 60
+
+
+async def make_okx_client(retries: int = 3):
+    """Create ONE public OKX client and load its instrument list ONCE -- no
+    credentials needed for market data. Found during self-review: the first
+    draft created a fresh client and called load_markets() inside
+    fetch_forward_candles, i.e. once PER POSITION (~226 times in the real
+    run) -- slow, and a single transient network timeout on any one of those
+    226 redundant calls crashed the entire run, discarding all prior work.
+    Loading markets once, up front, with its own retry, fixes both."""
     import ccxt.async_support as ccxt
 
     ex = ccxt.okx()
-    try:
-        market = ex.markets_by_id.get(instrument_native_id) if ex.markets else None
-        unified = market[0]["symbol"] if market else instrument_native_id
-        if not ex.markets:
+    last_err: Optional[Exception] = None
+    for attempt in range(retries):
+        try:
             await ex.load_markets()
-            market = ex.markets_by_id.get(instrument_native_id)
-            unified = market[0]["symbol"] if market else instrument_native_id
-        raw = await ex.fetch_ohlcv(unified, timeframe=timeframe, since=since_ms, limit=max_candles)
-        return [Candle(timestamp=int(r[0]), open=float(r[1]), high=float(r[2]), low=float(r[3]),
-                       close=float(r[4]), volume=float(r[5])) for r in raw]
-    finally:
-        await ex.close()
+            return ex
+        except Exception as e:  # noqa: BLE001 -- genuinely any transient network error should retry
+            last_err = e
+            await asyncio.sleep(2 ** attempt)
+    await ex.close()
+    raise RuntimeError(f"Could not load OKX markets after {retries} attempts") from last_err
+
+
+async def fetch_forward_candles(
+    ex: Any,
+    instrument_native_id: str,
+    entry_ms: int,
+    timeframe: str = "1h",
+    max_candles: int = 2000,
+    seed_candles: int = SEED_CANDLES,
+    retries: int = 3,
+) -> Optional[Tuple[List[Candle], int]]:
+    """Fetch OHLCV for `instrument_native_id` spanning `seed_candles` BEFORE
+    `entry_ms` through up to `max_candles` after, via the shared `ex` client
+    (markets already loaded by `make_okx_client`). `ohlcv_cache` was found
+    empty (Step 1) so this is the primary candle source, not a fallback for
+    gaps.
+
+    Returns (candles, entry_index) -- entry_index is the index of the first
+    candle at/after `entry_ms`, for the caller to pass into `simulate_exit` --
+    or None if every retry for THIS position's fetch failed (the caller
+    excludes that one position and keeps going, rather than losing the whole
+    run to one instrument's transient failure)."""
+    timeframe_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}.get(timeframe, 3_600_000)
+    since_ms = entry_ms - seed_candles * timeframe_ms
+    market = ex.markets_by_id.get(instrument_native_id)
+    unified = market[0]["symbol"] if market else instrument_native_id
+
+    for attempt in range(retries):
+        try:
+            raw = await ex.fetch_ohlcv(unified, timeframe=timeframe, since=since_ms, limit=max_candles)
+            candles = [Candle(timestamp=int(r[0]), open=float(r[1]), high=float(r[2]), low=float(r[3]),
+                              close=float(r[4]), volume=float(r[5])) for r in raw]
+            entry_index = next((i for i, c in enumerate(candles) if c.timestamp >= entry_ms), len(candles))
+            return candles, entry_index
+        except Exception as e:  # noqa: BLE001
+            logger_err = e
+            if attempt < retries - 1:
+                await asyncio.sleep(2 ** attempt)
+    logging.getLogger(__name__).warning(
+        f"fetch_forward_candles: giving up on {instrument_native_id} after {retries} attempts: {logger_err}"
+    )
+    return None
 
 
 def run_replay(args: argparse.Namespace) -> None:
-    import asyncio
-
     conn = connect_readonly(args.db_path)
     try:
         coverage = check_data_coverage(conn)
@@ -507,30 +561,46 @@ def run_replay(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    results: List[PairedReplayRow] = []
-    excluded_no_notional = 0
-    excluded_no_candles = 0
-    for position in positions:
-        if position.notional_usd <= 0:
-            # No leg had a nonzero pct-move to derive notional from (e.g. every
-            # leg closed at breakeven) -- distinct from a candle-fetch failure,
-            # disclosed separately so the two causes aren't conflated.
-            excluded_no_notional += 1
-            continue
-        candles = asyncio.run(fetch_forward_candles(
-            position.symbol, int(position.entry_timestamp.timestamp() * 1000)
-        ))
-        if not candles:
-            excluded_no_candles += 1
-            continue
-        params = IndicatorParams(**B0_RULE["tma_params"])
-        sim = simulate_exit(position.side, position.entry_price, candles, B0_RULE["sl_pct"], params)
-        sim = apply_notional_and_fees(sim, notional_usd=position.notional_usd, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
-        brake_sim = None
-        if args.phase2:
-            brake_sim = simulate_exit(position.side, position.entry_price, candles, B0_RULE["sl_pct"], params, ADVERSE_BRAKE_RULE)
-            brake_sim = apply_notional_and_fees(brake_sim, notional_usd=position.notional_usd, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
-        results.append(PairedReplayRow(position=position, b0=sim, b0_brake=brake_sim))
+    async def process_all() -> Tuple[List[PairedReplayRow], int, int]:
+        # ONE client, markets loaded ONCE -- see make_okx_client's docstring
+        # for why the first draft (fresh client + load_markets per position)
+        # was both slow and fragile (one transient timeout anywhere lost the
+        # whole run's prior work).
+        ex = await make_okx_client()
+        try:
+            results: List[PairedReplayRow] = []
+            excluded_no_notional = 0
+            excluded_no_candles = 0
+            for position in positions:
+                if position.notional_usd <= 0:
+                    # No leg had a nonzero pct-move to derive notional from
+                    # (e.g. every leg closed at breakeven) -- distinct from a
+                    # candle-fetch failure, disclosed separately.
+                    excluded_no_notional += 1
+                    continue
+                fetched = await fetch_forward_candles(
+                    ex, position.symbol, int(position.entry_timestamp.timestamp() * 1000)
+                )
+                if fetched is None:
+                    excluded_no_candles += 1
+                    continue
+                candles, entry_index = fetched
+                if not candles or entry_index >= len(candles):
+                    excluded_no_candles += 1
+                    continue
+                params = IndicatorParams(**B0_RULE["tma_params"])
+                sim = simulate_exit(position.side, position.entry_price, candles, B0_RULE["sl_pct"], params, entry_index=entry_index)
+                sim = apply_notional_and_fees(sim, notional_usd=position.notional_usd, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
+                brake_sim = None
+                if args.phase2:
+                    brake_sim = simulate_exit(position.side, position.entry_price, candles, B0_RULE["sl_pct"], params, ADVERSE_BRAKE_RULE, entry_index=entry_index)
+                    brake_sim = apply_notional_and_fees(brake_sim, notional_usd=position.notional_usd, fee_pct_round_trip=B0_RULE["fee_assumption_pct"] or 0.0)
+                results.append(PairedReplayRow(position=position, b0=sim, b0_brake=brake_sim))
+            return results, excluded_no_notional, excluded_no_candles
+        finally:
+            await ex.close()
+
+    results, excluded_no_notional, excluded_no_candles = asyncio.run(process_all())
 
     write_report(args.out_dir, coverage, results, excluded_no_notional, excluded_no_candles, phase2=args.phase2)
 

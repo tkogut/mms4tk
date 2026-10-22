@@ -112,6 +112,48 @@ def test_simulate_exit_no_candles_is_no_data():
     assert result.exit_type == "NO_DATA"
 
 
+def test_simulate_exit_entry_index_skips_unseeded_pre_entry_candles():
+    """Regression: without an explicit entry_index, walking from index 0 of a
+    series that ALSO carries pre-entry seed history would evaluate the
+    rolling TMA/ATR bands before they're seeded (NaN) for that whole
+    stretch -- SL detection still works (it doesn't depend on the band), but
+    TP detection is silently skipped there, one-sidedly biasing the simulator
+    toward missing/delaying early TP touches. This test's pre-entry section
+    contains a clean round-trip rally (up through what would be a TP band
+    computed from the early, still-calm TMA, then back to baseline) that must
+    NOT be scored, because it happens entirely before `entry_index` -- the
+    position only actually "exists" once price is back at the calm baseline."""
+    seed = _flat_candles(40, 100.0)
+    # Round-trip: rallies up (would cross a TP band computed from the calm
+    # seed's TMA/ATR), then returns to baseline before the real entry point --
+    # realistic in shape (a touch-and-reject), isolating entry_index as the
+    # only thing that can make this leak into the result.
+    up = [
+        Candle(timestamp=seed[-1].timestamp + (i + 1) * 3_600_000,
+               open=100.0 + i * 2, high=100.0 + i * 2 + 1, low=100.0 + i * 2 - 0.1,
+               close=100.0 + i * 2, volume=1.0)
+        for i in range(8)
+    ]
+    down = [
+        Candle(timestamp=up[-1].timestamp + (i + 1) * 3_600_000,
+               open=up[-1].close - i * 2, high=up[-1].close - i * 2 + 0.1, low=up[-1].close - i * 2 - 1,
+               close=up[-1].close - i * 2, volume=1.0)
+        for i in range(8)
+    ]
+    pre_entry = seed + up + down
+    entry_index = len(pre_entry)  # "entry" is placed right after the round trip, back near baseline
+    entry_price = pre_entry[-1].close
+    # Nothing happens post-entry -> must be CENSORED, not a TP carried over
+    # from the pre-entry round trip.
+    post_entry_flat = _flat_candles(10, entry_price, start_ts=pre_entry[-1].timestamp + 3_600_000, wiggle=0.05)
+    candles = pre_entry + post_entry_flat
+
+    result = b0.simulate_exit("long", entry_price, candles, sl_pct=0.02, entry_index=entry_index)
+    assert result.exit_type == "CENSORED", (
+        f"entry_index was not respected -- the pre-entry round trip leaked into the result (got {result.exit_type})"
+    )
+
+
 def test_simulate_exit_adverse_brake_fires_before_hard_sl():
     """Phase 2: the mirrored adverse-brake rule must be able to exit a position
     BEFORE the hard SL would, once the adverse excursion threshold is reached
