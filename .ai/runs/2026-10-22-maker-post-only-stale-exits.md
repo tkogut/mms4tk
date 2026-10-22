@@ -66,5 +66,5 @@ Out of scope (brief's Non-goals, confirmed against the actual code during triage
 
 ### Phase 2: Validation and documentation
 
-- [ ] 2.1 Full validation gate
-- [ ] 2.2 CHANGELOG/VERSION bump
+- [x] 2.1 Full validation gate — 753/753 pytest passed, 0.48.24
+- [x] 2.2 CHANGELOG/VERSION bump — 4f25f97
