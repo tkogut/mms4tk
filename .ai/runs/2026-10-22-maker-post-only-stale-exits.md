@@ -55,6 +55,8 @@ Out of scope (brief's Non-goals, confirmed against the actual code during triage
 
 ## Progress
 
+PR: #141
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Post-only execution path + wiring
