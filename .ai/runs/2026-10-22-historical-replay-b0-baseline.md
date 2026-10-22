@@ -75,7 +75,7 @@ recommendation only).
 - [x] 1.3 Pre-register B0 rule + decision thresholds — 194ee5f
 - [x] 1.4 Forward-walk B0 simulator — 194ee5f
 - [x] 1.5 Compute both pre-registered tests — 194ee5f
-- [x] 1.6 Write the report — 11318f8 (real run: n=219, both tests INCONCLUSIVE/underpowered, freeze recommendation included)
+- [x] 1.6 Write the report — 11318f8, refined fca64e8 (final real run: n=222, both tests INCONCLUSIVE/underpowered, freeze recommendation included)
 
 ### Phase 2: B0+adverse-brake variant (spec Phase 2, Steps 7-9)
 
@@ -85,5 +85,11 @@ recommendation only).
 
 ### Phase 3: Validation and documentation
 
-- [ ] 3.1 Full validation gate
-- [ ] 3.2 CHANGELOG/VERSION bump
+- [x] 3.1 Full validation gate — 783/783 pytest passed (754 baseline + 29 new)
+- [x] 3.2 CHANGELOG/VERSION bump — 87c08c4 / 130114e, v0.48.25
+
+### Self-review fixes (found during `om-auto-review-pr`, before approval — fca64e8)
+
+- Pre-entry candle seeding (60 candles) so TMA/ATR bands are seeded before the simulator judges a touch — the unseeded version one-sidedly biased every position toward missing early TP touches.
+- Shared OKX client + `load_markets()` once instead of per-position (~226x) — fixes both a major slowdown and a single-transient-timeout-crashes-everything fragility.
+- Per-position retry (3 attempts) on candle fetch so one instrument's failure excludes only that position.
