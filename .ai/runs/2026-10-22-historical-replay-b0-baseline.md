@@ -61,8 +61,8 @@ recommendation only).
 
 ### Phase 3: Validation and documentation
 
-- [ ] 3.1 Full validation gate (flake8/mypy best-effort, full pytest suite, build).
-- [ ] 3.2 CHANGELOG.md entry + VERSION/`__init__.py` bump.
+- [x] 3.1 Full validation gate — 782/782 pytest passed (754 baseline + 28 new)
+- [x] 3.2 CHANGELOG/VERSION bump — 87c08c4, v0.48.25
 
 ## Progress
 
@@ -70,18 +70,18 @@ recommendation only).
 
 ### Phase 1: B0 core replay (spec Phase 1, Steps 1-6)
 
-- [ ] 1.1 Verify data coverage
-- [ ] 1.2 Position reconstruction
-- [ ] 1.3 Pre-register B0 rule + decision thresholds
-- [ ] 1.4 Forward-walk B0 simulator
-- [ ] 1.5 Compute both pre-registered tests
-- [ ] 1.6 Write the report
+- [x] 1.1 Verify data coverage — 194ee5f (real finding: ohlcv_cache empty, 77% entry_timestamp coverage)
+- [x] 1.2 Position reconstruction — 194ee5f (+ fix: side-case normalization, notional derivation — 11318f8)
+- [x] 1.3 Pre-register B0 rule + decision thresholds — 194ee5f
+- [x] 1.4 Forward-walk B0 simulator — 194ee5f
+- [x] 1.5 Compute both pre-registered tests — 194ee5f
+- [x] 1.6 Write the report — 11318f8 (real run: n=219, both tests INCONCLUSIVE/underpowered, freeze recommendation included)
 
 ### Phase 2: B0+adverse-brake variant (spec Phase 2, Steps 7-9)
 
-- [ ] 2.1 Mirrored adverse-move exit rule
-- [ ] 2.2 Three-way report comparison
-- [ ] 2.3 Variant-specific recommendation
+- [x] 2.1 Mirrored adverse-move exit rule — 194ee5f
+- [x] 2.2 Three-way report comparison — 11318f8
+- [x] 2.3 Variant-specific recommendation — 11318f8
 
 ### Phase 3: Validation and documentation
 
