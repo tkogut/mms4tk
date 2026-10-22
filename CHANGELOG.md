@@ -4,6 +4,40 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🚀 [0.48.24] - 2026-10-22
+
+### ✨ Added — post-only (maker) execution for STALE_SPLIT_50/FORCE_CLOSE exits
+- 🐛 **Problem**: `reduce_position()` always executes via a guaranteed market
+  order, paying OKX taker fees on every close. Two independent production
+  samples show STALE_SPLIT_50 and impulse-negation STALE_FORCE_CLOSE's gross
+  edge (~0.02–0.07 USD/close) is now smaller than the fee gap:
+  `.ai/analysis/2026-10-14-sl-loss-attribution.md` (504 legs) found these two
+  reasons thin-net-positive (+3.54, +0.24), but a 2026-10-21 follow-up over 97
+  fresh closes found the same 79 closes **flipped net-negative (−5.55 USD on
+  +1.30 USD gross)** — fees now exceed the entire edge these protective exits
+  were generating.
+- ✅ New opt-in `use_post_only`/`post_only_timeout_seconds` params on
+  `reduce_position()`: tries a passive maker (post-only) limit order resting
+  on the passive side of the book first, polling for a fill; if unfilled
+  within the timeout, cancels it and falls back to today's exact guaranteed
+  market order — never leaves a stale position unprotected.
+- ✅ Wired into exactly two call sites in `daemon.py`: `StaleAction.SPLIT_50`
+  and the impulse-negation `StaleAction.FORCE_CLOSE` (the one reported as
+  `STALE_FORCE_CLOSE`). `FORCE_CLOSE_BE`/`BE_ESCAPE` share the same `daemon.py`
+  branch but are explicitly excluded — they keep paying for a guaranteed
+  market fill, matching the 2026-10-22 brief. `MIDLINE_PARTIAL_TP` and
+  `TAKE_PROFIT_*` also share `reduce_position()` and are unaffected (the new
+  params default to off).
+- 🧪 `tests/test_reduce_position_post_only.py`: maker fill (no fallback),
+  timeout → cancel → market fallback, cancel-itself-fails → still falls back,
+  no-usable-quote → skips straight to market, and a regression test proving
+  every existing caller without the new kwarg issues byte-identical market
+  order params to before.
+- 📄 This is a cost-reduction optimization only — it does **not** address the
+  account's dominant loss driver (STOP-LOSS tail: 79–100%+ of net losses in
+  both samples, from ~6% of trades). That's tracked separately as a
+  replay-under-frozen-baseline spec.
+
 ## 🚀 [0.48.23] - 2026-10-15
 
 ### 🐛 Fixed — third settings-reset vector + real dashboard toggles for #139's flags

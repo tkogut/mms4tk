@@ -1801,7 +1801,13 @@ class MMS4Daemon:
                     if stale_action == StaleAction.SPLIT_50:
                         reduce_result = await self.executor.reduce_position(
                             symbol=target_symbol, side=t_side,
-                            reduction_pct=0.50, reason="STALE_SPLIT_50"
+                            reduction_pct=0.50, reason="STALE_SPLIT_50",
+                            # 2026-10-22: this exit's thin gross edge is now smaller
+                            # than the taker/maker fee gap (see
+                            # .ai/analysis/2026-10-14-sl-loss-attribution.md and its
+                            # 2026-10-21 follow-up) — try a passive maker fill first,
+                            # with a guaranteed market fallback inside reduce_position.
+                            use_post_only=True,
                         )
                         status = (reduce_result or {}).get("status", "")
                         if status == "no_position":
@@ -1877,7 +1883,13 @@ class MMS4Daemon:
                         close_requested_ms = int(time.time() * 1000) - 5000  # small clock-skew margin
                         reduce_result = await self.executor.reduce_position(
                             symbol=target_symbol, side=t_side,
-                            reduction_pct=1.0, reason=stale_action.value
+                            reduction_pct=1.0, reason=stale_action.value,
+                            # Only the impulse-negation FORCE_CLOSE (reason
+                            # "STALE_FORCE_CLOSE") is in scope for post-only — it
+                            # shares this branch with FORCE_CLOSE_BE/BE_ESCAPE, which
+                            # must keep paying for a guaranteed market fill as before
+                            # (2026-10-22 brief: those two are explicitly out of scope).
+                            use_post_only=(stale_action == StaleAction.FORCE_CLOSE),
                         )
                         self.inactivity_manager.stop_tracking(target_symbol)
                         # The position is intentionally gone: drop its snapshot so the next
