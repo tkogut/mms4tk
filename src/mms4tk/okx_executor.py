@@ -1213,13 +1213,27 @@ class OKXExecutor:
         symbol: str,
         side: str,
         reduction_pct: float = 0.50,
-        reason: str = "STALE_SPLIT"
+        reason: str = "STALE_SPLIT",
+        use_post_only: bool = False,
+        post_only_timeout_seconds: float = 8.0,
     ) -> Dict[str, Any]:
         """
         Reduce an open position by a percentage via counter-direction market order.
 
         In OKX hedge mode (long_short_mode), closing a LONG means selling
         on posSide='long', and closing a SHORT means buying on posSide='short'.
+
+        2026-10-22: `use_post_only=True` tries a passive maker (post-only) limit
+        order first — see `_attempt_post_only_reduce` — and falls back to this
+        same guaranteed market order if it doesn't fill within
+        `post_only_timeout_seconds`. Every existing caller omits the kwarg, so
+        it defaults to today's exact market-order behavior unchanged. Two
+        independent production samples (`.ai/analysis/2026-10-14-sl-loss-attribution.md`
+        and a 2026-10-21 follow-up) showed STALE_SPLIT_50/FORCE_CLOSE's thin
+        gross edge is now smaller than the taker/maker fee gap — this flag is
+        wired into exactly those two call sites, not the others sharing this
+        function (MIDLINE_PARTIAL_TP, TAKE_PROFIT_*, FORCE_CLOSE_BE, BE_ESCAPE),
+        which must keep paying for guaranteed-fill market orders as before.
 
         Args:
             symbol: Trading pair (e.g. 'BTC/USDC')
@@ -1296,6 +1310,28 @@ class OKXExecutor:
                 "mock": True,
             }
 
+        if use_post_only:
+            try:
+                maker_order = await self._attempt_post_only_reduce(
+                    target_symbol=target_symbol,
+                    close_side=close_side,
+                    side_lower=side_lower,
+                    reduce_amount=reduce_amount,
+                    reason=reason,
+                    timeout_seconds=post_only_timeout_seconds,
+                )
+                if maker_order is not None:
+                    return maker_order
+                logger.info(
+                    f"reduce_position: post-only order for {target_symbol} did not fill "
+                    f"within {post_only_timeout_seconds}s — falling back to market ({reason})"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"reduce_position: post-only attempt failed for {target_symbol} "
+                    f"({reason}): {type(e).__name__}: {e} — falling back to market"
+                )
+
         try:
             params = {
                 "tdMode": "cross",
@@ -1322,3 +1358,83 @@ class OKXExecutor:
                 f"{type(e).__name__}: {str(e)}"
             )
             raise
+
+    async def _attempt_post_only_reduce(
+        self,
+        target_symbol: str,
+        close_side: str,
+        side_lower: str,
+        reduce_amount: float,
+        reason: str,
+        timeout_seconds: float,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try to close via a passive maker (post-only) limit order before paying
+        taker fees. Returns the filled order dict on success, or None if it
+        never filled within `timeout_seconds` (the unfilled order is cancelled
+        first) so the caller falls back to its guaranteed market order.
+
+        Never raises for "didn't fill" or "couldn't even place it" — only an
+        unexpected exception from the exchange client propagates, and
+        `reduce_position` already treats that as "fall back to market" too.
+        """
+        ticker = await self.exchange.fetch_ticker(target_symbol)
+        best_bid = float(ticker.get("bid") or 0.0)
+        best_ask = float(ticker.get("ask") or 0.0)
+        if best_bid <= 0 or best_ask <= 0:
+            logger.info(
+                f"reduce_position: no usable bid/ask for {target_symbol} — "
+                f"skipping post-only attempt ({reason})"
+            )
+            return None
+
+        # Rest on the passive side of the book so the order can only be filled
+        # by someone else crossing into it — selling at/above the best ask,
+        # buying at/below the best bid — never crossing the spread ourselves.
+        limit_price = best_ask if close_side == "sell" else best_bid
+
+        params = {
+            "tdMode": "cross",
+            "posSide": side_lower,
+            "reduceOnly": True,
+            "postOnly": True,
+        }
+        order = await self.exchange.create_order(
+            symbol=target_symbol,
+            type="limit",
+            side=close_side,
+            amount=reduce_amount,
+            price=limit_price,
+            params=params,
+        )
+        order_id = order.get("id")
+        if not order_id:
+            return None
+
+        deadline = time.monotonic() + timeout_seconds
+        poll_interval = 1.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval)
+            fetched = await self.exchange.fetch_order(order_id, target_symbol)
+            status = str(fetched.get("status", "")).lower()
+            if status in ("closed", "filled"):
+                logger.info(
+                    f"✓ reduce_position (maker): {order_id} filled {reduce_amount} "
+                    f"contracts of {target_symbol} ({reason})"
+                )
+                return fetched
+            if status in ("canceled", "cancelled", "rejected", "expired"):
+                # The exchange itself ended the order (e.g. postOnly would have
+                # crossed the spread) — nothing left to cancel, fall back.
+                return None
+
+        # Timed out waiting for a passive fill — cancel and let the caller's
+        # existing market-order path take over.
+        try:
+            await self.exchange.cancel_order(order_id, target_symbol)
+        except Exception as cancel_err:
+            logger.warning(
+                f"reduce_position: failed to cancel unfilled post-only order "
+                f"{order_id} for {target_symbol}: {cancel_err}"
+            )
+        return None
