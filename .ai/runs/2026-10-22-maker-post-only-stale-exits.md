@@ -59,10 +59,10 @@ Out of scope (brief's Non-goals, confirmed against the actual code during triage
 
 ### Phase 1: Post-only execution path + wiring
 
-- [ ] 1.1 Add `_attempt_post_only_reduce()` helper and params to `reduce_position()`
-- [ ] 1.2 Wire SPLIT_50 call site
-- [ ] 1.3 Wire FORCE_CLOSE-only branch (guard against FORCE_CLOSE_BE/BE_ESCAPE)
-- [ ] 1.4 Unit tests (fill / timeout-fallback / cancel-failure-fallback / regression)
+- [x] 1.1 Add `_attempt_post_only_reduce()` helper and params to `reduce_position()` — 68eb9d8
+- [x] 1.2 Wire SPLIT_50 call site — 5ce223c
+- [x] 1.3 Wire FORCE_CLOSE-only branch (guard against FORCE_CLOSE_BE/BE_ESCAPE) — 5ce223c
+- [x] 1.4 Unit tests (fill / timeout-fallback / cancel-failure-fallback / regression) — c6794d2
 
 ### Phase 2: Validation and documentation
 
