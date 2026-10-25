@@ -43,6 +43,21 @@ def get_app_version() -> str:
 
 APP_VERSION = get_app_version()
 
+# 2026-10-25: the real production entrypoint (`uvicorn src.mms4tk.api:app`) never
+# executes `main.py`'s `logging.basicConfig()` call -- uvicorn's own startup
+# configures its own "uvicorn"/"uvicorn.access"/"uvicorn.error" loggers via
+# dictConfig but leaves the root logger without handlers, so every app logger
+# (e.g. "mms4tk.okx_executor", "mms4tk.inactivity") silently fell through to
+# Python's `logging.lastResort` handler, which only emits WARNING+ and with no
+# formatting. This was found by investigating why PR #141's post-only exit path
+# had zero log lines in production despite firing dozens of times. `basicConfig`
+# is a no-op if a handler is already attached to the root logger, so this is safe
+# to call unconditionally regardless of entrypoint.
+logging.basicConfig(
+    level=getattr(logging, os.getenv("MMS4_LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 logger = logging.getLogger("mms4tk.api")
 
 # Global instances

@@ -13,6 +13,11 @@ services:
       - /docker/hermes-agent/data:/app/hermes_data
     env_file:
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   ui_dashboard:
     build: ./ui_dashboard
