@@ -9,25 +9,31 @@ anything — every INFO-level log line, including PR #141's own post-only exit
 logging, was silently dropped. Run in a fresh subprocess so pytest's own log
 capturing (which installs its own root handler) can't mask a regression.
 """
+import os
 import subprocess
 import sys
 import textwrap
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def _run_in_subprocess(env_extra=None):
+    """Mirrors the real-subprocess pattern in
+    tests/test_rolling_tma_atr_recalibration.py::test_main_runs_end_to_end_on_small_slice
+    (cwd=REPO_ROOT + PYTHONPATH=.../src) rather than relying on the test runner's
+    own ambient cwd."""
     script = textwrap.dedent(
         """
-        import logging, os, sys
-        sys.path.insert(0, "src")
+        import logging, os
         os.environ.setdefault("MMS4_API_KEY", "test-api-auth-key-unit-test")
         import mms4tk.api  # noqa: F401 -- the side effect under test
         root = logging.getLogger()
         print(len(root.handlers), logging.getLevelName(root.getEffectiveLevel()))
         """
     )
-    env = {**__import__("os").environ, **(env_extra or {})}
+    env = dict(os.environ, PYTHONPATH=os.path.join(REPO_ROOT, "src"), **(env_extra or {}))
     return subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=60,
+        [sys.executable, "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, env=env, timeout=60,
     )
 
 

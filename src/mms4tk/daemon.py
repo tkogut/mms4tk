@@ -1888,10 +1888,10 @@ class MMS4Daemon:
                             symbol=target_symbol, side=t_side,
                             reduction_pct=1.0, reason=stale_action.value,
                             # 2026-10-25: gated back off for the same reason as the
-                            # SPLIT_50 call site above (see its comment) — kept as a
-                            # no-op expression so re-enabling is a one-line flip once
-                            # the post-only partial-fill/cancel-race bug is fixed.
-                            use_post_only=(stale_action == StaleAction.FORCE_CLOSE) and False,
+                            # SPLIT_50 call site above (see its comment). Before this,
+                            # only the impulse-negation FORCE_CLOSE (not the
+                            # FORCE_CLOSE_BE/BE_ESCAPE sharing this branch) opted in.
+                            use_post_only=False,
                         )
                         self.inactivity_manager.stop_tracking(target_symbol)
                         # The position is intentionally gone: drop its snapshot so the next

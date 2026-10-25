@@ -5,8 +5,6 @@ import importlib.util
 import os
 import sys
 
-import pytest
-
 from mms4tk.logger_db import LoggerDB
 
 _SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "..", "scripts", "bump_data_collection_epoch.py")
