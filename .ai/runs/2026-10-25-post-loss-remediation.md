@@ -91,6 +91,8 @@ bug in already-shipped code or restoring log visibility).
 
 ## Progress
 
+PR: #143
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Gate off post-only exits
