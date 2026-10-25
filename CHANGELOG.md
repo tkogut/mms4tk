@@ -4,6 +4,36 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🛠️ [0.48.26] - 2026-10-25
+
+### Fixed — post-loss remediation (gate off post-only exits, restore production log visibility)
+- 📉 **Problem**: continued small daily net losses (-16.83 USD/7d, -37.80/14d,
+  win-rate ~21%) prompted a fresh review (`.ai/runs/2026-10-25-post-loss-remediation.md`).
+  Found two unrelated bugs while investigating.
+- 🐛 **Post-only exits gated back off** (`daemon.py`): PR #141's `use_post_only=True`
+  wiring for `STALE_SPLIT_50`/impulse-negation `STALE_FORCE_CLOSE` is reverted to
+  `False` at both call sites. Review found `_attempt_post_only_reduce`'s
+  partial-fill/cancel-race path can fall back to a FULL-size market order after
+  only a partial maker fill, over-closing a position — a correctness risk that
+  dwarfs the <$1 total fee savings observed since it was enabled. The executor
+  machinery stays in place for when that bug is fixed. A new AST-based wiring
+  test (`tests/test_post_only_gated_off.py`) pins this so a future re-enable is
+  a deliberate, visible diff.
+- 🐛 **Production INFO logging was silently dropped**: the real entrypoint
+  (`uvicorn src.mms4tk.api:app`) never executes `main.py`'s `logging.basicConfig()`
+  call, so the root logger had no handler and Python's `logging.lastResort`
+  (WARNING+ only, unformatted) was the only thing emitting anything — including
+  PR #141's own post-only logging, which explains why its production behavior
+  was unobservable. Fixed by calling `logging.basicConfig()` from `api.py`
+  itself (env-controlled via `MMS4_LOG_LEVEL`, default `INFO`); covered by
+  `tests/test_api_logging_config.py`.
+- 🔧 Added Docker log rotation (`max-size: 10m`, `max-file: 5`) for
+  `antigravity_core` in `docker-compose.yml`, since restoring INFO logging
+  multiplies log volume and the driver previously had no cap.
+- 🔧 New `scripts/bump_data_collection_epoch.py`: an auditable, tested CLI for
+  bumping `data_collection_epoch_start` per symbol, replacing undocumented ad
+  hoc SQL (dry-run by default, `--apply` to write).
+
 ## 🚀 [0.48.25] - 2026-10-22
 
 ### 📊 Added — historical replay under a frozen B0 baseline (read-only diagnostic)

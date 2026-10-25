@@ -95,13 +95,15 @@ bug in already-shipped code or restoring log visibility).
 
 ### Phase 1: Gate off post-only exits
 
-- [ ] 1.1 Set `use_post_only=False` at both daemon.py call sites + regression test
+- [x] 1.1 Set `use_post_only=False` at both daemon.py call sites + regression test — b646fe4
 
 ### Phase 2: Fix production logging + add log rotation
 
-- [ ] 2.1 Add `logging.basicConfig` to `api.py` (env-controlled level) + test
-- [ ] 2.2 Add Docker log rotation to `docker-compose.yml`
+- [x] 2.1 Add `logging.basicConfig` to `api.py` (env-controlled level) + test — 134cf49
+- [x] 2.2 Add Docker log rotation to `docker-compose.yml` — 134cf49
 
 ### Phase 3: Epoch-bump script
 
-- [ ] 3.1 Add `scripts/bump_data_collection_epoch.py` + unit test
+- [x] 3.1 Add `scripts/bump_data_collection_epoch.py` + unit test — b2afe22
+
+Status: complete
