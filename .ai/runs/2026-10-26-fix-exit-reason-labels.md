@@ -85,6 +85,8 @@ decision, order placement, or risk parameter. Exempt from the forward-sample fre
 
 ## Progress
 
+PR: #144
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix the classifier in `get_closed_trades()`
