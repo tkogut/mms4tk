@@ -89,8 +89,10 @@ decision, order placement, or risk parameter. Exempt from the forward-sample fre
 
 ### Phase 1: Fix the classifier in `get_closed_trades()`
 
-- [ ] 1.1 Add `EXECUTED_TP_AND_FLIP_*` mapping + price-move-based STOP-LOSS fallback + tests
+- [x] 1.1 Add `EXECUTED_TP_AND_FLIP_*` mapping + price-move-based STOP-LOSS fallback + tests — 5902d7f
 
 ### Phase 2: Add the relabeling migration script
 
-- [ ] 2.1 Add `scripts/reclassify_exit_reason_labels.py` + unit test
+- [x] 2.1 Add `scripts/reclassify_exit_reason_labels.py` + unit test — 8c3d841
+
+Status: complete
