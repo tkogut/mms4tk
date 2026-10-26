@@ -1093,14 +1093,45 @@ class LoggerDB:
                             reason = "STOP-LOSS"
                         elif out == "FORCE_CLOSE":
                             reason = "FORCE_CLOSE"
+                        elif out.startswith("EXECUTED_TP_AND_FLIP"):
+                            # 2026-10-26: daemon.py sets
+                            # outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"
+                            # (e.g. "EXECUTED_TP_AND_FLIP_BASE_SHORT") for a real
+                            # opposite-TMA-band take-profit that immediately re-enters
+                            # the other direction. No branch here ever matched this —
+                            # it silently fell through to the PnL fallback below,
+                            # which (since TP_AND_FLIP's net is usually a few cents
+                            # to a few dollars) mostly landed on "BREAK-EVEN" instead
+                            # of "TAKE-PROFIT", distorting every exit-reason-grouped
+                            # P&L report.
+                            reason = "TAKE-PROFIT"
 
                 if not already_processed:
                     if not reason:
                         pnl_net = t.get("pnl_net_usd", 0.0) or 0.0
-                        pnl_pct = t.get("pnl_pct", 0.0) or 0.0
+                        entry_px = float(t.get("entry_price") or 0.0)
+                        exit_px = float(t.get("exit_price") or 0.0)
+                        side_raw = str(t.get("side") or "").upper()
+                        # 2026-10-26: this used to threshold on `pnl_pct`, which is
+                        # margin-based (leveraged) — at the common 3x leverage, a
+                        # real ~-0.5% price move already crosses a `pnl_pct <= -0.015`
+                        # check, roughly 4x more sensitive than the real ~2% hard
+                        # stop-loss distance (`MMS4_BASE_SL_PCT`), so genuine
+                        # break-evens with ordinary leveraged noise were mislabeled
+                        # "STOP-LOSS". Use the real price move instead, mirroring the
+                        # reconciliation path's own threshold (daemon.py's
+                        # `is_stop_out`: adverse move >= base_sl_pct * 0.75, i.e. ~1.5%
+                        # of price with the default 2% base SL).
+                        if entry_px > 0 and exit_px > 0:
+                            adverse_move_pct = (
+                                (entry_px - exit_px) / entry_px if side_raw == "LONG"
+                                else (exit_px - entry_px) / entry_px
+                            )
+                        else:
+                            adverse_move_pct = 0.0
                         if pnl_net > 0.05:
                             reason = "TAKE-PROFIT"
-                        elif pnl_pct <= -0.015:
+                        elif adverse_move_pct >= 0.015:
                             reason = "STOP-LOSS"
                         else:
                             reason = "BREAK-EVEN"

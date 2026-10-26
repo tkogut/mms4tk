@@ -4,6 +4,29 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🛠️ [0.48.27] - 2026-10-26
+
+### Fixed — exit-reason mislabeling (EXECUTED_TP_AND_FLIP + margin-based SL fallback)
+- 📊 **Problem**: an adversarial audit of why STOP-LOSS exits routinely cost $2-6
+  while TAKE-PROFIT exits rarely exceed ~$1 found the dollar asymmetry was partly
+  real (structural, from the stale-exit layer protecting winners early) but
+  substantially overstated by two labeling bugs in `LoggerDB.get_closed_trades()`.
+- 🐛 `EXECUTED_TP_AND_FLIP_*` outcomes (`daemon.py` sets
+  `outcome = f"EXECUTED_TP_AND_FLIP_{signal.signal_type}"`) had no mapping — real
+  opposite-TMA-band take-profits silently fell through to the PnL-threshold
+  fallback and mostly landed on "BREAK-EVEN" instead of "TAKE-PROFIT". Fixed with
+  a `startswith("EXECUTED_TP_AND_FLIP")` branch.
+- 🐛 That same fallback's STOP-LOSS check thresholded on margin-based `pnl_pct`
+  instead of the real price move — at 3x leverage this made it ~4x more sensitive
+  than the actual ~2% stop-loss distance, mislabeling some genuine break-evens as
+  "STOP-LOSS". Fixed to use `entry_price`/`exit_price` directly, mirroring the
+  reconciliation path's own ~1.5%-of-price threshold.
+- 🔧 New `scripts/reclassify_exit_reason_labels.py`: clears the cached `reason` on
+  BREAK-EVEN/STOP-LOSS rows (the only two the PnL fallback produces) so the fixed
+  classifier recomputes them — dry-run by default, `--apply` to write, following
+  the existing `reclassify_split_50_reason.py` pattern.
+- Pure reporting fix — no trading decision, order, or risk parameter changed.
+
 ## 🛠️ [0.48.26] - 2026-10-25
 
 ### Fixed — post-loss remediation (gate off post-only exits, restore production log visibility)
