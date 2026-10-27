@@ -2008,6 +2008,20 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
     previously stored value instead of being overwritten by the schema
     default. /add is unaffected (brand-new symbol, no existing config to
     merge against — schema defaults are correct there).
+
+    The merge source differs by field family, matching how each is actually
+    read back (`_get_indicator_params`/`_trend_filter_fields`): the 5 SQLite
+    `symbol_configurations` columns (is_active/allocation_usd/base_ratio/
+    add_ratio/timeframe) merge against `configured_symbols_store`, which
+    `load_symbols_config()` rebuilds from SQLite on every restart, so it is
+    always current. The 10 `system_settings`-only fields (trend/vol filters,
+    the addon favorable-price gate, inactivity-manager thresholds) merge
+    against `_trend_filter_fields(...)`'s qualified-system_settings-first
+    read instead — `configured_symbols_store` alone goes stale for these the
+    moment the process restarts (see that helper's own docstring), so merging
+    only against the in-memory store would silently turn a live production
+    gate (e.g. `addon_requires_favorable_price_enabled`, already on for all 4
+    symbols) back off on the next /update that omits it, post-restart.
     """
     formatted_sym = _format_symbol(req.symbol)
     is_update_route = request.url.path.endswith("/symbols/update")
@@ -2024,20 +2038,47 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
     existing_cfg = configured_symbols_store.get(formatted_sym, {}) if is_update_route else {}
     if not isinstance(existing_cfg, dict):
         existing_cfg = {}
+    # Authoritative *current* value of the 10 system_settings-backed fields — reads
+    # the qualified system_settings key first, exactly like `_get_indicator_params`
+    # does, so merging against this (not `existing_cfg` alone) survives a restart.
+    existing_trend_fields = _trend_filter_fields(formatted_sym, existing_cfg) if is_update_route else {}
     explicitly_set = req.model_fields_set
 
-    def _merged(field: str, incoming_value: Any) -> Any:
-        """Keep the existing stored value for a field the caller's request body
-        didn't explicitly set (on /update, against an existing config);
-        otherwise use the value carried on `req` (either explicitly sent, or
-        the schema default when there is no existing config to merge onto)."""
-        if is_update_route and field not in explicitly_set and field in existing_cfg:
-            return existing_cfg[field]
+    def _merged(field: str, incoming_value: Any, source: Dict[str, Any] = existing_cfg) -> Any:
+        """Keep the existing value for a field the caller's request body didn't
+        explicitly set (on /update, against `source`); otherwise use the value
+        carried on `req` (either explicitly sent, or the schema default when
+        there is no existing value to merge onto)."""
+        if is_update_route and field not in explicitly_set and field in source:
+            return source[field]
         return incoming_value
 
     b_ratio = int(_merged("base_ratio", req.base_ratio))
     a_ratio = 100 - b_ratio if b_ratio <= 100 else int(_merged("add_ratio", req.add_ratio))
     tf = str(_merged("timeframe", req.timeframe or "1h"))
+
+    stale_candles_threshold = int(_merged("stale_candles_threshold", req.stale_candles_threshold, existing_trend_fields))
+    stale_atr_threshold = float(_merged("stale_atr_threshold", req.stale_atr_threshold, existing_trend_fields))
+    impulse_negation_enabled = bool(_merged("impulse_negation_enabled", req.impulse_negation_enabled, existing_trend_fields))
+    tma_trend_filter_enabled = bool(_merged("tma_trend_filter_enabled", req.tma_trend_filter_enabled, existing_trend_fields))
+    tma_slope_lookback = int(_merged("tma_slope_lookback", req.tma_slope_lookback, existing_trend_fields))
+    tma_slope_threshold = float(_merged("tma_slope_threshold", req.tma_slope_threshold, existing_trend_fields))
+    high_vol_base_filter_enabled = bool(
+        _merged("high_vol_base_filter_enabled", req.high_vol_base_filter_enabled, existing_trend_fields)
+    )
+    htf_directional_gate_enabled = bool(
+        _merged("htf_directional_gate_enabled", req.htf_directional_gate_enabled, existing_trend_fields)
+    )
+    mid_vol_sweep_filter_enabled = bool(
+        _merged("mid_vol_sweep_filter_enabled", req.mid_vol_sweep_filter_enabled, existing_trend_fields)
+    )
+    addon_requires_favorable_price_enabled = bool(
+        _merged(
+            "addon_requires_favorable_price_enabled",
+            req.addon_requires_favorable_price_enabled,
+            existing_trend_fields,
+        )
+    )
 
     configured_symbols_store[formatted_sym] = {
         "is_active": bool(_merged("is_active", req.is_active)),
@@ -2045,18 +2086,16 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
         "base_ratio": b_ratio,
         "add_ratio": a_ratio,
         "timeframe": tf,
-        "stale_candles_threshold": int(_merged("stale_candles_threshold", req.stale_candles_threshold)),
-        "stale_atr_threshold": float(_merged("stale_atr_threshold", req.stale_atr_threshold)),
-        "impulse_negation_enabled": bool(_merged("impulse_negation_enabled", req.impulse_negation_enabled)),
-        "tma_trend_filter_enabled": bool(_merged("tma_trend_filter_enabled", req.tma_trend_filter_enabled)),
-        "tma_slope_lookback": int(_merged("tma_slope_lookback", req.tma_slope_lookback)),
-        "tma_slope_threshold": float(_merged("tma_slope_threshold", req.tma_slope_threshold)),
-        "high_vol_base_filter_enabled": bool(_merged("high_vol_base_filter_enabled", req.high_vol_base_filter_enabled)),
-        "htf_directional_gate_enabled": bool(_merged("htf_directional_gate_enabled", req.htf_directional_gate_enabled)),
-        "mid_vol_sweep_filter_enabled": bool(_merged("mid_vol_sweep_filter_enabled", req.mid_vol_sweep_filter_enabled)),
-        "addon_requires_favorable_price_enabled": bool(
-            _merged("addon_requires_favorable_price_enabled", req.addon_requires_favorable_price_enabled)
-        ),
+        "stale_candles_threshold": stale_candles_threshold,
+        "stale_atr_threshold": stale_atr_threshold,
+        "impulse_negation_enabled": impulse_negation_enabled,
+        "tma_trend_filter_enabled": tma_trend_filter_enabled,
+        "tma_slope_lookback": tma_slope_lookback,
+        "tma_slope_threshold": tma_slope_threshold,
+        "high_vol_base_filter_enabled": high_vol_base_filter_enabled,
+        "htf_directional_gate_enabled": htf_directional_gate_enabled,
+        "mid_vol_sweep_filter_enabled": mid_vol_sweep_filter_enabled,
+        "addon_requires_favorable_price_enabled": addon_requires_favorable_price_enabled,
     }
     save_symbols_config(configured_symbols_store)
 
@@ -2068,24 +2107,32 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
     # silently reset them to defaults on the next `load_symbols_config()` call, since
     # that function prefers SQLite whenever it has any rows (it always does once a
     # symbol has been added). system_settings is schema-less and already durable.
+    #
+    # 2026-10-27 fix: this used to write `req.<field>` directly, bypassing the merge
+    # above entirely — an /update omitting e.g. `addon_requires_favorable_price_enabled`
+    # would silently write `False` (the schema default) here even though the merged
+    # `configured_symbols_store` entry correctly preserved `True`, because
+    # `_get_indicator_params`/`_trend_filter_fields` read the qualified system_settings
+    # key FIRST, before ever falling back to the store. Now writes the same merged
+    # values computed above, so the two persistence layers can never disagree.
     try:
         logger_db.set_settings_bulk(
             {
-                f"tma_trend_filter_enabled:{formatted_sym}": bool(req.tma_trend_filter_enabled),
-                f"tma_slope_lookback:{formatted_sym}": int(req.tma_slope_lookback),
-                f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
-                f"high_vol_base_filter_enabled:{formatted_sym}": bool(req.high_vol_base_filter_enabled),
-                f"htf_directional_gate_enabled:{formatted_sym}": bool(req.htf_directional_gate_enabled),
-                f"mid_vol_sweep_filter_enabled:{formatted_sym}": bool(req.mid_vol_sweep_filter_enabled),
-                f"addon_requires_favorable_price_enabled:{formatted_sym}": bool(req.addon_requires_favorable_price_enabled),
+                f"tma_trend_filter_enabled:{formatted_sym}": tma_trend_filter_enabled,
+                f"tma_slope_lookback:{formatted_sym}": tma_slope_lookback,
+                f"tma_slope_threshold:{formatted_sym}": tma_slope_threshold,
+                f"high_vol_base_filter_enabled:{formatted_sym}": high_vol_base_filter_enabled,
+                f"htf_directional_gate_enabled:{formatted_sym}": htf_directional_gate_enabled,
+                f"mid_vol_sweep_filter_enabled:{formatted_sym}": mid_vol_sweep_filter_enabled,
+                f"addon_requires_favorable_price_enabled:{formatted_sym}": addon_requires_favorable_price_enabled,
                 # Audit P6.1 (2026-09-08): same bug, same fix — these 3 Inactivity
                 # Manager fields were previously written only to
                 # configured_symbols_store/symbols.json, silently resetting to
                 # hardcoded defaults on every restart (see _trend_filter_fields'
                 # docstring above).
-                f"stale_candles_threshold:{formatted_sym}": int(req.stale_candles_threshold),
-                f"stale_atr_threshold:{formatted_sym}": float(req.stale_atr_threshold),
-                f"impulse_negation_enabled:{formatted_sym}": bool(req.impulse_negation_enabled),
+                f"stale_candles_threshold:{formatted_sym}": stale_candles_threshold,
+                f"stale_atr_threshold:{formatted_sym}": stale_atr_threshold,
+                f"impulse_negation_enabled:{formatted_sym}": impulse_negation_enabled,
             },
             updated_by="api_dashboard",
         )

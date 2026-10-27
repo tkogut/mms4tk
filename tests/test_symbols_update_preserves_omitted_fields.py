@@ -98,6 +98,35 @@ def test_add_route_still_uses_full_schema_defaults_for_new_symbol():
         api.save_symbols_config(api.configured_symbols_store)
 
 
+def test_update_survives_restart_for_system_settings_backed_fields(isolated_state_manager):
+    """2026-10-27 blocker fix: the merge must also cover the 10 fields that live
+    ONLY in `system_settings` (trend/vol filters, the addon favorable-price gate,
+    inactivity-manager thresholds) — not just the 5 SQLite `symbol_configurations`
+    columns. `configured_symbols_store` is rebuilt from SQLite on every restart and
+    has no column for these 10, so after a restart `field in existing_cfg` is False
+    for all of them; merging only against `existing_cfg` would silently turn the
+    live `addon_requires_favorable_price_enabled` gate back off on the very next
+    /update that omits it.
+    """
+    # Enable the gate explicitly.
+    assert _update({"addon_requires_favorable_price_enabled": True}).status_code == 200
+    assert api.logger_db.get_all_settings().get(f"addon_requires_favorable_price_enabled:{SYMBOL}") == "True"
+
+    # Simulate a restart: configured_symbols_store no longer carries this field
+    # (it never did for the SQLite-backed path, but assert the realistic shape too).
+    stored = api.configured_symbols_store[SYMBOL]
+    assert "addon_requires_favorable_price_enabled" not in stored or True  # shape note, not asserted further
+    api.configured_symbols_store[SYMBOL] = {
+        k: v for k, v in stored.items() if k not in ("addon_requires_favorable_price_enabled",)
+    }
+
+    # A later update that only touches an unrelated field must NOT silently turn the
+    # gate back off in system_settings (the store it's actually read from first).
+    resp = _update({"allocation_usd": 77.0})
+    assert resp.status_code == 200
+    assert api.logger_db.get_all_settings().get(f"addon_requires_favorable_price_enabled:{SYMBOL}") == "True"
+
+
 def test_default_timeframe_sites_all_consistent_at_1h():
     """Enumerates every default-timeframe site found in the 2026-10-27 audit, so a
     future reviewer sees them listed together instead of re-discovering the drift."""
