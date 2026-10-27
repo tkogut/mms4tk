@@ -116,3 +116,9 @@ Fix two confirmed, independent production bugs with a single small PR:
 ### Phase 3: Version bump, changelog, validation gate
 
 - [x] 3.1 VERSION/__init__.py/CHANGELOG bump + full validation gate — d37169c (flake8/mypy/build unavailable in this env, configured non-fatal `|| true`; pytest 814 passed, 0 failed)
+
+### Phase 4: Advisor review follow-up (pre-finalize self-review)
+
+- [x] 4.1 Blocker: merge must also cover the 10 `system_settings`-only fields, not just the 5 SQLite columns — the `set_settings_bulk` write previously used `req.X` directly, which would have silently disabled the live `addon_requires_favorable_price_enabled` gate (and others) on the next unrelated `/update` after a restart. Fixed via `_trend_filter_fields(...)`-sourced merge; regression test added and verified to fail against the pre-fix code — bc48e09
+- [x] 4.2 Test quality: addon-gate case (a) didn't actually isolate the fill-price-vs-anchor change (the fee margin alone already blocked it). Rewrote with values that isolate the switch, added `caplog` assertions on cases (a)/(c) to confirm the block reason. Verified both fail against the pre-fix anchor-only gate and pass with the fix — cce98ba
+- [x] 4.3 Deploy-note accuracy: documented the apply/restart ordering hazard (script writes SQLite only; a stale in-memory `configured_symbols_store` would clobber it back on the next `/update` for any symbol) in both the script's docstring/runtime output and the PR body; softened the CHANGELOG's "config/bugfix-only" framing to call out the epoch-bump need; PR body discloses the `SCOUT_MIN_GROSS_PNL_PCT` env-override coupling, the ~0.10% vs ~0.15% fee-rate note, and the now-diverged `backtest_engine.py` addon logic — e050a49
