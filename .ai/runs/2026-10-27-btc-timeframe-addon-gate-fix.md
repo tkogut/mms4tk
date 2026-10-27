@@ -102,6 +102,8 @@ Fix two confirmed, independent production bugs with a single small PR:
 
 ## Progress
 
+PR: #145
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: BTC timeframe default-mismatch fix + correction script
