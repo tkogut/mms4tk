@@ -4,6 +4,50 @@ All notable changes to the **mms4tk** (MMS v4 Autotrading System & Hermes Agent 
 
 The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 🛠️ [0.48.28] - 2026-10-27
+
+### Fixed — BTC/USDC timeframe silent reset + addon favorable-price gate fee leak
+- 📊 **Problem 1**: BTC/USDC's `symbol_configurations.timeframe` was found at
+  `15m` in production (2026-10-27) while ETH/XAU/XAG correctly show `1h` —
+  same day a bulk `allocation_usd` update touched all 4 symbols (2026-10-21).
+- 🐛 `POST /api/v1/symbols/update` rebuilt a symbol's entire stored config
+  straight from `AddSymbolRequest`, whose `timeframe` field defaulted to
+  `15m` — out of sync with `symbols.json`/`load_symbols_config()`'s `1h`
+  default. An update payload that omitted `timeframe` (e.g. one only setting
+  `allocation_usd`) silently reset it to that mismatched schema default.
+- 🔧 `/update` now merges onto the existing stored config via
+  `req.model_fields_set`: any field the caller's request body didn't
+  explicitly set keeps its previously stored value instead of being
+  overwritten by the schema default. `/add` is unaffected (brand-new symbol,
+  no existing config to merge against). Every remaining `15m` default
+  literal in `api.py` is normalized to `1h` for consistency.
+- 🔧 New `scripts/fix_btc_timeframe.py`: one-time correction for BTC/USDC's
+  already-wrong stored value — dry-run by default, `--apply` to write,
+  following the existing `bump_data_collection_epoch.py` pattern. Touches
+  only BTC/USDC; every other symbol is left untouched. Not run against
+  production by this change — the operator applies it to the VPS DB after
+  review.
+- 📊 **Problem 2**: the `addon_requires_favorable_price_enabled` gate
+  (Issue #137) compared the addon signal price against the pinned
+  `base_entry_price` anchor with no fee allowance. Live reconciliation
+  (`okx_orders` base-fill vs add-fill) found 15 of 19 addons executed under
+  this gate were net-underwater after realistic round-trip fees, and one
+  leaked even before fees from signal-vs-fill slippage.
+- 🔧 `daemon.py`'s gate now (a) prefers the position's actual live fill price
+  over the persisted anchor when available — safe at this call site because
+  the Single Addon Guard above it guarantees no addon has executed yet, so
+  the live fill is still the untouched base entry — and (b) requires the
+  signal price to clear that reference by at least
+  `ADDON_FAVORABLE_FEE_MARGIN_PCT`, reusing the same measured round-trip fee
+  rate as `state_manager.SCOUT_MIN_GROSS_PNL_PCT` (0.0010003), not just be
+  nominally on the favorable side.
+- No change to entry-signal logic, exit logic, SL/TP, or leverage. The
+  BTC/USDC timeframe correction (15m -> 1h) IS a behavior-changing data
+  correction for that symbol's candle series, and the addon gate tightening
+  changes live blocking behavior for all 4 symbols — see deploy notes in
+  PR #145 for the required `data_collection_epoch_start` bump
+  (`scripts/bump_data_collection_epoch.py`) after deploying this change.
+
 ## 🛠️ [0.48.27] - 2026-10-26
 
 ### Fixed — exit-reason mislabeling (EXECUTED_TP_AND_FLIP + margin-based SL fallback)

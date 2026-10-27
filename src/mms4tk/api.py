@@ -1688,14 +1688,14 @@ def load_symbols_config() -> Dict[str, Dict[str, Any]]:
                     normalized = {}
                     for sym, val in data.items():
                         if isinstance(val, bool):
-                            normalized[sym] = {"is_active": val, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
+                            normalized[sym] = {"is_active": val, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
                         elif isinstance(val, dict):
                             normalized[sym] = {
                                 "is_active": bool(val.get("is_active", True)),
                                 "allocation_usd": float(val.get("allocation_usd", 10.0)),
                                 "base_ratio": int(val.get("base_ratio", 70)),
                                 "add_ratio": int(val.get("add_ratio", 30)),
-                                "timeframe": str(val.get("timeframe", "15m"))
+                                "timeframe": str(val.get("timeframe", "1h"))
                             }
                     # Seed into SQLite
                     try:
@@ -1742,7 +1742,7 @@ def save_symbols_config(cfg: Dict[str, Dict[str, Any]]) -> None:
                     allocation_usd=float(s_cfg.get("allocation_usd", 10.0)),
                     base_ratio=int(s_cfg.get("base_ratio", 70)),
                     add_ratio=int(s_cfg.get("add_ratio", 30)),
-                    timeframe=str(s_cfg.get("timeframe", "15m"))
+                    timeframe=str(s_cfg.get("timeframe", "1h"))
                 )
     except Exception as dbe:
         logger.warning(f"Failed to save symbol configs to SQLite: {dbe}")
@@ -1765,7 +1765,7 @@ class AddSymbolRequest(BaseModel):
     allocation_usd: float = Field(default=10.0, description="Base trade allocation in USD (default 10.0 USD)")
     base_ratio: int = Field(default=70, description="Base position ratio percentage e.g. 70")
     add_ratio: int = Field(default=30, description="Add position ratio percentage e.g. 30")
-    timeframe: str = Field(default="15m", description="Candle timeframe e.g. 15m, 1h, 5m, 1m")
+    timeframe: str = Field(default="1h", description="Candle timeframe e.g. 15m, 1h, 5m, 1m")
     stale_candles_threshold: int = Field(default=12, description="Max candles of stagnation before SPLIT_50 (default 12)")
     stale_atr_threshold: float = Field(default=0.5, description="Max price deviation as fraction of ATR (default 0.5)")
     impulse_negation_enabled: bool = Field(default=True, description="Enable 50% impulse negation rule")
@@ -1848,7 +1848,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
     result = []
     for sym, config in configured_symbols_store.items():
         if isinstance(config, bool):
-            config = {"is_active": config, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "15m"}
+            config = {"is_active": config, "allocation_usd": 10.0, "base_ratio": 70, "add_ratio": 30, "timeframe": "1h"}
 
         state = state_manager.get_symbol_state(sym)
         leverage = state_manager.get_symbol_leverage(sym)
@@ -1869,7 +1869,7 @@ async def get_trading_symbols() -> Dict[str, Any]:
             "allocation_usd": config.get("allocation_usd", 10.0),
             "base_ratio": config.get("base_ratio", 70),
             "add_ratio": config.get("add_ratio", 30),
-            "timeframe": config.get("timeframe", "15m"),
+            "timeframe": config.get("timeframe", "1h"),
             # Audit P6.1 (2026-09-08): read from system_settings (via
             # _trend_filter_fields) like the trend-filter fields below, not
             # configured_symbols_store directly — that in-memory store is silently
@@ -1987,17 +1987,45 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
 
     2026-10-15 incident: this handler backs BOTH routes and unconditionally
     overwrote every AddSymbolRequest field with its schema default whenever a
-    caller omitted it — fine for /update (the dashboard always echoes the full
-    current config back, see SymbolsTab.jsx), but /add has no such guarantee.
-    A single "Dodaj Nową Parę" click on an already-configured symbol (e.g.
-    BTC/USDC) silently reset every one of its settings to defaults in
-    production, including undoing the PR #136 decision to keep
+    caller omitted it — fine for /update as long as every caller always sends
+    the full config (the dashboard does, see SymbolsTab.jsx), but /add has no
+    such guarantee. A single "Dodaj Nową Parę" click on an already-configured
+    symbol (e.g. BTC/USDC) silently reset every one of its settings to
+    defaults in production, including undoing the PR #136 decision to keep
     htf_directional_gate_enabled on. Reject /add on a symbol that already
     exists instead — /update remains the only path that can change an
-    existing symbol's settings, and it always carries the full config.
+    existing symbol's settings.
+
+    2026-10-27 incident: that "every caller always sends the full config"
+    assumption broke for /update too — a bulk `allocation_usd` update
+    (2026-10-21, all 4 symbols) silently reset BTC/USDC's `timeframe` from
+    `1h` to `15m` because `AddSymbolRequest.timeframe`'s schema default
+    (`15m`, historically out of sync with symbols.json/`load_symbols_config()`'s
+    `1h` default) filled in for the omitted field. Root-cause fix: /update now
+    merges onto the existing stored config — any field the caller's request
+    body didn't explicitly set (`req.model_fields_set`, true regardless of
+    whether the omitted value happens to equal its schema default) keeps its
+    previously stored value instead of being overwritten by the schema
+    default. /add is unaffected (brand-new symbol, no existing config to
+    merge against — schema defaults are correct there).
+
+    The merge source differs by field family, matching how each is actually
+    read back (`_get_indicator_params`/`_trend_filter_fields`): the 5 SQLite
+    `symbol_configurations` columns (is_active/allocation_usd/base_ratio/
+    add_ratio/timeframe) merge against `configured_symbols_store`, which
+    `load_symbols_config()` rebuilds from SQLite on every restart, so it is
+    always current. The 10 `system_settings`-only fields (trend/vol filters,
+    the addon favorable-price gate, inactivity-manager thresholds) merge
+    against `_trend_filter_fields(...)`'s qualified-system_settings-first
+    read instead — `configured_symbols_store` alone goes stale for these the
+    moment the process restarts (see that helper's own docstring), so merging
+    only against the in-memory store would silently turn a live production
+    gate (e.g. `addon_requires_favorable_price_enabled`, already on for all 4
+    symbols) back off on the next /update that omits it, post-restart.
     """
     formatted_sym = _format_symbol(req.symbol)
-    if request.url.path.endswith("/symbols/add") and formatted_sym in configured_symbols_store:
+    is_update_route = request.url.path.endswith("/symbols/update")
+    if not is_update_route and formatted_sym in configured_symbols_store:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2007,26 +2035,67 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
             ),
         )
 
-    b_ratio = req.base_ratio
-    a_ratio = 100 - b_ratio if b_ratio <= 100 else req.add_ratio
-    tf = req.timeframe or "15m"
+    existing_cfg = configured_symbols_store.get(formatted_sym, {}) if is_update_route else {}
+    if not isinstance(existing_cfg, dict):
+        existing_cfg = {}
+    # Authoritative *current* value of the 10 system_settings-backed fields — reads
+    # the qualified system_settings key first, exactly like `_get_indicator_params`
+    # does, so merging against this (not `existing_cfg` alone) survives a restart.
+    existing_trend_fields = _trend_filter_fields(formatted_sym, existing_cfg) if is_update_route else {}
+    explicitly_set = req.model_fields_set
+
+    def _merged(field: str, incoming_value: Any, source: Dict[str, Any] = existing_cfg) -> Any:
+        """Keep the existing value for a field the caller's request body didn't
+        explicitly set (on /update, against `source`); otherwise use the value
+        carried on `req` (either explicitly sent, or the schema default when
+        there is no existing value to merge onto)."""
+        if is_update_route and field not in explicitly_set and field in source:
+            return source[field]
+        return incoming_value
+
+    b_ratio = int(_merged("base_ratio", req.base_ratio))
+    a_ratio = 100 - b_ratio if b_ratio <= 100 else int(_merged("add_ratio", req.add_ratio))
+    tf = str(_merged("timeframe", req.timeframe or "1h"))
+
+    stale_candles_threshold = int(_merged("stale_candles_threshold", req.stale_candles_threshold, existing_trend_fields))
+    stale_atr_threshold = float(_merged("stale_atr_threshold", req.stale_atr_threshold, existing_trend_fields))
+    impulse_negation_enabled = bool(_merged("impulse_negation_enabled", req.impulse_negation_enabled, existing_trend_fields))
+    tma_trend_filter_enabled = bool(_merged("tma_trend_filter_enabled", req.tma_trend_filter_enabled, existing_trend_fields))
+    tma_slope_lookback = int(_merged("tma_slope_lookback", req.tma_slope_lookback, existing_trend_fields))
+    tma_slope_threshold = float(_merged("tma_slope_threshold", req.tma_slope_threshold, existing_trend_fields))
+    high_vol_base_filter_enabled = bool(
+        _merged("high_vol_base_filter_enabled", req.high_vol_base_filter_enabled, existing_trend_fields)
+    )
+    htf_directional_gate_enabled = bool(
+        _merged("htf_directional_gate_enabled", req.htf_directional_gate_enabled, existing_trend_fields)
+    )
+    mid_vol_sweep_filter_enabled = bool(
+        _merged("mid_vol_sweep_filter_enabled", req.mid_vol_sweep_filter_enabled, existing_trend_fields)
+    )
+    addon_requires_favorable_price_enabled = bool(
+        _merged(
+            "addon_requires_favorable_price_enabled",
+            req.addon_requires_favorable_price_enabled,
+            existing_trend_fields,
+        )
+    )
 
     configured_symbols_store[formatted_sym] = {
-        "is_active": req.is_active,
-        "allocation_usd": float(req.allocation_usd),
-        "base_ratio": int(b_ratio),
-        "add_ratio": int(a_ratio),
+        "is_active": bool(_merged("is_active", req.is_active)),
+        "allocation_usd": float(_merged("allocation_usd", req.allocation_usd)),
+        "base_ratio": b_ratio,
+        "add_ratio": a_ratio,
         "timeframe": tf,
-        "stale_candles_threshold": int(req.stale_candles_threshold),
-        "stale_atr_threshold": float(req.stale_atr_threshold),
-        "impulse_negation_enabled": bool(req.impulse_negation_enabled),
-        "tma_trend_filter_enabled": bool(req.tma_trend_filter_enabled),
-        "tma_slope_lookback": int(req.tma_slope_lookback),
-        "tma_slope_threshold": float(req.tma_slope_threshold),
-        "high_vol_base_filter_enabled": bool(req.high_vol_base_filter_enabled),
-        "htf_directional_gate_enabled": bool(req.htf_directional_gate_enabled),
-        "mid_vol_sweep_filter_enabled": bool(req.mid_vol_sweep_filter_enabled),
-        "addon_requires_favorable_price_enabled": bool(req.addon_requires_favorable_price_enabled),
+        "stale_candles_threshold": stale_candles_threshold,
+        "stale_atr_threshold": stale_atr_threshold,
+        "impulse_negation_enabled": impulse_negation_enabled,
+        "tma_trend_filter_enabled": tma_trend_filter_enabled,
+        "tma_slope_lookback": tma_slope_lookback,
+        "tma_slope_threshold": tma_slope_threshold,
+        "high_vol_base_filter_enabled": high_vol_base_filter_enabled,
+        "htf_directional_gate_enabled": htf_directional_gate_enabled,
+        "mid_vol_sweep_filter_enabled": mid_vol_sweep_filter_enabled,
+        "addon_requires_favorable_price_enabled": addon_requires_favorable_price_enabled,
     }
     save_symbols_config(configured_symbols_store)
 
@@ -2038,24 +2107,32 @@ async def add_or_update_trading_symbol(req: AddSymbolRequest, request: Request) 
     # silently reset them to defaults on the next `load_symbols_config()` call, since
     # that function prefers SQLite whenever it has any rows (it always does once a
     # symbol has been added). system_settings is schema-less and already durable.
+    #
+    # 2026-10-27 fix: this used to write `req.<field>` directly, bypassing the merge
+    # above entirely — an /update omitting e.g. `addon_requires_favorable_price_enabled`
+    # would silently write `False` (the schema default) here even though the merged
+    # `configured_symbols_store` entry correctly preserved `True`, because
+    # `_get_indicator_params`/`_trend_filter_fields` read the qualified system_settings
+    # key FIRST, before ever falling back to the store. Now writes the same merged
+    # values computed above, so the two persistence layers can never disagree.
     try:
         logger_db.set_settings_bulk(
             {
-                f"tma_trend_filter_enabled:{formatted_sym}": bool(req.tma_trend_filter_enabled),
-                f"tma_slope_lookback:{formatted_sym}": int(req.tma_slope_lookback),
-                f"tma_slope_threshold:{formatted_sym}": float(req.tma_slope_threshold),
-                f"high_vol_base_filter_enabled:{formatted_sym}": bool(req.high_vol_base_filter_enabled),
-                f"htf_directional_gate_enabled:{formatted_sym}": bool(req.htf_directional_gate_enabled),
-                f"mid_vol_sweep_filter_enabled:{formatted_sym}": bool(req.mid_vol_sweep_filter_enabled),
-                f"addon_requires_favorable_price_enabled:{formatted_sym}": bool(req.addon_requires_favorable_price_enabled),
+                f"tma_trend_filter_enabled:{formatted_sym}": tma_trend_filter_enabled,
+                f"tma_slope_lookback:{formatted_sym}": tma_slope_lookback,
+                f"tma_slope_threshold:{formatted_sym}": tma_slope_threshold,
+                f"high_vol_base_filter_enabled:{formatted_sym}": high_vol_base_filter_enabled,
+                f"htf_directional_gate_enabled:{formatted_sym}": htf_directional_gate_enabled,
+                f"mid_vol_sweep_filter_enabled:{formatted_sym}": mid_vol_sweep_filter_enabled,
+                f"addon_requires_favorable_price_enabled:{formatted_sym}": addon_requires_favorable_price_enabled,
                 # Audit P6.1 (2026-09-08): same bug, same fix — these 3 Inactivity
                 # Manager fields were previously written only to
                 # configured_symbols_store/symbols.json, silently resetting to
                 # hardcoded defaults on every restart (see _trend_filter_fields'
                 # docstring above).
-                f"stale_candles_threshold:{formatted_sym}": int(req.stale_candles_threshold),
-                f"stale_atr_threshold:{formatted_sym}": float(req.stale_atr_threshold),
-                f"impulse_negation_enabled:{formatted_sym}": bool(req.impulse_negation_enabled),
+                f"stale_candles_threshold:{formatted_sym}": stale_candles_threshold,
+                f"stale_atr_threshold:{formatted_sym}": stale_atr_threshold,
+                f"impulse_negation_enabled:{formatted_sym}": impulse_negation_enabled,
             },
             updated_by="api_dashboard",
         )
