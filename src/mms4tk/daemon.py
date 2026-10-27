@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 
 from mms4tk.state_manager import (
     MMS4StateManager, MMS4State, BASE_ALLOCATION, ADDON_ALLOCATION, SCOUT_COUNTING_REASONS,
+    SCOUT_MIN_GROSS_PNL_PCT,
 )
 from mms4tk.okx_executor import OKXExecutor, normalize_symbol, BelowMinimumNotional, is_maintenance_locked, set_maintenance_lock
 from mms4tk.analytics import MMS4SignalEngine, SignalResult, Candle, TMAIndicator, IndicatorParams, HigherTimeframeAnalytics
@@ -102,6 +103,18 @@ def _pos_entry_price(p: Dict[str, Any]) -> float:
         )
     except (TypeError, ValueError):
         return 0.0
+
+
+# 2026-10-27 fix: the favorable-price addon gate (Issue #137, see its use below) used
+# to require only a nominally-favorable signal price with no allowance for round-trip
+# trading fees. Live evidence (okx_orders base-fill vs add-fill reconciliation): of 19
+# addons that executed since the gate went live, 15 were net-underwater after realistic
+# fees at the moment they fired — "nominally favorable" was not "favorable enough to
+# actually profit". Reuses the same measured round-trip fee rate as
+# `state_manager.SCOUT_MIN_GROSS_PNL_PCT` (0.0010003, == `backtest_engine.ROUND_TRIP_
+# FEE_PCT` — daemon.py must not import from backtest_engine, same restriction already
+# documented on state_manager.SCOUT_MIN_GROSS_PNL_PCT) rather than a new constant.
+ADDON_FAVORABLE_FEE_MARGIN_PCT: float = SCOUT_MIN_GROSS_PNL_PCT
 
 
 def _pos_notional(p: Dict[str, Any], price: float, symbol: str) -> float:
@@ -2269,21 +2282,40 @@ class MMS4Daemon:
                 would_exceed_cap = (existing_notional + notional_addon_usd) > margin_cap_usd * (1.0 + 0.10)
 
                 # Issue #137: block the add if it would fire on the ADVERSE side of
-                # the pinned base_entry_price (averaging into a loss) — always this
-                # anchor, never `match_entry` (today's exchange avgPx, which a prior
-                # addon may have already moved). Production incident (2026-10-15,
-                # XAG/USDC): an add fired at $56.96 against a $56.63 base SHORT
-                # entry; OOS backtest (.ai/analysis/2026-10-15-addon-favorable-price-
-                # backtest.md) found adds fired this way average -0.508% net per
+                # the position's entry (averaging into a loss). Production incident
+                # (2026-10-15, XAG/USDC): an add fired at $56.96 against a $56.63 base
+                # SHORT entry; OOS backtest (.ai/analysis/2026-10-15-addon-favorable-
+                # price-backtest.md) found adds fired this way average -0.508% net per
                 # closed position vs +0.031% for favorable-price adds (14/15 window
                 # comparisons, sign test p=0.0010).
+                #
+                # 2026-10-27 fix: that comparison was against the pinned
+                # `base_entry_price` anchor only, with no fee allowance — live
+                # reconciliation (okx_orders base-fill vs add-fill) found 15 of 19
+                # addons that executed under this gate were net-underwater after
+                # realistic round-trip fees, and one leaked even before fees purely
+                # from signal-vs-fill slippage. Fixed by (a) preferring `match_entry`,
+                # the position's actual live OKX fill price, over the persisted
+                # anchor when available — safe specifically at this call site because
+                # the Single Addon Guard above (`addons_done >= 1` check, below)
+                # guarantees no addon has executed yet whenever this gate runs, so
+                # `match_entry` is still the untouched base fill, not an addon-moved
+                # average (the exact concern that made issue #137 prefer the anchor
+                # over `match_entry` in general); and (b) requiring the signal price
+                # to clear that reference by at least `ADDON_FAVORABLE_FEE_MARGIN_PCT`,
+                # not just be nominally on the favorable side.
                 base_entry_px_for_add = self._base_entry_price(target_symbol, target_pos_side, fallback=match_entry)
+                addon_reference_px = match_entry if match_entry > 0 else base_entry_px_for_add
+                addon_favorable_threshold = (
+                    addon_reference_px * (1.0 - ADDON_FAVORABLE_FEE_MARGIN_PCT) if target_pos_side == "short"
+                    else addon_reference_px * (1.0 + ADDON_FAVORABLE_FEE_MARGIN_PCT)
+                )
                 addon_adverse = (
                     ind_params.addon_requires_favorable_price_enabled
-                    and base_entry_px_for_add > 0
+                    and addon_reference_px > 0
                     and (
-                        (signal.price > base_entry_px_for_add) if target_pos_side == "short"
-                        else (signal.price < base_entry_px_for_add)
+                        (signal.price > addon_favorable_threshold) if target_pos_side == "short"
+                        else (signal.price < addon_favorable_threshold)
                     )
                 )
 
@@ -2307,8 +2339,10 @@ class MMS4Daemon:
                     outcome = f"SKIPPED_{signal.signal_type}"
                     details = (
                         f"🔗 Favorable-Price Addon Gate blocked High Risk Add for {target_symbol}: "
-                        f"add price ${signal.price:,.4f} is on the adverse side of base entry "
-                        f"${base_entry_px_for_add:,.4f} — averaging into a loss, not pyramiding a winner."
+                        f"add price ${signal.price:,.4f} does not clear entry ${addon_reference_px:,.4f} "
+                        f"by the required {ADDON_FAVORABLE_FEE_MARGIN_PCT:.4%} fee margin "
+                        f"(threshold ${addon_favorable_threshold:,.4f}) — averaging into a loss or an "
+                        f"unprofitable-after-fees add, not pyramiding a winner."
                     )
                     logger.warning(details)
                 elif would_exceed_cap:
