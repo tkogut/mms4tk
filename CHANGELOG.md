@@ -41,8 +41,12 @@ The format is based on [Keep a CHANGELOG](https://keepachangelog.com/en/1.0.0/),
   `ADDON_FAVORABLE_FEE_MARGIN_PCT`, reusing the same measured round-trip fee
   rate as `state_manager.SCOUT_MIN_GROSS_PNL_PCT` (0.0010003), not just be
   nominally on the favorable side.
-- Config/bugfix-only — no change to entry-signal logic, exit logic, SL/TP,
-  leverage, or the stale/giveback layer.
+- No change to entry-signal logic, exit logic, SL/TP, or leverage. The
+  BTC/USDC timeframe correction (15m -> 1h) IS a behavior-changing data
+  correction for that symbol's candle series, and the addon gate tightening
+  changes live blocking behavior for all 4 symbols — see deploy notes in
+  PR #145 for the required `data_collection_epoch_start` bump
+  (`scripts/bump_data_collection_epoch.py`) after deploying this change.
 
 ## 🛠️ [0.48.27] - 2026-10-26
 

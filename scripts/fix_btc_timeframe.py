@@ -31,6 +31,15 @@ Usage:
 
 Always back up the database file before running with --apply:
     cp .agents/swarm/logs.db .agents/swarm/logs.db.bak_$(date +%Y%m%d)
+
+IMPORTANT — restart the running process right after --apply (or stop it first):
+`api.py`'s `configured_symbols_store` (in-memory, loaded once at process start
+from this same SQLite table) is NOT updated by this script. The NEXT call to
+`POST /api/v1/symbols/update` for ANY symbol calls `save_symbols_config(
+configured_symbols_store)`, which rewrites every symbol's row from that stale
+in-memory dict — silently clobbering this correction back to `15m` if the
+process hasn't restarted since. Restart `antigravity_core` immediately after
+applying, before any dashboard/API `/update` call touches any symbol.
 """
 
 import sys
@@ -77,7 +86,13 @@ def main() -> int:
             add_ratio=cfg["add_ratio"],
             timeframe=CORRECT_TIMEFRAME,
         )
-        print("\nApplied.")
+        print(
+            "\nApplied.\n"
+            "WARNING: restart the running process (e.g. `antigravity_core`) now, before any "
+            "/api/v1/symbols/update call for ANY symbol — otherwise its stale in-memory "
+            "configured_symbols_store will overwrite this correction back to the old value "
+            "on the next such call (save_symbols_config() rewrites every symbol's row)."
+        )
     else:
         print("\nDry run only — pass --apply to write this change.")
     return 0
