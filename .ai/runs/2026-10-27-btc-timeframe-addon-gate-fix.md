@@ -106,8 +106,8 @@ Fix two confirmed, independent production bugs with a single small PR:
 
 ### Phase 1: BTC timeframe default-mismatch fix + correction script
 
-- [ ] 1.1 Partial-merge fix for `/update` + consistent `1h` defaults + regression tests
-- [ ] 1.2 One-time BTC timeframe correction script + tests
+- [x] 1.1 Partial-merge fix for `/update` + consistent `1h` defaults + regression tests — c49fc6d
+- [x] 1.2 One-time BTC timeframe correction script + tests — c49fc6d
 
 ### Phase 2: Addon favorable-price gate fee/fill-price fix
 
