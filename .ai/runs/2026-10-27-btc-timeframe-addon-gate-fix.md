@@ -111,8 +111,8 @@ Fix two confirmed, independent production bugs with a single small PR:
 
 ### Phase 2: Addon favorable-price gate fee/fill-price fix
 
-- [ ] 2.1 Fee-covering-margin + live-fill-price gate fix + regression tests
+- [x] 2.1 Fee-covering-margin + live-fill-price gate fix + regression tests — 512ba3f
 
 ### Phase 3: Version bump, changelog, validation gate
 
-- [ ] 3.1 VERSION/__init__.py/CHANGELOG bump + full validation gate
+- [x] 3.1 VERSION/__init__.py/CHANGELOG bump + full validation gate — d37169c (flake8/mypy/build unavailable in this env, configured non-fatal `|| true`; pytest 814 passed, 0 failed)
